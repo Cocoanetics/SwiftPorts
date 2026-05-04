@@ -105,19 +105,19 @@ jobs:
           # ZIPFoundation pulls in zlib via the CZLib systemLibrary; the
           # fork's per-platform `linkerSettings` doesn't reliably
           # propagate `.linkedLibrary("zlib")` to the final executable
-          # link, so inject `zlib.lib` here as well.
+          # link, so inject the absolute path to `zlib.lib` here. Bare
+          # `zlib.lib` (relying on /LIBPATH) is flaky — lld-link
+          # sometimes treats it as a cwd-relative path and fails.
           swift build --build-tests -v `
             -Xcc "-I$base\include" `
-            -Xlinker "/LIBPATH:$base\lib" `
-            -Xlinker "zlib.lib"
+            -Xlinker "$base\lib\zlib.lib"
       - name: Test (Windows)
         shell: pwsh
         run: |
           $base = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md"
           swift test -v --skip-build --no-parallel `
             -Xcc "-I$base\include" `
-            -Xlinker "/LIBPATH:$base\lib" `
-            -Xlinker "zlib.lib"
+            -Xlinker "$base\lib\zlib.lib"
 
   # EXPERIMENT: try the official swift.org Android getting-started
   # recipe — Swift 6.3.1 + NDK r27d + `--static-swift-stdlib` — to see
