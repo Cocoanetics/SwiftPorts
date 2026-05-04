@@ -129,10 +129,17 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
-      - name: Build & Test (Android emulator — full tree, static stdlib)
+      # EXPERIMENT 2: 6.3.1 + NDK r27d only (drop --static-swift-stdlib;
+      # that flag strips the Testing module and breaks the test compile).
+      # Build the full source tree (incl. executables), skip tests —
+      # we want to see whether the executable link fails the same way,
+      # without the orthogonal test-Testing-module issue.
+      - name: Build (Android — full executable tree, no tests)
         uses: skiptools/swift-android-action@v2
         with:
           swift-version: "6.3.1"
-          ndk-version: "27.3.13750724"   # NDK r27d — what swift.org docs require
+          ndk-version: "27.3.13750724"
           free-disk-space: true
-          swift-build-flags: --static-swift-stdlib -v
+          build-tests: false
+          run-tests: false
+          swift-build-flags: -v
