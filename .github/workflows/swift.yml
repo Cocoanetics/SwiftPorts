@@ -119,26 +119,19 @@ jobs:
             -Xcc "-I$base\include" `
             -Xlinker "$base\lib\zlib.lib"
 
-  # EXPERIMENT: try the official swift.org Android getting-started
-  # recipe — Swift 6.3.1 + NDK r27d + `--static-swift-stdlib` — to see
-  # whether that resolves the `__libc_init` link failure on executable
-  # targets. If green, the production `fix/windows-android-builds`
-  # branch can drop its library-only `--target` allowlist.
+  # EXPERIMENT 4: per skiptools/swift-android-action#23 maintainer
+  # suggestion. Drop the executable products + targets on Android via
+  # Package.swift TARGET_OS_ANDROID env-var check, restore the full
+  # build-tests + run-tests path. Goal: narrow whether the failure was
+  # the executable targets themselves vs. some other dep issue.
   build-android:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
-      # EXPERIMENT 3: 6.3.1 + NDK r27d + force `-lc` onto the link line.
-      # __libc_init lives in libc.so; the action's CRT recipe appears to
-      # leave libc off the link command for our executable targets. Force
-      # it explicitly via -Xlinker -lc and see if that resolves it.
-      - name: Build (Android — full executable tree, force -lc)
+      - name: Build & Test (Android emulator — libraries + tests)
         uses: skiptools/swift-android-action@v2
         with:
           swift-version: "6.3.1"
           ndk-version: "27.3.13750724"
           free-disk-space: true
-          build-tests: false
-          run-tests: false
-          swift-build-flags: -v -Xlinker -lc

@@ -1,4 +1,5 @@
 // swift-tools-version:6.2
+import Foundation
 import PackageDescription
 
 // SwiftPorts is a monorepo of pure-Swift, cross-platform
@@ -17,6 +18,50 @@ import PackageDescription
 //   - Library target names are PascalCase, executable target names are
 //     lowercase and match the binary name.
 
+// Detect cross-compile-to-Android by looking at the env var the
+// swift-android-action sets. The action's link recipe currently fails
+// on executable targets with `undefined symbol: __libc_init`
+// (skiptools/swift-android-action#23), so when targeting Android we
+// drop the executable products + targets at manifest evaluation time
+// and only build the libraries that downstream embedders consume.
+let isAndroid = ProcessInfo.processInfo.environment["TARGET_OS_ANDROID"] != nil
+
+let executableProducts: [Product] = isAndroid ? [] : [
+    .executable(name: "zip", targets: ["zip"]),
+    .executable(name: "unzip", targets: ["unzip"]),
+    .executable(name: "gh", targets: ["gh"]),
+    .executable(name: "glab", targets: ["glab"]),
+    .executable(name: "git", targets: ["git"]),
+]
+
+let executableTargets: [Target] = isAndroid ? [] : [
+    .executableTarget(
+        name: "zip",
+        dependencies: ["ZipCommand"],
+        path: "Sources/ZipKit/zip"
+    ),
+    .executableTarget(
+        name: "unzip",
+        dependencies: ["UnzipCommand"],
+        path: "Sources/ZipKit/unzip"
+    ),
+    .executableTarget(
+        name: "gh",
+        dependencies: ["GhCommand"],
+        path: "Sources/GitHub/gh"
+    ),
+    .executableTarget(
+        name: "glab",
+        dependencies: ["GlabCommand"],
+        path: "Sources/GitLab/glab"
+    ),
+    .executableTarget(
+        name: "git",
+        dependencies: ["GitCommand"],
+        path: "Sources/SwiftGit/git"
+    ),
+]
+
 let package = Package(
     name: "SwiftPorts",
     platforms: [
@@ -33,18 +78,14 @@ let package = Package(
         .library(name: "ZipKit", targets: ["ZipKit"]),
         .library(name: "ZipCommand", targets: ["ZipCommand"]),
         .library(name: "UnzipCommand", targets: ["UnzipCommand"]),
-        .executable(name: "zip", targets: ["zip"]),
-        .executable(name: "unzip", targets: ["unzip"]),
 
         // GitHub umbrella — gh(1) port.
         .library(name: "GitHub", targets: ["GitHub"]),
         .library(name: "GhCommand", targets: ["GhCommand"]),
-        .executable(name: "gh", targets: ["gh"]),
 
         // GitLab umbrella — glab port.
         .library(name: "GitLab", targets: ["GitLab"]),
         .library(name: "GlabCommand", targets: ["GlabCommand"]),
-        .executable(name: "glab", targets: ["glab"]),
 
         // SwiftGit umbrella — libgit2-backed `GitClient` SDK + `git` CLI.
         // SDK lib is named `SwiftGit` (matching the umbrella folder) so
@@ -52,8 +93,7 @@ let package = Package(
         // with `git.build` on macOS's case-insensitive filesystem.
         .library(name: "SwiftGit", targets: ["SwiftGit"]),
         .library(name: "GitCommand", targets: ["GitCommand"]),
-        .executable(name: "git", targets: ["git"]),
-    ],
+    ] + executableProducts,
     dependencies: [
         // Apple / swiftlang
         .package(url: "https://github.com/apple/swift-argument-parser",
@@ -116,16 +156,6 @@ let package = Package(
             ],
             path: "Sources/ZipKit/UnzipCommand"
         ),
-        .executableTarget(
-            name: "zip",
-            dependencies: ["ZipCommand"],
-            path: "Sources/ZipKit/zip"
-        ),
-        .executableTarget(
-            name: "unzip",
-            dependencies: ["UnzipCommand"],
-            path: "Sources/ZipKit/unzip"
-        ),
         .testTarget(
             name: "ZipKitTests",
             dependencies: ["ZipKit"]
@@ -164,11 +194,6 @@ let package = Package(
             ],
             path: "Sources/GitHub/GhCommand"
         ),
-        .executableTarget(
-            name: "gh",
-            dependencies: ["GhCommand"],
-            path: "Sources/GitHub/gh"
-        ),
         .testTarget(
             name: "GitHubTests",
             dependencies: ["GitHub", "GhCommand", "ForgeKit"],
@@ -198,11 +223,6 @@ let package = Package(
             ],
             path: "Sources/GitLab/GlabCommand"
         ),
-        .executableTarget(
-            name: "glab",
-            dependencies: ["GlabCommand"],
-            path: "Sources/GitLab/glab"
-        ),
         .testTarget(
             name: "GitLabTests",
             dependencies: ["GitLab", "GlabCommand", "ForgeKit"]
@@ -229,11 +249,6 @@ let package = Package(
             ],
             path: "Sources/SwiftGit/GitCommand"
         ),
-        .executableTarget(
-            name: "git",
-            dependencies: ["GitCommand"],
-            path: "Sources/SwiftGit/git"
-        ),
         .testTarget(
             name: "SwiftGitTests",
             dependencies: ["SwiftGit", "ForgeKit"]
@@ -242,5 +257,5 @@ let package = Package(
             name: "GitCommandTests",
             dependencies: ["GitCommand", "SwiftGit", "ForgeKit"]
         ),
-    ]
+    ] + executableTargets
 )
