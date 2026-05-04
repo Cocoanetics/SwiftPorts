@@ -119,38 +119,20 @@ jobs:
             -Xlinker "/LIBPATH:$base\lib" `
             -Xlinker "zlib.lib"
 
-  # Uses skiptools/swift-android-action which wraps the swift.org Android
-  # SDK setup. No `container:` here — the action provisions its own
-  # toolchain.
-  #
-  # Library-only build: the executable targets (`zip`, `unzip`, `gh`,
-  # `glab`, `git`) link as standalone Bionic ELFs and trip the action's
-  # CRT setup (`undefined symbol: __libc_init`). The XCTest test runner
-  # is also an executable, so the test build is off too. The realistic
-  # Android consumer is SwiftBash embedding the *libraries* — restrict
-  # the build to library targets via `--target` flags and skip the
-  # emulator test phase. Revisit once skiptools/swift-android-action
-  # ships an executable-friendly link recipe.
+  # EXPERIMENT: try the official swift.org Android getting-started
+  # recipe — Swift 6.3.1 + NDK r27d + `--static-swift-stdlib` — to see
+  # whether that resolves the `__libc_init` link failure on executable
+  # targets. If green, the production `fix/windows-android-builds`
+  # branch can drop its library-only `--target` allowlist.
   build-android:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
-      - name: Build (Android — library targets only)
+      - name: Build & Test (Android emulator — full tree, static stdlib)
         uses: skiptools/swift-android-action@v2
         with:
-          swift-version: "6.3"
+          swift-version: "6.3.1"
+          ndk-version: "27.3.13750724"   # NDK r27d — what swift.org docs require
           free-disk-space: true
-          build-tests: false
-          run-tests: false
-          swift-build-flags: >-
-            --target ForgeKit
-            --target ZipKit
-            --target ZipCommand
-            --target UnzipCommand
-            --target GitHub
-            --target GhCommand
-            --target GitLab
-            --target GlabCommand
-            --target SwiftGit
-            --target GitCommand
+          swift-build-flags: --static-swift-stdlib -v
