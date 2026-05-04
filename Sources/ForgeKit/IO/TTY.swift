@@ -18,14 +18,27 @@ public enum TTY {
     /// the raw `STDOUT_FILENO` integer (1) instead of `fileno(stdout)`
     /// — the `stdout` FILE* is a non-Sendable global on Linux and
     /// trips Swift 6.2 strict concurrency.
+    ///
+    /// iOS / tvOS / watchOS / visionOS apps don't have a terminal at
+    /// all; `isatty` on the simulator surprisingly returns `true` (the
+    /// xctest harness leaves stdout connected to a tty-shaped fd), so
+    /// short-circuit those platforms to `false`.
     public static var isStdoutTTY: Bool {
-        isatty(1) != 0
+#if os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
+        return false
+#else
+        return isatty(1) != 0
+#endif
     }
 
     /// True when stderr is attached to a terminal. Same rationale as
     /// `isStdoutTTY` — uses the raw `STDERR_FILENO` integer (2).
     public static var isStderrTTY: Bool {
-        isatty(2) != 0
+#if os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
+        return false
+#else
+        return isatty(2) != 0
+#endif
     }
 
     /// True when colour escape codes should be emitted on stdout.
