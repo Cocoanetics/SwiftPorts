@@ -129,12 +129,11 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
-      # EXPERIMENT 2: 6.3.1 + NDK r27d only (drop --static-swift-stdlib;
-      # that flag strips the Testing module and breaks the test compile).
-      # Build the full source tree (incl. executables), skip tests —
-      # we want to see whether the executable link fails the same way,
-      # without the orthogonal test-Testing-module issue.
-      - name: Build (Android — full executable tree, no tests)
+      # EXPERIMENT 3: 6.3.1 + NDK r27d + force `-lc` onto the link line.
+      # __libc_init lives in libc.so; the action's CRT recipe appears to
+      # leave libc off the link command for our executable targets. Force
+      # it explicitly via -Xlinker -lc and see if that resolves it.
+      - name: Build (Android — full executable tree, force -lc)
         uses: skiptools/swift-android-action@v2
         with:
           swift-version: "6.3.1"
@@ -142,4 +141,4 @@ jobs:
           free-disk-space: true
           build-tests: false
           run-tests: false
-          swift-build-flags: -v
+          swift-build-flags: -v -Xlinker -lc
