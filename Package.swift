@@ -265,16 +265,21 @@ let package = Package(
         ),
 
         // MARK: GzipKit umbrella
-        // Uses zlib directly (via the local CZlib systemLibrary) rather
-        // than libarchive — libarchive's read side excludes `raw` format
-        // by default, so a pure single-file gzip stream written with
-        // libarchive's raw+gzip filter can't be parsed back by the same
-        // wrapper. zlib's own inflate/deflate handle gzip framing
-        // natively (`MAX_WBITS + 16` for write, `+ 32` for read auto-
-        // detection) and zlib is already on every platform we target.
+        // Uses zlib directly (via the local SPCZlib systemLibrary)
+        // rather than libarchive — libarchive's read side excludes
+        // `raw` format by default, so a pure single-file gzip stream
+        // written with libarchive's raw+gzip filter can't be parsed
+        // back by the same wrapper. zlib's own inflate/deflate handle
+        // gzip framing natively (`MAX_WBITS + 16` for write, `+ 32`
+        // for read auto-detection) and zlib is already on every
+        // platform we target.
+        //
+        // Named `SPCZlib` (not `CZlib`) so SwiftBash — which has its
+        // own pre-existing public `CZlib` systemLibrary product — can
+        // depend on SwiftPorts without a SwiftPM target-name collision.
         .systemLibrary(
-            name: "CZlib",
-            path: "Sources/CZlib",
+            name: "SPCZlib",
+            path: "Sources/SPCZlib",
             pkgConfig: "zlib",
             providers: [
                 .brew(["zlib"]),
@@ -319,7 +324,7 @@ let package = Package(
         ),
         .target(
             name: "GzipKit",
-            dependencies: ["CZlib", "Sandbox"],
+            dependencies: ["SPCZlib", "Sandbox"],
             path: "Sources/GzipKit/Lib"
         ),
         .target(

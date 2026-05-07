@@ -1,5 +1,5 @@
 import Foundation
-import CZlib
+import SPCZlib
 import Sandbox
 
 /// Pure-Swift `gzip(1)` engine — single-file deflate/inflate via
