@@ -35,7 +35,7 @@ struct GistCreate: AsyncParsableCommand {
         var contents: [String: GistFileContent] = [:]
 
         if files == ["-"] || (files.isEmpty && filename != nil) {
-            let data = FileHandle.standardInput.readDataToEndOfFile()
+            let data = Stdio.stdin.readDataToEndOfFile()
             let text = String(data: data, encoding: .utf8) ?? ""
             let name = filename ?? "stdin.txt"
             contents[name] = GistFileContent(content: text)
@@ -60,7 +60,7 @@ struct GistCreate: AsyncParsableCommand {
         let gist: Gist = try await client.send(
             method: .post, path: "gists", body: request)
         let visibility = gist.public ? "public" : "secret"
-        print("Created \(visibility) gist (\(gist.id))")
-        print(gist.htmlUrl.absoluteString)
+        Stdio.print("Created \(visibility) gist (\(gist.id))")
+        Stdio.print(gist.htmlUrl.absoluteString)
     }
 }

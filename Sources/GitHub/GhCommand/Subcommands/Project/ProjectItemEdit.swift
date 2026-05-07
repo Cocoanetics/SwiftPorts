@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -55,7 +56,7 @@ struct ProjectItemEdit: AsyncParsableCommand {
                     "itemId": .string(itemId),
                     "fieldId": .string(fieldId),
                 ])
-            print("\(ANSI.green("✓")) Cleared field \(fieldId) on item \(itemId)")
+            Stdio.print("\(ANSI.green("✓")) Cleared field \(fieldId) on item \(itemId)")
             return
         }
 
@@ -68,7 +69,7 @@ struct ProjectItemEdit: AsyncParsableCommand {
                 "fieldId": .string(fieldId),
                 "value": valueObject,
             ])
-        print("\(ANSI.green("✓")) Updated field \(fieldId) on item \(itemId)")
+        Stdio.print("\(ANSI.green("✓")) Updated field \(fieldId) on item \(itemId)")
     }
 
     private func buildValue() throws -> GraphQLValue {

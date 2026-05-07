@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 
 /// Shared `--json <fields>` plumbing for subcommands that mirror upstream
@@ -97,7 +98,7 @@ public enum JSONFieldSelector {
         let body = "Specify one or more comma-separated fields for `--json`:\n  "
             + fieldMap.keys.sorted().joined(separator: "\n  ")
             + "\n"
-        FileHandle.standardError.write(Data(body.utf8))
+        Stdio.stderr.write(Data(body.utf8))
     }
 
     private static func printUnknownField<Resource>(
@@ -107,6 +108,6 @@ public enum JSONFieldSelector {
         let body = "Unknown JSON field: \"\(field)\"\nAvailable fields:\n  "
             + fieldMap.keys.sorted().joined(separator: "\n  ")
             + "\n"
-        FileHandle.standardError.write(Data(body.utf8))
+        Stdio.stderr.write(Data(body.utf8))
     }
 }

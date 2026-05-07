@@ -1,4 +1,5 @@
 import Foundation
+import Sandbox
 import libgit2
 
 /// Formats and emits `remote: …` / `Receiving objects: …` /
@@ -53,7 +54,7 @@ struct ProgressReporter {
     /// header still emit.
     var suppressTransferProgress = false
 
-    static let stderr = FileHandle.standardError
+    static let stderr = Stdio.stderr
 
     static func write(_ s: String) {
         stderr.write(Data(s.utf8))

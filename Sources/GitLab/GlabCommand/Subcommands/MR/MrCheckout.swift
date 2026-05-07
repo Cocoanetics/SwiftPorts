@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import ForgeKit
 import GitLab
@@ -36,10 +37,10 @@ struct MrCheckout: AsyncParsableCommand {
         let refspec = "\(mrRef):\(local)"
 
         let git: any ForgeKit.GitClient = CommandContext.gitClient()
-        print("Fetching \(remote) \(refspec) …")
+        Stdio.print("Fetching \(remote) \(refspec) …")
         try await git.fetch(remote: remote, refspec: refspec)
-        print("Checking out \(local) …")
+        Stdio.print("Checking out \(local) …")
         try await git.checkout(ref: local)
-        print("\(ANSI.green("✓")) On !\(merge.iid) (\(merge.sourceBranch) → \(merge.targetBranch))")
+        Stdio.print("\(ANSI.green("✓")) On !\(merge.iid) (\(merge.sourceBranch) → \(merge.targetBranch))")
     }
 }

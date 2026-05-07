@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -40,7 +41,7 @@ struct IssueEdit: AsyncParsableCommand {
         let target = try await RepositoryResolver.resolve(flag: repo)
         let resolvedBody: String?
         if body == "-" {
-            let data = FileHandle.standardInput.readDataToEndOfFile()
+            let data = Stdio.stdin.readDataToEndOfFile()
             resolvedBody = String(data: data, encoding: .utf8)
         } else {
             resolvedBody = body
@@ -56,6 +57,6 @@ struct IssueEdit: AsyncParsableCommand {
             method: .patch,
             path: "repos/\(target.slug)/issues/\(number)",
             body: request)
-        print("\(ANSI.green("✓")) Edited #\(updated.number)")
+        Stdio.print("\(ANSI.green("✓")) Edited #\(updated.number)")
     }
 }

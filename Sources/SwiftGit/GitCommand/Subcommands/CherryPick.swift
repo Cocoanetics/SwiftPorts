@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -80,16 +81,16 @@ struct CherryPick: AsyncParsableCommand {
         case .completed(_, let shortSHA, let branchName, let subject, let authorDate,
                         let summary, let added, let deleted):
             let branch = branchName ?? "detached HEAD"
-            print("[\(branch) \(shortSHA)] \(subject)")
+            Stdio.print("[\(branch) \(shortSHA)] \(subject)")
             // Real git's cherry-pick output surfaces the original
             // commit's author date as ` Date: <…>` because the new
             // commit inherits authorship — only the committer is "now".
             if !authorDate.isEmpty {
-                print(" Date: \(authorDate)")
+                Stdio.print(" Date: \(authorDate)")
             }
-            print(summary)
-            for line in added { print(line) }
-            for line in deleted { print(line) }
+            Stdio.print(summary)
+            for line in added { Stdio.print(line) }
+            for line in deleted { Stdio.print(line) }
 
         case .conflict(let sha, let subject, let paths):
             // Mirror real git's stderr block (matches our merge/rebase

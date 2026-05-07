@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -43,19 +44,19 @@ struct SearchCommits: AsyncParsableCommand {
 
         if let json {
             let fields = try JSONFieldSelector.parse(raw: json, fieldMap: SearchFields.commits)
-            print(try JSONFieldSelector.render(items: trimmed, fields: fields, fieldMap: SearchFields.commits))
+            Stdio.print(try JSONFieldSelector.render(items: trimmed, fields: fields, fieldMap: SearchFields.commits))
             return
         }
         if trimmed.isEmpty {
-            print("No commit matches.")
+            Stdio.print("No commit matches.")
             return
         }
-        print("Showing \(trimmed.count) of \(result.totalCount) results.")
+        Stdio.print("Showing \(trimmed.count) of \(result.totalCount) results.")
         for item in trimmed {
             let firstLine = item.commit.message.split(
                 whereSeparator: \.isNewline).first.map(String.init) ?? ""
             let shortSha = String(item.sha.prefix(7))
-            print("\(item.repository.fullName)\t\(shortSha)\t\(item.commit.author.name)\t\(firstLine)")
+            Stdio.print("\(item.repository.fullName)\t\(shortSha)\t\(item.commit.author.name)\t\(firstLine)")
         }
     }
 }

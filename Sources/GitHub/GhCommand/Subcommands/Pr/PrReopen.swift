@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -23,6 +24,6 @@ struct PrReopen: AsyncParsableCommand {
             method: .patch,
             path: "repos/\(target.slug)/pulls/\(number)",
             body: ["state": "open"])
-        print("\(ANSI.green("✓")) Reopened #\(pr.number)")
+        Stdio.print("\(ANSI.green("✓")) Reopened #\(pr.number)")
     }
 }

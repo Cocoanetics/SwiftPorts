@@ -193,7 +193,7 @@ enum Lz4Engine {
             if stdout {
                 try await emitFileToStdout(url: url, mode: mode)
                 if verbose {
-                    FileHandle.standardError.write(
+                    Stdio.stderr.write(
                         Data("\(file) -> stdout\n".utf8))
                 }
             } else {
@@ -207,7 +207,7 @@ enum Lz4Engine {
                         at: url, keepInput: keep, overwrite: force)
                 }
                 if verbose {
-                    FileHandle.standardError.write(
+                    Stdio.stderr.write(
                         Data("\(file) -> \(result.path)\n".utf8))
                 }
             }
@@ -215,13 +215,13 @@ enum Lz4Engine {
     }
 
     private static func processStdin(mode: Lz4Mode) async throws {
-        let input = FileHandle.standardInput.readDataToEndOfFile()
+        let input = Stdio.stdin.readDataToEndOfFile()
         let output: Data
         switch mode {
         case .compress:   output = try await Lz4Kit.Lz4.compress(input)
         case .decompress: output = try await Lz4Kit.Lz4.decompress(input)
         }
-        FileHandle.standardOutput.write(output)
+        Stdio.stdout.write(output)
     }
 
     private static func emitFileToStdout(url: URL, mode: Lz4Mode) async throws {
@@ -232,7 +232,7 @@ enum Lz4Engine {
         case .compress:   output = try await Lz4Kit.Lz4.compress(bytes)
         case .decompress: output = try await Lz4Kit.Lz4.decompress(bytes)
         }
-        FileHandle.standardOutput.write(output)
+        Stdio.stdout.write(output)
     }
 }
 

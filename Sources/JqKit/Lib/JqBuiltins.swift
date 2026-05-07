@@ -1,4 +1,5 @@
 import Foundation
+import Sandbox
 
 /// Dispatch table for every jq builtin. Mirrors the just-bash split into
 /// type / math / string / array / object / control / path / index /
@@ -40,10 +41,10 @@ enum JqBuiltins {
             for (k, v) in ctx.env { obj[k] = .string(v) }
             return [.object(obj)]
         case "debug":
-            FileHandle.standardError.write(Data("[\"DEBUG:\",\(JqFormatter.compact(value))]\n".utf8))
+            Stdio.stderr.write(Data("[\"DEBUG:\",\(JqFormatter.compact(value))]\n".utf8))
             return [value]
         case "stderr":
-            FileHandle.standardError.write(Data(JqFormatter.compact(value).utf8))
+            Stdio.stderr.write(Data(JqFormatter.compact(value).utf8))
             return [value]
         case "input_line_number":
             return [.number(1)]
@@ -62,8 +63,8 @@ enum JqBuiltins {
                 code = Int32(n)
             } else { code = 5 }
             switch value {
-            case .string(let s): FileHandle.standardError.write(Data(s.utf8))
-            default: FileHandle.standardError.write(Data((JqFormatter.compact(value) + "\n").utf8))
+            case .string(let s): Stdio.stderr.write(Data(s.utf8))
+            default: Stdio.stderr.write(Data((JqFormatter.compact(value) + "\n").utf8))
             }
             exit(code)
         case "input", "inputs":

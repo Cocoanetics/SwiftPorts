@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -73,11 +74,11 @@ struct IssueCreate: AsyncParsableCommand {
         let issue: Issue = try await client.send(method: .post, path: path, body: request)
 
         if json {
-            print(try CodableOutput.prettyJSON(issue))
+            Stdio.print(try CodableOutput.prettyJSON(issue))
             return
         }
-        print("Created #\(issue.iid): \(issue.title)")
-        print(issue.webUrl.absoluteString)
+        Stdio.print("Created #\(issue.iid): \(issue.title)")
+        Stdio.print(issue.webUrl.absoluteString)
     }
 
     private static func userIdLookup(client: APIClient, username: String) async throws -> Int {

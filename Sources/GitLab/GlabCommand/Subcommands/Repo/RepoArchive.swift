@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import ForgeKit
 import GitLab
@@ -26,7 +27,7 @@ struct RepoArchive: AsyncParsableCommand {
             method: .post,
             path: "projects/\(target.encodedPath)/archive",
             body: Empty())
-        print("\(ANSI.yellow("⚠")) Archived \(project.pathWithNamespace)")
+        Stdio.print("\(ANSI.yellow("⚠")) Archived \(project.pathWithNamespace)")
     }
 }
 
@@ -53,6 +54,6 @@ struct RepoUnarchive: AsyncParsableCommand {
             method: .post,
             path: "projects/\(target.encodedPath)/unarchive",
             body: Empty())
-        print("\(ANSI.green("✓")) Unarchived \(project.pathWithNamespace)")
+        Stdio.print("\(ANSI.green("✓")) Unarchived \(project.pathWithNamespace)")
     }
 }

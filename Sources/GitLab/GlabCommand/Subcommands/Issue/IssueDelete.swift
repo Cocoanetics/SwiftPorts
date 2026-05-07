@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -26,6 +27,6 @@ struct IssueDelete: AsyncParsableCommand {
         let client = try await CommandContext.apiClient(host: target.host)
         let path = "projects/\(target.encodedPath)/issues/\(parsed.iid)"
         try await client.delete(path)
-        print("Deleted #\(parsed.iid).")
+        Stdio.print("Deleted #\(parsed.iid).")
     }
 }

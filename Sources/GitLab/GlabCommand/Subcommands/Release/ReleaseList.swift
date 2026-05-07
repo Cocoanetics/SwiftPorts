@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -21,12 +22,12 @@ struct ReleaseList: AsyncParsableCommand {
         let releases: [Release] = try await client.get(
             "projects/\(target.encodedPath)/releases",
             query: [URLQueryItem(name: "per_page", value: String(min(limit, 100)))])
-        if releases.isEmpty { print("No releases in \(target.fullPath)."); return }
+        if releases.isEmpty { Stdio.print("No releases in \(target.fullPath)."); return }
         let formatter = ISO8601DateFormatter()
         for r in releases.prefix(limit) {
             let when = r.releasedAt.map { formatter.string(from: $0) } ?? ""
             let title = r.name ?? r.tagName
-            print("\(r.tagName)\t\(title)\t\(when)")
+            Stdio.print("\(r.tagName)\t\(title)\t\(when)")
         }
     }
 }

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import HTTPTypes
 import GitHub
@@ -29,6 +30,6 @@ struct PrDiff: AsyncParsableCommand {
             method: .get,
             path: "repos/\(target.slug)/pulls/\(number)",
             extraHeaders: headers)
-        FileHandle.standardOutput.write(response.body)
+        Stdio.stdout.write(response.body)
     }
 }

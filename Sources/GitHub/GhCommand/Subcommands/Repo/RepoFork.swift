@@ -44,20 +44,20 @@ struct RepoFork: AsyncParsableCommand {
             method: .post,
             path: "repos/\(target.slug)/forks",
             body: request)
-        print("\(ANSI.green("✓")) Forked \(target.slug) → \(fork.fullName)")
+        Stdio.print("\(ANSI.green("✓")) Forked \(target.slug) → \(fork.fullName)")
 
         if clone {
             let url = URL(string: "\(fork.htmlUrl.absoluteString).git")!
             let git = CommandContext.gitClient()
             try await git.clone(url: url, directory: nil)
-            print("\(ANSI.green("✓")) Cloned fork to ./\(fork.name)")
+            Stdio.print("\(ANSI.green("✓")) Cloned fork to ./\(fork.name)")
             // Add upstream remote so users can keep their fork in sync.
             let upstreamURL = URL(string: "\(target.urlString)")!
             let cwd = Sandbox.currentDirectory
                 .appendingPathComponent(fork.name, isDirectory: true)
             let cloneGit = CommandContext.gitClient(workingDirectory: cwd)
             try await cloneGit.addRemote(name: "upstream", url: upstreamURL)
-            print("\(ANSI.green("✓")) Added upstream remote → \(target.slug)")
+            Stdio.print("\(ANSI.green("✓")) Added upstream remote → \(target.slug)")
         }
     }
 }

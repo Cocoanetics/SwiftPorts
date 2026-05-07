@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -52,7 +53,7 @@ struct Branch: AsyncParsableCommand {
 
         if let local = upstream {
             if let upstream = try await client.upstreamBranch(of: local) {
-                print(upstream)
+                Stdio.print(upstream)
             }
             return
         }
@@ -72,7 +73,7 @@ struct Branch: AsyncParsableCommand {
                     throw CLIError.stderr(
                         "error: branch '\(name)' not found.", exitCode: 1)
                 }
-                print("Deleted branch \(name).")
+                Stdio.print("Deleted branch \(name).")
             }
             return
         }
@@ -93,7 +94,7 @@ struct Branch: AsyncParsableCommand {
 
         if showCurrent {
             if let current = try await client.currentBranch() {
-                print(current)
+                Stdio.print(current)
             }
             return
         }
@@ -102,7 +103,7 @@ struct Branch: AsyncParsableCommand {
         let current = try await client.currentBranch()
         let names = try await client.localBranches()
         for name in names.sorted() {
-            print(name == current ? "* \(name)" : "  \(name)")
+            Stdio.print(name == current ? "* \(name)" : "  \(name)")
         }
     }
 }

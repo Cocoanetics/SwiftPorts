@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -37,7 +38,7 @@ struct RunWatch: AsyncParsableCommand {
             let status = run.status ?? "?"
             if status != lastStatus {
                 let stamp = ISO8601DateFormatter().string(from: Date())
-                print("[\(stamp)] \(status)")
+                Stdio.print("[\(stamp)] \(status)")
                 lastStatus = status
             }
             if status == "completed" {
@@ -50,7 +51,7 @@ struct RunWatch: AsyncParsableCommand {
                     default: return "?"
                     }
                 }()
-                print("\(glyph) Run #\(run.runNumber) finished: \(conclusion)")
+                Stdio.print("\(glyph) Run #\(run.runNumber) finished: \(conclusion)")
                 if exitStatus, conclusion != "success" {
                     throw ExitCode(1)
                 }

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -20,7 +21,7 @@ struct RemoteRename: AsyncParsableCommand {
                 .remoteRename(from: oldName, to: newName)
             // Real git surfaces problematic refspecs here (rare).
             for problem in problems {
-                let stderr = FileHandle.standardError
+                let stderr = Stdio.stderr
                 stderr.write(Data(
                     "warning: could not rename refspec: \(problem)\n".utf8))
             }

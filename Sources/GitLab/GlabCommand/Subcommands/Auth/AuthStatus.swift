@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import ForgeKit
 import GitLab
@@ -21,31 +22,31 @@ struct AuthStatus: AsyncParsableCommand {
         let config = try await CommandContext.resolveConfig(host: hostname)
         let source = TokenSource.detect(configToken: config.token)
 
-        print("\(config.host)")
+        Stdio.print("\(config.host)")
 
         guard let token = config.token else {
-            print("  \(ANSI.red("✗")) Not logged in. Run `glab auth login` or set GITLAB_TOKEN.")
+            Stdio.print("  \(ANSI.red("✗")) Not logged in. Run `glab auth login` or set GITLAB_TOKEN.")
             throw ExitCode(1)
         }
 
         let client = APIClient(configuration: config)
         do {
             let user: User = try await client.get("user")
-            print("  \(ANSI.green("✓")) Logged in to \(ANSI.bold(config.host)) as \(ANSI.bold(user.username)) \(ANSI.dim("(token from \(source.humanReadable))"))")
+            Stdio.print("  \(ANSI.green("✓")) Logged in to \(ANSI.bold(config.host)) as \(ANSI.bold(user.username)) \(ANSI.dim("(token from \(source.humanReadable))"))")
             if let webUrl = user.webUrl {
-                print("    URL: \(webUrl.absoluteString)")
+                Stdio.print("    URL: \(webUrl.absoluteString)")
             }
             if showToken {
-                print("    Token: \(token)")
+                Stdio.print("    Token: \(token)")
             } else {
-                print("    Token: \(ANSI.dim(redact(token)))")
+                Stdio.print("    Token: \(ANSI.dim(redact(token)))")
             }
         } catch APIError.unauthenticated(let url) {
-            print("  \(ANSI.red("✗")) Token rejected by \(url.absoluteString) (HTTP 401).")
-            print("    Source: \(source.humanReadable)")
+            Stdio.print("  \(ANSI.red("✗")) Token rejected by \(url.absoluteString) (HTTP 401).")
+            Stdio.print("    Source: \(source.humanReadable)")
             throw ExitCode(1)
         } catch {
-            print("  \(ANSI.red("✗")) Auth probe failed: \(error.localizedDescription)")
+            Stdio.print("  \(ANSI.red("✗")) Auth probe failed: \(error.localizedDescription)")
             throw ExitCode(1)
         }
     }

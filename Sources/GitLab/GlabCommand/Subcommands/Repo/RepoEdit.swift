@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -71,7 +72,7 @@ struct RepoEdit: AsyncParsableCommand {
             method: .put,
             path: "projects/\(target.encodedPath)",
             body: body)
-        print("Edited \(updated.pathWithNamespace)")
+        Stdio.print("Edited \(updated.pathWithNamespace)")
     }
 
     private func triState(_ on: Bool, _ off: Bool) -> String? {

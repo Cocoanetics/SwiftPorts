@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 
 struct StashBranch: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -22,6 +23,6 @@ struct StashBranch: AsyncParsableCommand {
         try await client.stashBranch(name: name, index: idx)
         // Real git emits "Switched to a new branch '<name>'" via the
         // checkout machinery; mirror it.
-        print("Switched to a new branch '\(name)'")
+        Stdio.print("Switched to a new branch '\(name)'")
     }
 }

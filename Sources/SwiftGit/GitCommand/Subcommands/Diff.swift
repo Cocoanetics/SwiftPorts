@@ -135,7 +135,7 @@ struct Diff: AsyncParsableCommand {
         let output = try await client.diff(
             target, format: format, paths: paths, contextLines: context)
         if !output.isEmpty {
-            FileHandle.standardOutput.write(Data(output.utf8))
+            Stdio.stdout.write(Data(output.utf8))
         }
     }
 

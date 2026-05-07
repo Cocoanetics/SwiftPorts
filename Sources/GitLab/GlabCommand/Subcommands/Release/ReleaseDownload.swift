@@ -81,7 +81,7 @@ struct ReleaseDownload: AsyncParsableCommand {
             let dest = destDir.appendingPathComponent(asset.name)
             try await Sandbox.authorize(asset.url)
             try await Sandbox.authorize(dest)
-            print("→ \(asset.name)")
+            Stdio.print("→ \(asset.name)")
             let (data, _) = try await session.data(from: asset.url)
             try data.write(to: dest)
         }

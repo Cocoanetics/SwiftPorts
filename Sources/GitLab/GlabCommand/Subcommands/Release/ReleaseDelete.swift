@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -23,6 +24,6 @@ struct ReleaseDelete: AsyncParsableCommand {
         _ = try await client.raw(
             method: .delete,
             path: "projects/\(target.encodedPath)/releases/\(encoded)")
-        print("Deleted release \(tagName)")
+        Stdio.print("Deleted release \(tagName)")
     }
 }

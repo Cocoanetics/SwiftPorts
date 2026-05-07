@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -57,16 +58,16 @@ struct BrowseCommand: AsyncParsableCommand {
         let url = try await buildURL(repo: target)
 
         if noBrowser {
-            print(url.absoluteString)
+            Stdio.print(url.absoluteString)
             return
         }
         do {
             try await Browser.open(url)
         } catch {
             // Fall back to printing the URL — better than failing silently.
-            FileHandle.standardError.write(Data(
+            Stdio.stderr.write(Data(
                 "Couldn't open browser: \(error.localizedDescription)\n".utf8))
-            print(url.absoluteString)
+            Stdio.print(url.absoluteString)
         }
     }
 

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -10,6 +11,6 @@ struct LsFiles: AsyncParsableCommand {
 
     func run() async throws {
         let paths = try await CommandContext.gitClient().indexedPaths()
-        for path in paths { print(path) }
+        for path in paths { Stdio.print(path) }
     }
 }

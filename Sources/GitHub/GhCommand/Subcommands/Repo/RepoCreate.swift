@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -94,14 +95,14 @@ struct RepoCreate: AsyncParsableCommand {
         let client = try await CommandContext.apiClient()
         let repo: Repository = try await client.send(
             method: .post, path: path, body: request)
-        print("\(ANSI.green("✓")) Created \(repo.fullName)")
-        print(repo.htmlUrl.absoluteString)
+        Stdio.print("\(ANSI.green("✓")) Created \(repo.fullName)")
+        Stdio.print(repo.htmlUrl.absoluteString)
 
         if clone {
             let cloneURL = URL(string: "\(repo.htmlUrl.absoluteString).git")!
             let git = CommandContext.gitClient()
             try await git.clone(url: cloneURL, directory: nil)
-            print("\(ANSI.green("✓")) Cloned to ./\(repo.name)")
+            Stdio.print("\(ANSI.green("✓")) Cloned to ./\(repo.name)")
         }
     }
 }

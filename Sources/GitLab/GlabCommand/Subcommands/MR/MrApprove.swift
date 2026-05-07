@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import ForgeKit
 import GitLab
@@ -31,7 +32,7 @@ struct MrApprove: AsyncParsableCommand {
             "projects/\(target.encodedPath)/merge_requests/\(iid)/approvals")
         let count = approvals.approvedBy?.count ?? 0
         let needed = approvals.approvalsLeft.map { "\($0) more needed" } ?? "—"
-        print("\(ANSI.green("✓")) Approved !\(iid). Approvals: \(count); \(needed).")
+        Stdio.print("\(ANSI.green("✓")) Approved !\(iid). Approvals: \(count); \(needed).")
     }
 }
 
@@ -59,6 +60,6 @@ struct MrUnapprove: AsyncParsableCommand {
             method: .post,
             path: "projects/\(target.encodedPath)/merge_requests/\(iid)/unapprove",
             body: EmptyBody())
-        print("\(ANSI.yellow("✓")) Unapproved !\(iid).")
+        Stdio.print("\(ANSI.yellow("✓")) Unapproved !\(iid).")
     }
 }

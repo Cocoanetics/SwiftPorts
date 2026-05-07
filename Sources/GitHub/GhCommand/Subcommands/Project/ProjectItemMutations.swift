@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -51,7 +52,7 @@ struct ProjectItemAdd: AsyncParsableCommand {
                     "projectId": .string(projectId),
                     "contentId": .string(contentId),
                 ])
-            print("\(ANSI.green("✓")) Added item \(response.addProjectV2ItemById.item.id)")
+            Stdio.print("\(ANSI.green("✓")) Added item \(response.addProjectV2ItemById.item.id)")
         } else if let draftTitle {
             var variables: [String: GraphQLValue] = [
                 "projectId": .string(projectId),
@@ -60,7 +61,7 @@ struct ProjectItemAdd: AsyncParsableCommand {
             if let draftBody { variables["body"] = .string(draftBody) }
             let response: AddProjectDraftIssueResponse = try await gql.query(
                 ProjectMutations.addProjectDraftIssue, variables: variables)
-            print("\(ANSI.green("✓")) Added draft item \(response.addProjectV2DraftIssue.projectItem.id)")
+            Stdio.print("\(ANSI.green("✓")) Added draft item \(response.addProjectV2DraftIssue.projectItem.id)")
         } else {
             throw ValidationError("Pass --url URL or --draft TITLE.")
         }
@@ -102,7 +103,7 @@ struct ProjectItemArchive: AsyncParsableCommand {
                     "projectId": .string(projectId),
                     "itemId": .string(itemId),
                 ])
-            print("\(ANSI.green("✓")) Unarchived item \(itemId)")
+            Stdio.print("\(ANSI.green("✓")) Unarchived item \(itemId)")
         } else {
             let _: ArchiveProjectItemResponse = try await gql.query(
                 ProjectMutations.archiveProjectItem,
@@ -110,7 +111,7 @@ struct ProjectItemArchive: AsyncParsableCommand {
                     "projectId": .string(projectId),
                     "itemId": .string(itemId),
                 ])
-            print("\(ANSI.green("✓")) Archived item \(itemId)")
+            Stdio.print("\(ANSI.green("✓")) Archived item \(itemId)")
         }
     }
 }
@@ -145,6 +146,6 @@ struct ProjectItemDelete: AsyncParsableCommand {
                 "projectId": .string(projectId),
                 "itemId": .string(itemId),
             ])
-        print("\(ANSI.green("✓")) Removed item \(response.deleteProjectV2Item.deletedItemId)")
+        Stdio.print("\(ANSI.green("✓")) Removed item \(response.deleteProjectV2Item.deletedItemId)")
     }
 }

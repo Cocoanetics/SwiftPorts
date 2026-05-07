@@ -35,10 +35,10 @@ struct RepoClone: AsyncParsableCommand {
 
         let dest = directory.map { Sandbox.resolve($0) }
         let git: any ForgeKit.GitClient = CommandContext.gitClient()
-        print("Cloning \(p.pathWithNamespace) from \(cloneURL.absoluteString)")
+        Stdio.print("Cloning \(p.pathWithNamespace) from \(cloneURL.absoluteString)")
         try await git.clone(url: cloneURL, directory: dest)
         let where_ = directory ?? p.path
-        print("\(ANSI.green("✓")) Cloned into \(where_)")
+        Stdio.print("\(ANSI.green("✓")) Cloned into \(where_)")
     }
 }
 

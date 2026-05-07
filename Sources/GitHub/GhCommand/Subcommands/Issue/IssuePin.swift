@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -23,7 +24,7 @@ struct IssuePin: AsyncParsableCommand {
         _ = try await client.raw(
             method: .put,
             path: "repos/\(target.slug)/issues/\(number)/pin")
-        print("\(ANSI.green("✓")) Pinned #\(number)")
+        Stdio.print("\(ANSI.green("✓")) Pinned #\(number)")
     }
 }
 
@@ -44,6 +45,6 @@ struct IssueUnpin: AsyncParsableCommand {
         let target = try await RepositoryResolver.resolve(flag: repo)
         let client = try await CommandContext.apiClient()
         try await client.delete("repos/\(target.slug)/issues/\(number)/pin")
-        print("\(ANSI.green("✓")) Unpinned #\(number)")
+        Stdio.print("\(ANSI.green("✓")) Unpinned #\(number)")
     }
 }

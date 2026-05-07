@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -39,7 +40,7 @@ struct PrView: AsyncParsableCommand {
             guard let pr = response.repository?.pullRequest else {
                 throw ValidationError("No PR #\(number) on \(target.slug).")
             }
-            print(try JSONFieldSelector.render(item: pr, fields: fields, fieldMap: PrFields.map))
+            Stdio.print(try JSONFieldSelector.render(item: pr, fields: fields, fieldMap: PrFields.map))
             return
         }
 
@@ -47,24 +48,24 @@ struct PrView: AsyncParsableCommand {
         let pr: PullRequest = try await client.get(
             "repos/\(target.slug)/pulls/\(number)")
 
-        print("\(ANSI.bold("#\(pr.number)"))  \(ANSI.bold(pr.title))")
+        Stdio.print("\(ANSI.bold("#\(pr.number)"))  \(ANSI.bold(pr.title))")
         let stateColor: String
         if pr.merged == true { stateColor = ANSI.magenta("merged") }
         else if pr.state == .open { stateColor = ANSI.green("open") }
         else { stateColor = ANSI.red("closed") }
         let draftSuffix = pr.draft == true ? ANSI.dim(" (draft)") : ""
-        print("state: \(stateColor)\(draftSuffix)  author: @\(pr.user.login)")
-        print("\(pr.head.ref) → \(pr.base.ref)")
-        print("created: \(ISO8601DateFormatter().string(from: pr.createdAt))")
+        Stdio.print("state: \(stateColor)\(draftSuffix)  author: @\(pr.user.login)")
+        Stdio.print("\(pr.head.ref) → \(pr.base.ref)")
+        Stdio.print("created: \(ISO8601DateFormatter().string(from: pr.createdAt))")
         if let merged = pr.merged, merged, let when = pr.mergedAt {
-            print("merged: \(ISO8601DateFormatter().string(from: when))")
+            Stdio.print("merged: \(ISO8601DateFormatter().string(from: when))")
         }
         if !pr.labels.isEmpty {
-            print("labels: \(pr.labels.map(\.name).joined(separator: ", "))")
+            Stdio.print("labels: \(pr.labels.map(\.name).joined(separator: ", "))")
         }
-        print("url: \(pr.htmlUrl.absoluteString)")
+        Stdio.print("url: \(pr.htmlUrl.absoluteString)")
         if let body = pr.body, !body.isEmpty {
-            print("\n--\n\(body)")
+            Stdio.print("\n--\n\(body)")
         }
         if comments {
             try await renderComments(target: target, client: client)
@@ -78,15 +79,15 @@ struct PrView: AsyncParsableCommand {
         let list: [IssueComment] = try await client.get(
             "repos/\(target.slug)/issues/\(number)/comments")
         guard !list.isEmpty else {
-            print("\n--\n(no comments)")
+            Stdio.print("\n--\n(no comments)")
             return
         }
-        print("\n--\n\(ANSI.bold("Comments (\(list.count))"))")
+        Stdio.print("\n--\n\(ANSI.bold("Comments (\(list.count))"))")
         let f = ISO8601DateFormatter()
         for comment in list {
-            print("\n@\(comment.user.login)  \(f.string(from: comment.createdAt))")
+            Stdio.print("\n@\(comment.user.login)  \(f.string(from: comment.createdAt))")
             if let body = comment.body, !body.isEmpty {
-                print(body)
+                Stdio.print(body)
             }
         }
     }

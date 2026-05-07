@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 
 struct StashList: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -11,7 +12,7 @@ struct StashList: AsyncParsableCommand {
         // Real git: silent (exit 0) when there are no entries. Each
         // entry rendered as `stash@{N}: <message>`.
         for entry in entries {
-            print("stash@{\(entry.index)}: \(entry.message)")
+            Stdio.print("stash@{\(entry.index)}: \(entry.message)")
         }
     }
 }

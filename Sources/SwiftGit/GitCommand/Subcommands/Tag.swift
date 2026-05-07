@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -95,7 +96,7 @@ struct Tag: AsyncParsableCommand {
                         "error: tag '\(name)' not found.", exitCode: 1)
                 }
                 let short = String(oldSHA.prefix(7))
-                print("Deleted tag '\(name)' (was \(short))")
+                Stdio.print("Deleted tag '\(name)' (was \(short))")
             }
             return
         }
@@ -108,11 +109,11 @@ struct Tag: AsyncParsableCommand {
                 for entry in entries {
                     // Real git pads the name to 16 chars before the
                     // summary text. Match that.
-                    print("\(entry.name.padding(toLength: 16, withPad: " ", startingAt: 0))\(entry.summary)")
+                    Stdio.print("\(entry.name.padding(toLength: 16, withPad: " ", startingAt: 0))\(entry.summary)")
                 }
             } else {
                 let names = try await client.tagList(pattern: useRest.first)
-                for name in names { print(name) }
+                for name in names { Stdio.print(name) }
             }
             return
         }

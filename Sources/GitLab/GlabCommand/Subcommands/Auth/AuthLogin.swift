@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import ForgeKit
 import GitLab
@@ -42,9 +43,9 @@ struct AuthLogin: AsyncParsableCommand {
             }
             token = line
         } else {
-            print("Paste your Personal Access Token for \(ANSI.bold(host))")
-            print("(create one at https://\(host)/-/user_settings/personal_access_tokens)")
-            print("Token: ", terminator: "")
+            Stdio.print("Paste your Personal Access Token for \(ANSI.bold(host))")
+            Stdio.print("(create one at https://\(host)/-/user_settings/personal_access_tokens)")
+            Stdio.print("Token: ", terminator: "")
             guard let line = readLine(strippingNewline: true)?
                     .trimmingCharacters(in: .whitespacesAndNewlines),
                   !line.isEmpty
@@ -59,8 +60,8 @@ struct AuthLogin: AsyncParsableCommand {
         do {
             let user: User = try await client.get("user")
             try await CommandContext.resolver.store(token: token, host: host)
-            print("\(ANSI.green("✓")) Logged in to \(ANSI.bold(host)) as \(ANSI.bold(user.username))")
-            print("Token saved to the system keychain.")
+            Stdio.print("\(ANSI.green("✓")) Logged in to \(ANSI.bold(host)) as \(ANSI.bold(user.username))")
+            Stdio.print("Token saved to the system keychain.")
         } catch APIError.unauthenticated {
             throw AuthLoginError.tokenRejected(host)
         }

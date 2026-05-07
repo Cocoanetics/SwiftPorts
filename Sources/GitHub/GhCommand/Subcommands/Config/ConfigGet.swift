@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -15,9 +16,9 @@ struct ConfigGet: AsyncParsableCommand {
         let store = ConfigFileStore()
         let file = try store.read()
         if let value = file[key] {
-            print(value)
+            Stdio.print(value)
         } else {
-            FileHandle.standardError.write(Data("\(key) not set\n".utf8))
+            Stdio.stderr.write(Data("\(key) not set\n".utf8))
             throw ExitCode(1)
         }
     }

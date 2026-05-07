@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -39,9 +40,9 @@ struct PrReady: AsyncParsableCommand {
         let _: EmptyResponse = try await gql.query(
             mutation, variables: ["id": .string(pr.nodeId)])
         if undo {
-            print("\(ANSI.green("✓")) Marked #\(number) as draft")
+            Stdio.print("\(ANSI.green("✓")) Marked #\(number) as draft")
         } else {
-            print("\(ANSI.green("✓")) Marked #\(number) as ready for review")
+            Stdio.print("\(ANSI.green("✓")) Marked #\(number) as ready for review")
         }
     }
 }

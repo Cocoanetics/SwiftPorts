@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -41,7 +42,7 @@ struct PrChecks: AsyncParsableCommand {
                 let tb = b.startedAt ?? b.createdAt ?? .distantPast
                 return ta > tb
             }
-            print(try JSONFieldSelector.render(items: contexts, fields: fields, fieldMap: PrChecksFields.map))
+            Stdio.print(try JSONFieldSelector.render(items: contexts, fields: fields, fieldMap: PrChecksFields.map))
             return
         }
 
@@ -51,7 +52,7 @@ struct PrChecks: AsyncParsableCommand {
             "repos/\(target.slug)/commits/\(pr.head.sha)/check-runs")
 
         if envelope.checkRuns.isEmpty {
-            print("No check runs for #\(number).")
+            Stdio.print("No check runs for #\(number).")
             return
         }
         for c in envelope.checkRuns {
@@ -66,7 +67,7 @@ struct PrChecks: AsyncParsableCommand {
                 glyph = ANSI.yellow("…")
             default: glyph = "?"
             }
-            print("\(glyph) \(c.name)\t\(outcome)")
+            Stdio.print("\(glyph) \(c.name)\t\(outcome)")
         }
     }
 }

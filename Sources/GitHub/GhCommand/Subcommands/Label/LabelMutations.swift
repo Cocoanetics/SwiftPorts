@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -28,7 +29,7 @@ struct LabelCreate: AsyncParsableCommand {
             method: .post,
             path: "repos/\(target.slug)/labels",
             body: Body(name: name, color: color, description: labelDescription))
-        print("\(ANSI.green("✓")) Created label \(label.name)")
+        Stdio.print("\(ANSI.green("✓")) Created label \(label.name)")
     }
 }
 
@@ -59,7 +60,7 @@ struct LabelEdit: AsyncParsableCommand {
             method: .patch,
             path: "repos/\(target.slug)/labels/\(name)",
             body: Body(newName: newName, color: color, description: labelDescription))
-        print("\(ANSI.green("✓")) Edited label \(updated.name)")
+        Stdio.print("\(ANSI.green("✓")) Edited label \(updated.name)")
     }
 }
 
@@ -75,12 +76,12 @@ struct LabelDelete: AsyncParsableCommand {
     func run() async throws {
         let target = try await RepositoryResolver.resolve(flag: repo)
         if !skipPrompt {
-            FileHandle.standardError.write(Data("Delete label '\(name)' in \(target.slug)? [y/N] ".utf8))
+            Stdio.stderr.write(Data("Delete label '\(name)' in \(target.slug)? [y/N] ".utf8))
             let line = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
             guard line == "y" || line == "yes" else { throw ExitCode(1) }
         }
         let client = try await CommandContext.apiClient()
         try await client.delete("repos/\(target.slug)/labels/\(name)")
-        print("\(ANSI.green("✓")) Deleted label \(name)")
+        Stdio.print("\(ANSI.green("✓")) Deleted label \(name)")
     }
 }

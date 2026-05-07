@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 
 struct StashApply: AsyncParsableCommand {
@@ -25,6 +26,6 @@ struct StashApply: AsyncParsableCommand {
         // Real git follows up with a `git status` block — the
         // verbose form, same wording as `git status` itself.
         let report = try await client.status()
-        FileHandle.standardOutput.write(Data(report.verboseFormat().utf8))
+        Stdio.stdout.write(Data(report.verboseFormat().utf8))
     }
 }

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -59,20 +60,20 @@ struct ProjectView: AsyncParsableCommand {
         }
 
         if format == .json {
-            print(try ProjectJSONOutput.render(ProjectJSONOutput.project(project)))
+            Stdio.print(try ProjectJSONOutput.render(ProjectJSONOutput.project(project)))
             return
         }
-        print("\(ANSI.bold("Project #\(project.number)")): \(ANSI.bold(project.title))")
+        Stdio.print("\(ANSI.bold("Project #\(project.number)")): \(ANSI.bold(project.title))")
         let state = project.closed ? ANSI.magenta("closed") : ANSI.green("open")
         let visibility = project.public ? "public" : "private"
-        print("state: \(state)  visibility: \(visibility)  items: \(project.items.totalCount)")
+        Stdio.print("state: \(state)  visibility: \(visibility)  items: \(project.items.totalCount)")
         if let desc = project.shortDescription, !desc.isEmpty {
-            print("description: \(desc)")
+            Stdio.print("description: \(desc)")
         }
-        print("created: \(ISO8601DateFormatter().string(from: project.createdAt))")
-        print("url: \(project.url.absoluteString)")
+        Stdio.print("created: \(ISO8601DateFormatter().string(from: project.createdAt))")
+        Stdio.print("url: \(project.url.absoluteString)")
         if let readme = project.readme, !readme.isEmpty {
-            print("\n--\n\(readme)")
+            Stdio.print("\n--\n\(readme)")
         }
     }
 }

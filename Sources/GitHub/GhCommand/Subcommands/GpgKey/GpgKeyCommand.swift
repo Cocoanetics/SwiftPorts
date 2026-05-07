@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -20,11 +21,11 @@ struct GpgKeyList: AsyncParsableCommand {
     func run() async throws {
         let client = try await CommandContext.apiClient()
         let keys: [GPGKey] = try await client.get("user/gpg_keys")
-        if keys.isEmpty { print("No GPG keys."); return }
+        if keys.isEmpty { Stdio.print("No GPG keys."); return }
         for k in keys {
             let when = k.createdAt.map(ISO8601DateFormatter().string(from:)) ?? "?"
             let emails = k.emails?.map(\.email).joined(separator: ", ") ?? ""
-            print("\(k.id)\t\(k.keyId)\t\(when)\t\(emails)")
+            Stdio.print("\(k.id)\t\(k.keyId)\t\(when)\t\(emails)")
         }
     }
 }
@@ -41,7 +42,7 @@ struct GpgKeyAdd: AsyncParsableCommand {
     func run() async throws {
         let key: String
         if path == "-" {
-            let data = FileHandle.standardInput.readDataToEndOfFile()
+            let data = Stdio.stdin.readDataToEndOfFile()
             key = String(data: data, encoding: .utf8) ?? ""
         } else {
             key = try String(contentsOfFile: path, encoding: .utf8)
@@ -53,7 +54,7 @@ struct GpgKeyAdd: AsyncParsableCommand {
             method: .post,
             path: "user/gpg_keys",
             body: Body(armoredPublicKey: key))
-        print("\(ANSI.green("✓")) Added GPG key #\(added.id)")
+        Stdio.print("\(ANSI.green("✓")) Added GPG key #\(added.id)")
     }
 }
 
@@ -71,12 +72,12 @@ struct GpgKeyDelete: AsyncParsableCommand {
 
     func run() async throws {
         if !skipPrompt {
-            FileHandle.standardError.write(Data("Delete GPG key #\(id)? [y/N] ".utf8))
+            Stdio.stderr.write(Data("Delete GPG key #\(id)? [y/N] ".utf8))
             let line = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
             guard line == "y" || line == "yes" else { throw ExitCode(1) }
         }
         let client = try await CommandContext.apiClient()
         try await client.delete("user/gpg_keys/\(id)")
-        print("\(ANSI.green("✓")) Deleted GPG key #\(id)")
+        Stdio.print("\(ANSI.green("✓")) Deleted GPG key #\(id)")
     }
 }

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -58,18 +59,18 @@ struct RunList: AsyncParsableCommand {
 
         if let json {
             let fields = try JSONFieldSelector.parse(raw: json, fieldMap: RunFields.list)
-            print(try JSONFieldSelector.render(items: trimmed, fields: fields, fieldMap: RunFields.list))
+            Stdio.print(try JSONFieldSelector.render(items: trimmed, fields: fields, fieldMap: RunFields.list))
             return
         }
         if trimmed.isEmpty {
-            print("No runs match.")
+            Stdio.print("No runs match.")
             return
         }
         for run in trimmed {
             let status = run.conclusion ?? run.status ?? "?"
             let title = run.displayTitle ?? run.name ?? "?"
             let when = ISO8601DateFormatter().string(from: run.createdAt)
-            print("\(run.id)\t\(status)\t\(run.event)\t\(title)\t\(run.headBranch ?? "-")\t\(when)")
+            Stdio.print("\(run.id)\t\(status)\t\(run.event)\t\(title)\t\(run.headBranch ?? "-")\t\(when)")
         }
     }
 }

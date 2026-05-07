@@ -69,7 +69,7 @@ struct RunDownload: AsyncParsableCommand {
             try await Sandbox.authorize(dest)
             let size = ByteCountFormatter.string(
                 fromByteCount: artifact.sizeInBytes, countStyle: .file)
-            print("→ \(artifact.name).zip (\(size))")
+            Stdio.print("→ \(artifact.name).zip (\(size))")
             // raw() returns the body bytes; URLSession follows the
             // 302 redirect to the signed S3 download URL by default.
             // The redirect target is below the Swift boundary —
@@ -82,11 +82,11 @@ struct RunDownload: AsyncParsableCommand {
         }
         let expired = matching.filter(\.expired)
         if !expired.isEmpty {
-            print(ANSI.dim(
+            Stdio.print(ANSI.dim(
                 "Skipped \(expired.count) expired: " +
                 expired.map(\.name).joined(separator: ", ")))
         }
-        print("\(ANSI.green("✓")) Downloaded \(matching.count - expired.count) artifact(s) to \(destDir.path)")
+        Stdio.print("\(ANSI.green("✓")) Downloaded \(matching.count - expired.count) artifact(s) to \(destDir.path)")
     }
 
     /// Same minimal `*` / `?` glob as `gh release download`.

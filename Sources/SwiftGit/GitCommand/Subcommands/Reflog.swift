@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -15,7 +16,7 @@ struct Reflog: AsyncParsableCommand {
 
     func run() async throws {
         let entries = try await CommandContext.gitClient().reflog(refName: ref)
-        let stdout = FileHandle.standardOutput
+        let stdout = Stdio.stdout
         for (idx, entry) in entries.enumerated() {
             // Real git's format: `<sha7> HEAD@{N}: <message>`.
             let short = String(entry.newSHA.prefix(7))

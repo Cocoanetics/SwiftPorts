@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -68,7 +69,7 @@ struct ProjectFieldCreate: AsyncParsableCommand {
         let response: CreateFieldResponse = try await gql.query(
             ProjectMutations.createField, variables: variables)
         let f = response.createProjectV2Field.projectV2Field
-        print("\(ANSI.green("✓")) Created field \(f.name) (\(f.id))")
+        Stdio.print("\(ANSI.green("✓")) Created field \(f.name) (\(f.id))")
     }
 }
 
@@ -83,7 +84,7 @@ struct ProjectFieldDelete: AsyncParsableCommand {
 
     func run() async throws {
         if !skipPrompt {
-            FileHandle.standardError.write(Data(
+            Stdio.stderr.write(Data(
                 "Delete field \(fieldId)? This destroys all values stored in it. [y/N] ".utf8))
             let line = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
             guard line == "y" || line == "yes" else { throw ExitCode(1) }
@@ -93,6 +94,6 @@ struct ProjectFieldDelete: AsyncParsableCommand {
             ProjectMutations.deleteField,
             variables: ["fieldId": .string(fieldId)])
         let f = response.deleteProjectV2Field.projectV2Field
-        print("\(ANSI.green("✓")) Deleted field \(f.name)")
+        Stdio.print("\(ANSI.green("✓")) Deleted field \(f.name)")
     }
 }

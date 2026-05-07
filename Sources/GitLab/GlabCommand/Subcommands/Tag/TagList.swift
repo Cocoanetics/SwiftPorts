@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -29,11 +30,11 @@ struct TagList: AsyncParsableCommand {
         let tags: [Tag] = try await client.get(
             "projects/\(target.encodedPath)/repository/tags",
             query: query)
-        if tags.isEmpty { print("No tags."); return }
+        if tags.isEmpty { Stdio.print("No tags."); return }
         for tag in tags.prefix(limit) {
             let commit = tag.commit?.shortId ?? tag.commit?.id.prefix(7).description ?? ""
             let title = tag.message?.split(separator: "\n").first.map(String.init) ?? ""
-            print("\(tag.name)\t\(commit)\t\(title)")
+            Stdio.print("\(tag.name)\t\(commit)\t\(title)")
         }
     }
 }

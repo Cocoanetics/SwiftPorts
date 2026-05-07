@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -21,6 +22,6 @@ struct VariableUnset: AsyncParsableCommand {
         _ = try await client.raw(
             method: .delete,
             path: "projects/\(target.encodedPath)/variables/\(key)")
-        print("Deleted \(key)")
+        Stdio.print("Deleted \(key)")
     }
 }

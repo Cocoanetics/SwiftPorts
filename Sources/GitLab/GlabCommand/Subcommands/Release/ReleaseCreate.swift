@@ -46,7 +46,7 @@ struct ReleaseCreate: AsyncParsableCommand {
         let resolvedNotes: String?
         if let path = notesFile {
             if path == "-" {
-                resolvedNotes = String(decoding: FileHandle.standardInput.availableData,
+                resolvedNotes = String(decoding: Stdio.stdin.availableData,
                                        as: UTF8.self)
             } else {
                 let url = Sandbox.resolve(path)
@@ -63,9 +63,9 @@ struct ReleaseCreate: AsyncParsableCommand {
             method: .post,
             path: "projects/\(target.encodedPath)/releases",
             body: body)
-        print("Created release \(release.tagName)")
+        Stdio.print("Created release \(release.tagName)")
         if let url = release._links?.selfLink {
-            print(url.absoluteString)
+            Stdio.print(url.absoluteString)
         }
     }
 }

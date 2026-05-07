@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -22,7 +23,7 @@ struct VariableList: AsyncParsableCommand {
         let variables: [Variable] = try await client.get(
             "projects/\(target.encodedPath)/variables",
             query: [URLQueryItem(name: "per_page", value: "100")])
-        if variables.isEmpty { print("No variables."); return }
+        if variables.isEmpty { Stdio.print("No variables."); return }
         for v in variables {
             // `key  scope  protected/masked  value?` — value omitted by
             // default since GitLab returns the cleartext.
@@ -32,7 +33,7 @@ struct VariableList: AsyncParsableCommand {
             if v.masked == true { flags.append("masked") }
             if !flags.isEmpty { line += "\t[\(flags.joined(separator: ","))]" }
             if showValues { line += "\t\(v.value)" }
-            print(line)
+            Stdio.print(line)
         }
     }
 }

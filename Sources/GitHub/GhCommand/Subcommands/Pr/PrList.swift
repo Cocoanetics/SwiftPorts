@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -44,7 +45,7 @@ struct PrList: AsyncParsableCommand {
             let response: PullRequestListResponse = try await gql.query(
                 PullRequestQueries.list(), variables: variables)
             let prs = Array((response.repository?.pullRequests.nodes ?? []).prefix(limit))
-            print(try JSONFieldSelector.render(items: prs, fields: fields, fieldMap: PrFields.map))
+            Stdio.print(try JSONFieldSelector.render(items: prs, fields: fields, fieldMap: PrFields.map))
             return
         }
 
@@ -61,11 +62,11 @@ struct PrList: AsyncParsableCommand {
         let trimmed = Array(prs.prefix(limit))
 
         if trimmed.isEmpty {
-            print("No pull requests match.")
+            Stdio.print("No pull requests match.")
             return
         }
         for p in trimmed {
-            print("#\(p.number)\t\(p.state.rawValue)\t\(p.title)\t@\(p.user.login)\t\(p.head.ref)→\(p.base.ref)")
+            Stdio.print("#\(p.number)\t\(p.state.rawValue)\t\(p.title)\t@\(p.user.login)\t\(p.head.ref)→\(p.base.ref)")
         }
     }
 

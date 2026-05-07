@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -18,14 +19,14 @@ struct GistDelete: AsyncParsableCommand {
     func run() async throws {
         let client = try await CommandContext.apiClient()
         if !skipPrompt {
-            FileHandle.standardError.write(Data("Delete gist \(id)? [y/N] ".utf8))
+            Stdio.stderr.write(Data("Delete gist \(id)? [y/N] ".utf8))
             let line = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
             guard line == "y" || line == "yes" else {
-                print("Aborted.")
+                Stdio.print("Aborted.")
                 throw ExitCode(1)
             }
         }
         try await client.delete("gists/\(id)")
-        print("✓ Deleted gist \(id)")
+        Stdio.print("✓ Deleted gist \(id)")
     }
 }

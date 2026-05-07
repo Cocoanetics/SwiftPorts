@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -23,6 +24,6 @@ struct RepoRename: AsyncParsableCommand {
             method: .patch,
             path: "repos/\(target.slug)",
             body: RepoUpdateRequest(name: newName))
-        print("\(ANSI.green("✓")) Renamed \(target.slug) → \(updated.fullName)")
+        Stdio.print("\(ANSI.green("✓")) Renamed \(target.slug) → \(updated.fullName)")
     }
 }

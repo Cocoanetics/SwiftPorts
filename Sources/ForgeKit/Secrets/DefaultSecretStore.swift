@@ -1,4 +1,5 @@
 import Foundation
+import Sandbox
 
 /// Picks the right `SecretStore` for the current platform. Used as
 /// the default when no embedder-provided store is configured.
@@ -12,7 +13,7 @@ public enum DefaultSecretStore {
         #if canImport(Security)
         return KeychainSecretStore()
         #else
-        FileHandle.standardError.write(Data(
+        Stdio.stderr.write(Data(
             ("warning: no persistent secret store available on this " +
              "platform; tokens will not survive across runs.\n").utf8))
         return InMemorySecretStore()

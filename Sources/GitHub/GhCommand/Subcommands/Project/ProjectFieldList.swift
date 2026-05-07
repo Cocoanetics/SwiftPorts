@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -76,16 +77,16 @@ struct ProjectFieldListCommand: AsyncParsableCommand {
                 },
                 "totalCount": connection.totalCount,
             ]
-            print(try ProjectJSONOutput.render(payload))
+            Stdio.print(try ProjectJSONOutput.render(payload))
             return
         }
         if connection.nodes.isEmpty {
-            print("No fields."); return
+            Stdio.print("No fields."); return
         }
         for f in connection.nodes {
             let optionsCount = f.options?.count
             let extras = optionsCount.map { "\t(\($0) options)" } ?? ""
-            print("\(f.id)\t\(f.dataType)\t\(f.name)\(extras)")
+            Stdio.print("\(f.id)\t\(f.dataType)\t\(f.name)\(extras)")
         }
     }
 }

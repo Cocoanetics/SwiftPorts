@@ -42,7 +42,7 @@ struct Blame: AsyncParsableCommand {
             }
         }
 
-        let stdout = FileHandle.standardOutput
+        let stdout = Stdio.stdout
         for (idx, line) in lines.enumerated() {
             let lineNo = idx + 1
             guard let hunk = hunkByLine[lineNo] else { continue }

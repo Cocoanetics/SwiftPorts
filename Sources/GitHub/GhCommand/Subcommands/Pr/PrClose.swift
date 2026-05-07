@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -24,6 +25,6 @@ struct PrClose: AsyncParsableCommand {
             method: .patch,
             path: "repos/\(target.slug)/pulls/\(number)",
             body: ["state": "closed"])
-        print("\(ANSI.green("✓")) Closed #\(pr.number)")
+        Stdio.print("\(ANSI.green("✓")) Closed #\(pr.number)")
     }
 }

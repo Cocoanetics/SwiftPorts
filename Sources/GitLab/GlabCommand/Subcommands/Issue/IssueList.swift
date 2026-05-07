@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import ForgeKit
 import GitLab
@@ -90,11 +91,11 @@ struct IssueList: AsyncParsableCommand {
         let issues: [Issue] = try await client.get(path, query: query)
 
         if json {
-            print(try CodableOutput.prettyJSON(issues))
+            Stdio.print(try CodableOutput.prettyJSON(issues))
             return
         }
         if issues.isEmpty {
-            print("No issues match.")
+            Stdio.print("No issues match.")
             return
         }
         for issue in issues {
@@ -104,7 +105,7 @@ struct IssueList: AsyncParsableCommand {
             let labelChunk = issue.labels.isEmpty
                 ? ""
                 : "  " + ANSI.cyan("(\(issue.labels.joined(separator: ", ")))")
-            print("\(stateColor)\t\(issue.title)\(labelChunk)")
+            Stdio.print("\(stateColor)\t\(issue.title)\(labelChunk)")
         }
     }
 }

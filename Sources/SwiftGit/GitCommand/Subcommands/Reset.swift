@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -56,7 +57,7 @@ struct Reset: AsyncParsableCommand {
             // entry). Now that we have status, we can emit the right
             // thing instead of a hand-rolled stub.
             let report = try await client.status()
-            let stderr = FileHandle.standardError
+            let stderr = Stdio.stderr
             stderr.write(Data("Unstaged changes after reset:\n".utf8))
             for entry in report.unstagedEntries {
                 let letter = entry.workdirState.letter
@@ -79,7 +80,7 @@ struct Reset: AsyncParsableCommand {
 
         // Output: silent for soft + mixed, summary line for hard.
         if case let .wholeTree(_, shortSHA, subject, mode) = outcome, mode == .hard {
-            print("HEAD is now at \(shortSHA) \(subject)")
+            Stdio.print("HEAD is now at \(shortSHA) \(subject)")
         }
     }
 

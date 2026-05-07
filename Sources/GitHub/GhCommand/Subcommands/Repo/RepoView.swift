@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -30,18 +31,18 @@ struct RepoView: AsyncParsableCommand {
             guard let repo = response.repository else {
                 throw ValidationError("No repo \(target.slug).")
             }
-            print(try JSONFieldSelector.render(item: repo, fields: fields, fieldMap: RepoFields.map))
+            Stdio.print(try JSONFieldSelector.render(item: repo, fields: fields, fieldMap: RepoFields.map))
             return
         }
 
         let client = try await CommandContext.apiClient()
         let repo: Repository = try await client.get("repos/\(target.slug)")
 
-        print("\(repo.fullName)")
+        Stdio.print("\(repo.fullName)")
         if let desc = repo.description, !desc.isEmpty {
-            print(desc)
+            Stdio.print(desc)
         }
-        print("")
+        Stdio.print("")
         let stats = [
             "★ \(repo.stargazersCount)",
             "⑂ \(repo.forksCount)",
@@ -49,11 +50,11 @@ struct RepoView: AsyncParsableCommand {
             "language \(repo.language ?? "—")",
             "license \(repo.license?.spdxId ?? "—")",
         ].joined(separator: "  ")
-        print(stats)
-        print("default branch: \(repo.defaultBranch)")
-        print("html: \(repo.htmlUrl.absoluteString)")
+        Stdio.print(stats)
+        Stdio.print("default branch: \(repo.defaultBranch)")
+        Stdio.print("html: \(repo.htmlUrl.absoluteString)")
         if let topics = repo.topics, !topics.isEmpty {
-            print("topics: \(topics.joined(separator: ", "))")
+            Stdio.print("topics: \(topics.joined(separator: ", "))")
         }
     }
 }

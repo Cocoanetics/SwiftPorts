@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -23,7 +24,7 @@ struct IssueCommentCommand: AsyncParsableCommand {
         let target = try await RepositoryResolver.resolve(flag: repo)
         let resolvedBody: String
         if body == "-" {
-            let data = FileHandle.standardInput.readDataToEndOfFile()
+            let data = Stdio.stdin.readDataToEndOfFile()
             resolvedBody = String(data: data, encoding: .utf8) ?? ""
         } else {
             resolvedBody = body
@@ -37,7 +38,7 @@ struct IssueCommentCommand: AsyncParsableCommand {
             method: .post,
             path: "repos/\(target.slug)/issues/\(number)/comments",
             body: request)
-        print("✓ Commented on #\(number)")
-        print(comment.htmlUrl.absoluteString)
+        Stdio.print("✓ Commented on #\(number)")
+        Stdio.print(comment.htmlUrl.absoluteString)
     }
 }

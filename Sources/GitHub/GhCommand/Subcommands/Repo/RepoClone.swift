@@ -51,9 +51,9 @@ struct RepoClone: AsyncParsableCommand {
         let destDir = directory.map { Sandbox.resolve($0) }
 
         let git = CommandContext.gitClient()
-        print("Cloning \(repo.fullName) from \(url.absoluteString)…")
+        Stdio.print("Cloning \(repo.fullName) from \(url.absoluteString)…")
         try await git.clone(url: url, directory: destDir)
-        print("\(ANSI.green("✓")) Cloned \(repo.fullName)")
+        Stdio.print("\(ANSI.green("✓")) Cloned \(repo.fullName)")
     }
 
     private func cloneURL(for repo: Repository) throws -> URL {

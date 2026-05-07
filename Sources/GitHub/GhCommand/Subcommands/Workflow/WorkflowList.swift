@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -29,15 +30,15 @@ struct WorkflowList: AsyncParsableCommand {
         let trimmed = Array(envelope.workflows.prefix(limit))
         if let json {
             let fields = try JSONFieldSelector.parse(raw: json, fieldMap: WorkflowFields.list)
-            print(try JSONFieldSelector.render(items: trimmed, fields: fields, fieldMap: WorkflowFields.list))
+            Stdio.print(try JSONFieldSelector.render(items: trimmed, fields: fields, fieldMap: WorkflowFields.list))
             return
         }
         if trimmed.isEmpty {
-            print("No workflows in \(target.slug).")
+            Stdio.print("No workflows in \(target.slug).")
             return
         }
         for w in trimmed {
-            print("\(w.id)\t\(w.state.rawValue)\t\(w.name)\t\(w.path)")
+            Stdio.print("\(w.id)\t\(w.state.rawValue)\t\(w.name)\t\(w.path)")
         }
     }
 }

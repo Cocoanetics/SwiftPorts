@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -29,10 +30,10 @@ struct OrgList: AsyncParsableCommand {
         let orgs: [Org] = try await client.get(
             "user/orgs",
             query: [URLQueryItem(name: "per_page", value: String(min(limit, 100)))])
-        if orgs.isEmpty { print("Not a member of any organizations."); return }
+        if orgs.isEmpty { Stdio.print("Not a member of any organizations."); return }
         for o in orgs.prefix(limit) {
             let desc = o.description ?? ""
-            print("\(o.login)\t\(desc)")
+            Stdio.print("\(o.login)\t\(desc)")
         }
     }
 }

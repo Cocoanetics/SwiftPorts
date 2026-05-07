@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import ForgeKit
 import GitLab
@@ -16,7 +17,7 @@ struct AuthLogout: AsyncParsableCommand {
     func run() async throws {
         let host = hostname ?? Configuration.defaultHost
         try await CommandContext.resolver.remove(host: host)
-        print("\(ANSI.green("✓")) Removed token for \(host) from the keychain.")
-        print(ANSI.dim("(Env vars GITLAB_TOKEN / GITLAB_ACCESS_TOKEN / OAUTH_TOKEN, if set, still take precedence.)"))
+        Stdio.print("\(ANSI.green("✓")) Removed token for \(host) from the keychain.")
+        Stdio.print(ANSI.dim("(Env vars GITLAB_TOKEN / GITLAB_ACCESS_TOKEN / OAUTH_TOKEN, if set, still take precedence.)"))
     }
 }

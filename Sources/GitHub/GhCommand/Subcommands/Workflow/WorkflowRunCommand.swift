@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -52,7 +53,7 @@ struct WorkflowRunDispatch: AsyncParsableCommand {
             method: .post,
             path: "repos/\(target.slug)/actions/workflows/\(workflow)/dispatches",
             body: Body(ref: resolvedRef, inputs: inputs.isEmpty ? nil : inputs))
-        print("\(ANSI.green("✓")) Dispatched workflow \(workflow) on \(resolvedRef)")
+        Stdio.print("\(ANSI.green("✓")) Dispatched workflow \(workflow) on \(resolvedRef)")
     }
 }
 
@@ -70,7 +71,7 @@ struct WorkflowEnable: AsyncParsableCommand {
         _ = try await client.raw(
             method: .put,
             path: "repos/\(target.slug)/actions/workflows/\(workflow)/enable")
-        print("\(ANSI.green("✓")) Enabled \(workflow)")
+        Stdio.print("\(ANSI.green("✓")) Enabled \(workflow)")
     }
 }
 
@@ -88,6 +89,6 @@ struct WorkflowDisable: AsyncParsableCommand {
         _ = try await client.raw(
             method: .put,
             path: "repos/\(target.slug)/actions/workflows/\(workflow)/disable")
-        print("\(ANSI.green("✓")) Disabled \(workflow)")
+        Stdio.print("\(ANSI.green("✓")) Disabled \(workflow)")
     }
 }

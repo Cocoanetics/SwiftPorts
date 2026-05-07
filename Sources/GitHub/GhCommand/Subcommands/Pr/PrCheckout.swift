@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -40,18 +41,18 @@ struct PrCheckout: AsyncParsableCommand {
         let isCrossFork = pr.head.repo?.fullName != target.slug
         if isCrossFork, let headRepo = pr.head.repo {
             let url = URL(string: "\(headRepo.htmlUrl.absoluteString).git")!
-            print("Fetching \(pr.head.ref) from \(headRepo.fullName)…")
+            Stdio.print("Fetching \(pr.head.ref) from \(headRepo.fullName)…")
             try await git.fetch(
                 remote: url.absoluteString,
                 refspec: "\(pr.head.ref):\(localBranch)")
         } else {
-            print("Fetching pull/\(number)/head from origin…")
+            Stdio.print("Fetching pull/\(number)/head from origin…")
             try await git.fetch(
                 remote: "origin",
                 refspec: "pull/\(number)/head:\(localBranch)")
         }
 
         try await git.checkout(ref: localBranch)
-        print("\(ANSI.green("✓")) Checked out PR #\(number) on local branch \(localBranch)")
+        Stdio.print("\(ANSI.green("✓")) Checked out PR #\(number) on local branch \(localBranch)")
     }
 }

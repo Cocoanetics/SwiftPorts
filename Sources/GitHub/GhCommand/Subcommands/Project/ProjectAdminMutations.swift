@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -52,8 +53,8 @@ struct ProjectCopy: AsyncParsableCommand {
                 "includeDraftIssues": .bool(includeDrafts),
             ])
         let p = response.copyProjectV2.projectV2
-        print("\(ANSI.green("✓")) Copied → #\(p.number): \(p.title)")
-        print(p.url.absoluteString)
+        Stdio.print("\(ANSI.green("✓")) Copied → #\(p.number): \(p.title)")
+        Stdio.print(p.url.absoluteString)
     }
 }
 
@@ -80,7 +81,7 @@ struct ProjectMarkTemplate: AsyncParsableCommand {
             guard let s = response.unmarkProjectV2AsTemplate?.projectV2 else {
                 throw silentRejection("unmark template", number: number)
             }
-            print("\(ANSI.green("✓")) Unmarked #\(number) as template (template=\(s.template))")
+            Stdio.print("\(ANSI.green("✓")) Unmarked #\(number) as template (template=\(s.template))")
         } else {
             let response: MarkProjectAsTemplateResponse = try await gql.query(
                 ProjectMutations.markProjectAsTemplate,
@@ -88,7 +89,7 @@ struct ProjectMarkTemplate: AsyncParsableCommand {
             guard let s = response.markProjectV2AsTemplate?.projectV2 else {
                 throw silentRejection("mark as template", number: number)
             }
-            print("\(ANSI.green("✓")) Marked #\(number) as template (template=\(s.template))")
+            Stdio.print("\(ANSI.green("✓")) Marked #\(number) as template (template=\(s.template))")
         }
     }
 }
@@ -174,7 +175,7 @@ private func runLink(
             guard response.unlinkProjectV2FromRepository != nil else {
                 throw silentRejection("unlink from \(repo.slug)", number: number)
             }
-            print("\(ANSI.green("✓")) Unlinked #\(number) from \(repo.slug)")
+            Stdio.print("\(ANSI.green("✓")) Unlinked #\(number) from \(repo.slug)")
         } else {
             let response: LinkProjectToRepositoryResponse = try await gql.query(
                 ProjectMutations.linkProjectToRepository,
@@ -185,7 +186,7 @@ private func runLink(
             guard response.linkProjectV2ToRepository != nil else {
                 throw silentRejection("link to \(repo.slug)", number: number)
             }
-            print("\(ANSI.green("✓")) Linked #\(number) to \(repo.slug)")
+            Stdio.print("\(ANSI.green("✓")) Linked #\(number) to \(repo.slug)")
         }
     } else if let team, let teamOrg {
         let teamId = try await ProjectIDs.teamID(org: teamOrg, slug: team, gql: gql)
@@ -199,7 +200,7 @@ private func runLink(
             guard response.unlinkProjectV2FromTeam != nil else {
                 throw silentRejection("unlink from \(teamOrg)/\(team)", number: number)
             }
-            print("\(ANSI.green("✓")) Unlinked #\(number) from team \(teamOrg)/\(team)")
+            Stdio.print("\(ANSI.green("✓")) Unlinked #\(number) from team \(teamOrg)/\(team)")
         } else {
             let response: LinkProjectToTeamResponse = try await gql.query(
                 ProjectMutations.linkProjectToTeam,
@@ -210,7 +211,7 @@ private func runLink(
             guard response.linkProjectV2ToTeam != nil else {
                 throw silentRejection("link to \(teamOrg)/\(team)", number: number)
             }
-            print("\(ANSI.green("✓")) Linked #\(number) to team \(teamOrg)/\(team)")
+            Stdio.print("\(ANSI.green("✓")) Linked #\(number) to team \(teamOrg)/\(team)")
         }
     } else {
         throw ValidationError("Pass --repo OWNER/NAME or --team SLUG --team-org ORG.")

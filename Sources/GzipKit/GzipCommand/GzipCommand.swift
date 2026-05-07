@@ -191,7 +191,7 @@ enum GzipEngine {
             if stdout {
                 try await emitFileToStdout(url: url, mode: mode)
                 if verbose {
-                    FileHandle.standardError.write(
+                    Stdio.stderr.write(
                         Data("\(file) -> stdout\n".utf8))
                 }
             } else {
@@ -205,7 +205,7 @@ enum GzipEngine {
                         at: url, keepInput: keep, overwrite: force)
                 }
                 if verbose {
-                    FileHandle.standardError.write(
+                    Stdio.stderr.write(
                         Data("\(file) -> \(result.path)\n".utf8))
                 }
             }
@@ -213,13 +213,13 @@ enum GzipEngine {
     }
 
     private static func processStdin(mode: GzipMode) async throws {
-        let input = FileHandle.standardInput.readDataToEndOfFile()
+        let input = Stdio.stdin.readDataToEndOfFile()
         let output: Data
         switch mode {
         case .compress:   output = try await GzipKit.Gzip.compress(input)
         case .decompress: output = try await GzipKit.Gzip.decompress(input)
         }
-        FileHandle.standardOutput.write(output)
+        Stdio.stdout.write(output)
     }
 
     private static func emitFileToStdout(url: URL, mode: GzipMode) async throws {
@@ -230,6 +230,6 @@ enum GzipEngine {
         case .compress:   output = try await GzipKit.Gzip.compress(bytes)
         case .decompress: output = try await GzipKit.Gzip.decompress(bytes)
         }
-        FileHandle.standardOutput.write(output)
+        Stdio.stdout.write(output)
     }
 }

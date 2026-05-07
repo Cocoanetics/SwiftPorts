@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -30,7 +31,7 @@ struct MrNote: AsyncParsableCommand {
             method: .post,
             path: "projects/\(target.encodedPath)/merge_requests/\(iid)/notes",
             body: CreateNote(body: message))
-        print("Posted note \(note.id) on !\(iid).")
+        Stdio.print("Posted note \(note.id) on !\(iid).")
     }
 }
 
@@ -57,7 +58,7 @@ struct MrSubscribe: AsyncParsableCommand {
             method: .post,
             path: "projects/\(target.encodedPath)/merge_requests/\(iid)/subscribe",
             body: Empty())
-        print("Subscribed to !\(iid).")
+        Stdio.print("Subscribed to !\(iid).")
     }
 }
 
@@ -84,7 +85,7 @@ struct MrUnsubscribe: AsyncParsableCommand {
             method: .post,
             path: "projects/\(target.encodedPath)/merge_requests/\(iid)/unsubscribe",
             body: Empty())
-        print("Unsubscribed from !\(iid).")
+        Stdio.print("Unsubscribed from !\(iid).")
     }
 }
 
@@ -107,6 +108,6 @@ struct MrDelete: AsyncParsableCommand {
         let client = try await CommandContext.apiClient(host: target.host)
         try await client.delete(
             "projects/\(target.encodedPath)/merge_requests/\(iid)")
-        print("Deleted !\(iid).")
+        Stdio.print("Deleted !\(iid).")
     }
 }

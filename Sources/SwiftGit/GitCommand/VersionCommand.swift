@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import libgit2
 
 struct VersionCommand: ParsableCommand {
@@ -10,7 +11,7 @@ struct VersionCommand: ParsableCommand {
     func run() throws {
         var major: Int32 = 0, minor: Int32 = 0, patch: Int32 = 0
         git_libgit2_version(&major, &minor, &patch)
-        print("git (SwiftPorts) 0.1.0-dev")
-        print("libgit2 \(major).\(minor).\(patch)")
+        Stdio.print("git (SwiftPorts) 0.1.0-dev")
+        Stdio.print("libgit2 \(major).\(minor).\(patch)")
     }
 }

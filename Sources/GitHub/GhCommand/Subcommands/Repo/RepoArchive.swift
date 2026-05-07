@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -19,7 +20,7 @@ struct RepoArchive: AsyncParsableCommand {
     func run() async throws {
         let target = try await RepositoryResolver.resolve(flag: repo)
         if !skipPrompt {
-            FileHandle.standardError.write(Data("Archive \(target.slug)? [y/N] ".utf8))
+            Stdio.stderr.write(Data("Archive \(target.slug)? [y/N] ".utf8))
             let line = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
             guard line == "y" || line == "yes" else { throw ExitCode(1) }
         }
@@ -28,7 +29,7 @@ struct RepoArchive: AsyncParsableCommand {
             method: .patch,
             path: "repos/\(target.slug)",
             body: RepoUpdateRequest(archived: true))
-        print("\(ANSI.green("✓")) Archived \(updated.fullName)")
+        Stdio.print("\(ANSI.green("✓")) Archived \(updated.fullName)")
     }
 }
 
@@ -49,6 +50,6 @@ struct RepoUnarchive: AsyncParsableCommand {
             method: .patch,
             path: "repos/\(target.slug)",
             body: RepoUpdateRequest(archived: false))
-        print("\(ANSI.green("✓")) Unarchived \(updated.fullName)")
+        Stdio.print("\(ANSI.green("✓")) Unarchived \(updated.fullName)")
     }
 }

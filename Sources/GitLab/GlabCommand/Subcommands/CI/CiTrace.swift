@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import ForgeKit
 import GitLab
@@ -37,7 +38,7 @@ struct CiTrace: AsyncParsableCommand {
             branch: branch, gitClient: gitClient)
 
         let header = "==> #\(current.id)  \(current.name) (\(current.stage))  \(CiSupport.renderStatus(current.status))"
-        FileHandle.standardError.write(Data((header + "\n").utf8))
+        Stdio.stderr.write(Data((header + "\n").utf8))
 
         var offset = 0
         while true {
@@ -54,7 +55,7 @@ struct CiTrace: AsyncParsableCommand {
                     jobId: current.id, repo: target, client: client, fromOffset: offset)
                 let footer = "\n==> Job finished: \(CiSupport.renderStatus(current.status))" +
                     "  duration: \(CiSupport.formatDuration(current.duration))"
-                FileHandle.standardError.write(Data((footer + "\n").utf8))
+                Stdio.stderr.write(Data((footer + "\n").utf8))
                 if case .failed = current.status { throw ExitCode(1) }
                 return
             }
@@ -82,7 +83,7 @@ struct CiTrace: AsyncParsableCommand {
         let data = response.body
         guard data.count > fromOffset else { return 0 }
         let new = data.subdata(in: fromOffset..<data.count)
-        FileHandle.standardOutput.write(new)
+        Stdio.stdout.write(new)
         return new.count
     }
 }

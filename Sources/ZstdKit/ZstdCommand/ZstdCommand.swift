@@ -189,7 +189,7 @@ enum ZstdEngine {
             if stdout {
                 try await emitFileToStdout(url: url, mode: mode)
                 if verbose {
-                    FileHandle.standardError.write(
+                    Stdio.stderr.write(
                         Data("\(file) -> stdout\n".utf8))
                 }
             } else {
@@ -203,7 +203,7 @@ enum ZstdEngine {
                         at: url, keepInput: keep, overwrite: force)
                 }
                 if verbose {
-                    FileHandle.standardError.write(
+                    Stdio.stderr.write(
                         Data("\(file) -> \(result.path)\n".utf8))
                 }
             }
@@ -211,13 +211,13 @@ enum ZstdEngine {
     }
 
     private static func processStdin(mode: ZstdMode) async throws {
-        let input = FileHandle.standardInput.readDataToEndOfFile()
+        let input = Stdio.stdin.readDataToEndOfFile()
         let output: Data
         switch mode {
         case .compress:   output = try await ZstdKit.Zstd.compress(input)
         case .decompress: output = try await ZstdKit.Zstd.decompress(input)
         }
-        FileHandle.standardOutput.write(output)
+        Stdio.stdout.write(output)
     }
 
     private static func emitFileToStdout(url: URL, mode: ZstdMode) async throws {
@@ -228,7 +228,7 @@ enum ZstdEngine {
         case .compress:   output = try await ZstdKit.Zstd.compress(bytes)
         case .decompress: output = try await ZstdKit.Zstd.decompress(bytes)
         }
-        FileHandle.standardOutput.write(output)
+        Stdio.stdout.write(output)
     }
 }
 

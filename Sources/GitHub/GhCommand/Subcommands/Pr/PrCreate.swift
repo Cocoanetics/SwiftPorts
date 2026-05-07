@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -63,7 +64,7 @@ struct PrCreate: AsyncParsableCommand {
         if !noPush {
             let upstream = try await git.upstreamBranch(of: resolvedHead)
             if upstream == nil {
-                print("Pushing \(resolvedHead) to origin…")
+                Stdio.print("Pushing \(resolvedHead) to origin…")
                 try await git.push(
                     remote: "origin",
                     refspec: resolvedHead,
@@ -82,7 +83,7 @@ struct PrCreate: AsyncParsableCommand {
 
         let resolvedBody: String?
         if body == "-" {
-            let data = FileHandle.standardInput.readDataToEndOfFile()
+            let data = Stdio.stdin.readDataToEndOfFile()
             resolvedBody = String(data: data, encoding: .utf8)
         } else {
             resolvedBody = body
@@ -99,7 +100,7 @@ struct PrCreate: AsyncParsableCommand {
             method: .post,
             path: "repos/\(target.slug)/pulls",
             body: request)
-        print("\(ANSI.green("✓")) Opened PR #\(pr.number)")
-        print(pr.htmlUrl.absoluteString)
+        Stdio.print("\(ANSI.green("✓")) Opened PR #\(pr.number)")
+        Stdio.print(pr.htmlUrl.absoluteString)
     }
 }

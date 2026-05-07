@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import ForgeKit
 import GitLab
@@ -24,7 +25,7 @@ struct RepoDelete: AsyncParsableCommand {
         let target = try await CommandContext.resolveRepo(
             flag: repo, positional: positional)
         if !yes {
-            FileHandle.standardError.write(Data(
+            Stdio.stderr.write(Data(
                 "\(ANSI.red("⚠"))  About to delete \(ANSI.bold(target.fullPath)) on \(target.host ?? "default host"). This is irreversible.\nType the path again to confirm: ".utf8))
             guard let line = readLine(strippingNewline: true), line == target.fullPath else {
                 throw RepoDeleteError.confirmationMismatch
@@ -32,7 +33,7 @@ struct RepoDelete: AsyncParsableCommand {
         }
         let client = try await CommandContext.apiClient(host: target.host)
         try await client.delete("projects/\(target.encodedPath)")
-        print("\(ANSI.green("✓")) Deleted \(target.fullPath).")
+        Stdio.print("\(ANSI.green("✓")) Deleted \(target.fullPath).")
     }
 }
 

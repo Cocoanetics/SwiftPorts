@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -27,12 +28,12 @@ struct Status: AsyncParsableCommand {
         // subset (we don't implement the `=v2` variant).
         if short || porcelain {
             let out = report.shortFormat(branchHeader: branch)
-            FileHandle.standardOutput.write(Data(out.utf8))
+            Stdio.stdout.write(Data(out.utf8))
             return
         }
 
         // Verbose form.
         let out = report.verboseFormat()
-        FileHandle.standardOutput.write(Data(out.utf8))
+        Stdio.stdout.write(Data(out.utf8))
     }
 }

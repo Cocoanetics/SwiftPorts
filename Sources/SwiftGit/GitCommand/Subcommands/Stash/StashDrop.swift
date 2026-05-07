@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 
 struct StashDrop: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -21,6 +22,6 @@ struct StashDrop: AsyncParsableCommand {
                 "fatal: stash@{\(idx)} does not exist", exitCode: 128)
         }
         try await client.stashDrop(index: idx)
-        print("Dropped stash@{\(idx)} (\(target.sha))")
+        Stdio.print("Dropped stash@{\(idx)} (\(target.sha))")
     }
 }

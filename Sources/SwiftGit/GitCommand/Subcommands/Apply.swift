@@ -27,7 +27,7 @@ struct Apply: AsyncParsableCommand {
             try await Sandbox.authorize(url)
             data = try Data(contentsOf: url)
         } else {
-            data = FileHandle.standardInput.availableData
+            data = Stdio.stdin.availableData
         }
 
         let location: ApplyLocation = {

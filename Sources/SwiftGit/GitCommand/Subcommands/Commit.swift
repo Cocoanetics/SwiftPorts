@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import ForgeKit
 import SwiftGit
@@ -44,7 +45,7 @@ struct Commit: AsyncParsableCommand {
         let branchTag = details.branchName ?? "detached HEAD"
         let rootTag = details.isRoot ? " (root-commit)" : ""
         let subject = message.split(separator: "\n").first.map(String.init) ?? message
-        print("[\(branchTag)\(rootTag) \(details.shortSHA)] \(subject)")
+        Stdio.print("[\(branchTag)\(rootTag) \(details.shortSHA)] \(subject)")
 
         // " N file changed, X insertion(+), Y deletion(-)" with proper
         // singular/plural and the zero-clauses suppressed.
@@ -55,15 +56,15 @@ struct Commit: AsyncParsableCommand {
         if details.deletions > 0 {
             summary += ", \(details.deletions) deletion\(details.deletions == 1 ? "" : "s")(-)"
         }
-        print(summary)
+        Stdio.print(summary)
 
         // Per-file mode lines for additions and deletions, six-digit
         // octal mode just like real git.
         for file in details.addedFiles {
-            print(" create mode \(formatMode(file.mode)) \(file.path)")
+            Stdio.print(" create mode \(formatMode(file.mode)) \(file.path)")
         }
         for file in details.deletedFiles {
-            print(" delete mode \(formatMode(file.mode)) \(file.path)")
+            Stdio.print(" delete mode \(formatMode(file.mode)) \(file.path)")
         }
     }
 

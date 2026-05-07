@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -29,7 +30,7 @@ struct PrLock: AsyncParsableCommand {
             method: .put,
             path: "repos/\(target.slug)/issues/\(number)/lock",
             body: LockRequest(lockReason: reason))
-        print("\(ANSI.green("✓")) Locked PR #\(number)")
+        Stdio.print("\(ANSI.green("✓")) Locked PR #\(number)")
     }
 }
 
@@ -50,6 +51,6 @@ struct PrUnlock: AsyncParsableCommand {
         let target = try await RepositoryResolver.resolve(flag: repo)
         let client = try await CommandContext.apiClient()
         try await client.delete("repos/\(target.slug)/issues/\(number)/lock")
-        print("\(ANSI.green("✓")) Unlocked PR #\(number)")
+        Stdio.print("\(ANSI.green("✓")) Unlocked PR #\(number)")
     }
 }

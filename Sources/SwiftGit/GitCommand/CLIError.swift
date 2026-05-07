@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 
 /// Exit non-zero with a custom stderr message — mirrors real git's
@@ -26,7 +27,7 @@ extension CLIError {
     /// `run()` via a top-level catch in `Entry.swift` so the exit-code
     /// path is uniform.
     public func emitAndExit() -> Never {
-        let stderr = FileHandle.standardError
+        let stderr = Stdio.stderr
         for line in lines {
             if let data = (line + "\n").data(using: .utf8) {
                 try? stderr.write(contentsOf: data)

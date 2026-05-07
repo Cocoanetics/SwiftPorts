@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -26,24 +27,24 @@ struct ReleaseView: AsyncParsableCommand {
         let release: Release = try await client.get(
             "projects/\(target.encodedPath)/releases/\(encoded)")
         if json {
-            print(try CodableOutput.prettyJSON(release))
+            Stdio.print(try CodableOutput.prettyJSON(release))
             return
         }
 
-        print(release.name ?? release.tagName)
-        print("tag: \(release.tagName)")
+        Stdio.print(release.name ?? release.tagName)
+        Stdio.print("tag: \(release.tagName)")
         if let when = release.releasedAt {
-            print("released: \(ISO8601DateFormatter().string(from: when))")
+            Stdio.print("released: \(ISO8601DateFormatter().string(from: when))")
         }
         if let author = release.author {
-            print("author: @\(author.username)")
+            Stdio.print("author: @\(author.username)")
         }
         if let body = release.description, !body.isEmpty {
-            print("\n\(body)")
+            Stdio.print("\n\(body)")
         }
         if let links = release.assets?.links, !links.isEmpty {
-            print("\nassets:")
-            for link in links { print("  \(link.name): \(link.url.absoluteString)") }
+            Stdio.print("\nassets:")
+            for link in links { Stdio.print("  \(link.name): \(link.url.absoluteString)") }
         }
     }
 }

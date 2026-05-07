@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -20,10 +21,10 @@ struct ConfigSet: AsyncParsableCommand {
         var file = try store.read()
         if let value, !value.isEmpty {
             file[key] = value
-            print("✓ Set \(key) = \(value)")
+            Stdio.print("✓ Set \(key) = \(value)")
         } else {
             file[key] = nil
-            print("✓ Unset \(key)")
+            Stdio.print("✓ Unset \(key)")
         }
         try store.write(file)
     }

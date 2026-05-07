@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -92,7 +93,7 @@ struct Log: AsyncParsableCommand {
             starts: starts, excludes: excludes,
             maxCount: limit, paths: paths))
 
-        let stdout = FileHandle.standardOutput
+        let stdout = Stdio.stdout
         var first = true
         for entry in entries {
             if useOneline {

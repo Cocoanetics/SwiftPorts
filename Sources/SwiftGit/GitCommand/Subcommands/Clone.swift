@@ -24,7 +24,7 @@ struct Clone: AsyncParsableCommand {
         // Real git emits this header to stderr before the network work
         // starts; we follow the same convention so callers piping the
         // CLI to a log can grep it consistently.
-        let stderr = FileHandle.standardError
+        let stderr = Stdio.stderr
         stderr.write(Data("Cloning into '\(displayName)'...\n".utf8))
 
         try await CommandContext.gitClient().clone(url: parsed, directory: dest)

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 
 struct StashShow: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -28,6 +29,6 @@ struct StashShow: AsyncParsableCommand {
         if stats.deletions > 0 {
             summary += ", \(stats.deletions) deletion\(stats.deletions == 1 ? "" : "s")(-)"
         }
-        print(summary)
+        Stdio.print(summary)
     }
 }

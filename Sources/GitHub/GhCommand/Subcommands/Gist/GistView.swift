@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -23,20 +24,20 @@ struct GistView: AsyncParsableCommand {
             guard let file = gist.files[filename] else {
                 throw ValidationError("Gist has no file '\(filename)'.")
             }
-            if let content = file.content { print(content) }
+            if let content = file.content { Stdio.print(content) }
             return
         }
-        print("\(gist.id)  \(gist.description ?? "")")
+        Stdio.print("\(gist.id)  \(gist.description ?? "")")
         if let owner = gist.owner ?? gist.user {
-            print("author: @\(owner.login)")
+            Stdio.print("author: @\(owner.login)")
         }
-        print("html: \(gist.htmlUrl.absoluteString)")
+        Stdio.print("html: \(gist.htmlUrl.absoluteString)")
         for (name, file) in gist.files.sorted(by: { $0.key < $1.key }) {
-            print("\n# \(name) (\(file.language ?? file.type))")
+            Stdio.print("\n# \(name) (\(file.language ?? file.type))")
             if let content = file.content {
-                print(content)
+                Stdio.print(content)
             } else {
-                print("[truncated, fetch raw at \(file.rawUrl.absoluteString)]")
+                Stdio.print("[truncated, fetch raw at \(file.rawUrl.absoluteString)]")
             }
         }
     }

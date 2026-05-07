@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -20,12 +21,12 @@ struct SshKeyList: AsyncParsableCommand {
     func run() async throws {
         let client = try await CommandContext.apiClient()
         let keys: [SSHKey] = try await client.get("user/keys")
-        if keys.isEmpty { print("No SSH keys."); return }
+        if keys.isEmpty { Stdio.print("No SSH keys."); return }
         for k in keys {
             let when = k.createdAt.map(ISO8601DateFormatter().string(from:)) ?? "?"
             // Show the key fingerprint-ish prefix; full key bodies are noisy.
             let preview = k.key.prefix(40)
-            print("\(k.id)\t\(k.title ?? "")\t\(when)\t\(preview)…")
+            Stdio.print("\(k.id)\t\(k.title ?? "")\t\(when)\t\(preview)…")
         }
     }
 }
@@ -46,7 +47,7 @@ struct SshKeyAdd: AsyncParsableCommand {
     func run() async throws {
         let key: String
         if path == "-" {
-            let data = FileHandle.standardInput.readDataToEndOfFile()
+            let data = Stdio.stdin.readDataToEndOfFile()
             key = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         } else {
             key = try String(contentsOfFile: path, encoding: .utf8)
@@ -59,7 +60,7 @@ struct SshKeyAdd: AsyncParsableCommand {
             method: .post,
             path: "user/keys",
             body: Body(title: title, key: key))
-        print("\(ANSI.green("✓")) Added SSH key #\(added.id)")
+        Stdio.print("\(ANSI.green("✓")) Added SSH key #\(added.id)")
     }
 }
 
@@ -77,12 +78,12 @@ struct SshKeyDelete: AsyncParsableCommand {
 
     func run() async throws {
         if !skipPrompt {
-            FileHandle.standardError.write(Data("Delete SSH key #\(id)? [y/N] ".utf8))
+            Stdio.stderr.write(Data("Delete SSH key #\(id)? [y/N] ".utf8))
             let line = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
             guard line == "y" || line == "yes" else { throw ExitCode(1) }
         }
         let client = try await CommandContext.apiClient()
         try await client.delete("user/keys/\(id)")
-        print("\(ANSI.green("✓")) Deleted SSH key #\(id)")
+        Stdio.print("\(ANSI.green("✓")) Deleted SSH key #\(id)")
     }
 }

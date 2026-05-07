@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -48,10 +49,10 @@ struct VariableList: AsyncParsableCommand {
         let envelope: ActionsVariableList = try await client.get(
             variablesPath(repo: target, scope: scope))
         if envelope.variables.isEmpty {
-            print("No \(scope) variables in \(target.slug)."); return
+            Stdio.print("No \(scope) variables in \(target.slug)."); return
         }
         for v in envelope.variables {
-            print("\(v.name)\t\(v.value)")
+            Stdio.print("\(v.name)\t\(v.value)")
         }
     }
 }
@@ -70,7 +71,7 @@ struct VariableGet: AsyncParsableCommand {
         let client = try await CommandContext.apiClient()
         let v: ActionsVariable = try await client.get(
             "\(variablesPath(repo: target, scope: scope))/\(name)")
-        print(v.value)
+        Stdio.print(v.value)
     }
 }
 
@@ -90,7 +91,7 @@ struct VariableSet: AsyncParsableCommand {
         let target = try await RepositoryResolver.resolve(flag: repo)
         let actualValue: String
         if value == "-" {
-            let data = FileHandle.standardInput.readDataToEndOfFile()
+            let data = Stdio.stdin.readDataToEndOfFile()
             actualValue = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         } else {
             actualValue = value
@@ -105,14 +106,14 @@ struct VariableSet: AsyncParsableCommand {
                 method: .post,
                 path: basePath,
                 body: CreateBody(name: name, value: actualValue))
-            print("\(ANSI.green("✓")) Created variable \(name)")
+            Stdio.print("\(ANSI.green("✓")) Created variable \(name)")
         } catch APIError.http(_, _, _) {
             // Update existing
             try await client.send(
                 method: .patch,
                 path: "\(basePath)/\(name)",
                 body: PatchBody(name: nil, value: actualValue))
-            print("\(ANSI.green("✓")) Updated variable \(name)")
+            Stdio.print("\(ANSI.green("✓")) Updated variable \(name)")
         }
     }
 }
@@ -131,6 +132,6 @@ struct VariableDelete: AsyncParsableCommand {
         let client = try await CommandContext.apiClient()
         try await client.delete(
             "\(variablesPath(repo: target, scope: scope))/\(name)")
-        print("\(ANSI.green("✓")) Deleted variable \(name)")
+        Stdio.print("\(ANSI.green("✓")) Deleted variable \(name)")
     }
 }

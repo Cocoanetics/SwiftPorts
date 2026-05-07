@@ -1,4 +1,5 @@
 import Foundation
+import Sandbox
 import ZipKit
 
 /// Thin SwiftGH-side facade over `ZipKit.Archive` for the two ZIP
@@ -15,7 +16,7 @@ public enum ZipExtractor {
     public static func printConcatenatedTextEntries(zipData: Data) async throws {
         try await Archive.streamEntries(
             from: zipData,
-            to: FileHandle.standardOutput,
+            to: Stdio.stdout,
             printHeaders: true)
     }
 

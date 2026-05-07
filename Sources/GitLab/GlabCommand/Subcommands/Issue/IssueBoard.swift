@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import ForgeKit
 import GitLab
@@ -59,11 +60,11 @@ struct IssueBoardList: AsyncParsableCommand {
             ])
 
         if json {
-            print(try CodableOutput.prettyJSON(boards))
+            Stdio.print(try CodableOutput.prettyJSON(boards))
             return
         }
         if boards.isEmpty {
-            print("No boards on this project. Create one with `glab issue board create`.")
+            Stdio.print("No boards on this project. Create one with `glab issue board create`.")
             return
         }
         for b in boards {
@@ -71,7 +72,7 @@ struct IssueBoardList: AsyncParsableCommand {
             let columnsBit = listCount == 0
                 ? ANSI.dim("(default columns only)")
                 : ANSI.dim("(\(listCount) extra column\(listCount == 1 ? "" : "s"))")
-            print("#\(b.id)\t\(ANSI.bold(b.name))  \(columnsBit)")
+            Stdio.print("#\(b.id)\t\(ANSI.bold(b.name))  \(columnsBit)")
         }
     }
 }
@@ -112,7 +113,7 @@ struct IssueBoardView: AsyncParsableCommand {
                 url = baseURL
             }
             try await Browser.open(url)
-            print("Opening \(url.absoluteString) in your browser.")
+            Stdio.print("Opening \(url.absoluteString) in your browser.")
             return
         }
 
@@ -121,32 +122,32 @@ struct IssueBoardView: AsyncParsableCommand {
             "projects/\(target.encodedPath)/boards/\(boardId!)")
 
         if json {
-            print(try CodableOutput.prettyJSON(board))
+            Stdio.print(try CodableOutput.prettyJSON(board))
             return
         }
 
-        print("\(ANSI.bold("#\(board.id)"))  \(ANSI.bold(board.name))")
-        if let m = board.milestone { print("milestone: \(m.title)") }
-        if let a = board.assignee { print("assignee scope: @\(a.username)") }
+        Stdio.print("\(ANSI.bold("#\(board.id)"))  \(ANSI.bold(board.name))")
+        if let m = board.milestone { Stdio.print("milestone: \(m.title)") }
+        if let a = board.assignee { Stdio.print("assignee scope: @\(a.username)") }
         if let labels = board.labels, !labels.isEmpty {
-            print("label scope: \(labels.map(\.name).joined(separator: ", "))")
+            Stdio.print("label scope: \(labels.map(\.name).joined(separator: ", "))")
         }
-        if let weight = board.weight { print("weight scope: \(weight)") }
-        if let hb = board.hideBacklogList, hb { print("backlog list: \(ANSI.dim("hidden"))") }
-        if let hc = board.hideClosedList, hc { print("closed list: \(ANSI.dim("hidden"))") }
+        if let weight = board.weight { Stdio.print("weight scope: \(weight)") }
+        if let hb = board.hideBacklogList, hb { Stdio.print("backlog list: \(ANSI.dim("hidden"))") }
+        if let hc = board.hideClosedList, hc { Stdio.print("closed list: \(ANSI.dim("hidden"))") }
         if let lists = board.lists, !lists.isEmpty {
-            print("\nColumns (between Open and Closed):")
+            Stdio.print("\nColumns (between Open and Closed):")
             for list in lists {
                 let labelName = list.label?.name ?? "—"
                 let cap = list.maxIssueCount.map { ", max \($0) issues" } ?? ""
-                print("  \(labelName)\(ANSI.dim(" (#\(list.id), pos \(list.position ?? 0)\(cap))"))")
+                Stdio.print("  \(labelName)\(ANSI.dim(" (#\(list.id), pos \(list.position ?? 0)\(cap))"))")
             }
         } else {
-            print("Columns: \(ANSI.dim("default Open / Closed only"))")
+            Stdio.print("Columns: \(ANSI.dim("default Open / Closed only"))")
         }
 
         let url = URL(string: "https://\(host)/\(target.fullPath)/-/boards/\(board.id)")!
-        print("\nurl: \(url.absoluteString)")
+        Stdio.print("\nurl: \(url.absoluteString)")
     }
 }
 
@@ -189,10 +190,10 @@ struct IssueBoardCreate: AsyncParsableCommand {
             path: "projects/\(target.encodedPath)/boards",
             body: CreateRequest(name: chosen))
         if json {
-            print(try CodableOutput.prettyJSON(board))
+            Stdio.print(try CodableOutput.prettyJSON(board))
             return
         }
-        print("\(ANSI.green("✓")) Created board #\(board.id): \(ANSI.bold(board.name))")
+        Stdio.print("\(ANSI.green("✓")) Created board #\(board.id): \(ANSI.bold(board.name))")
     }
 }
 
@@ -236,7 +237,7 @@ struct IssueBoardDelete: AsyncParsableCommand {
         if !yes {
             let board: Board = try await client.get(
                 "projects/\(target.encodedPath)/boards/\(boardId)")
-            FileHandle.standardError.write(Data(
+            Stdio.stderr.write(Data(
                 "\(ANSI.red("⚠"))  About to delete board #\(boardId) \"\(board.name)\" on \(target.fullPath). This is irreversible.\nType the board name to confirm: ".utf8))
             guard let line = readLine(strippingNewline: true), line == board.name else {
                 throw IssueBoardDeleteError.confirmationMismatch
@@ -244,7 +245,7 @@ struct IssueBoardDelete: AsyncParsableCommand {
         }
         try await client.delete(
             "projects/\(target.encodedPath)/boards/\(boardId)")
-        print("\(ANSI.green("✓")) Deleted board #\(boardId).")
+        Stdio.print("\(ANSI.green("✓")) Deleted board #\(boardId).")
     }
 }
 

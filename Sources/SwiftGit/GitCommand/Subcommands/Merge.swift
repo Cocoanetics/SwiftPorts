@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -58,22 +59,22 @@ struct Merge: AsyncParsableCommand {
     static func printOutcome(_ outcome: MergeOutcome) throws {
         switch outcome {
         case .alreadyUpToDate:
-            print("Already up to date.")
+            Stdio.print("Already up to date.")
 
         case .fastForward(let oldSHA, let newSHA, let summary, let added, let deleted):
-            print("Updating \(String(oldSHA.prefix(7)))..\(String(newSHA.prefix(7)))")
-            print("Fast-forward")
-            print(summary)
-            for line in added { print(line) }
-            for line in deleted { print(line) }
+            Stdio.print("Updating \(String(oldSHA.prefix(7)))..\(String(newSHA.prefix(7)))")
+            Stdio.print("Fast-forward")
+            Stdio.print(summary)
+            for line in added { Stdio.print(line) }
+            for line in deleted { Stdio.print(line) }
 
         case .mergeCommit(_, let summary, let added, let deleted):
             // Modern git (≥ 2.34) defaults to the 'ort' strategy. We
             // print the same string so output matches what users see today.
-            print("Merge made by the 'ort' strategy.")
-            print(summary)
-            for line in added { print(line) }
-            for line in deleted { print(line) }
+            Stdio.print("Merge made by the 'ort' strategy.")
+            Stdio.print(summary)
+            for line in added { Stdio.print(line) }
+            for line in deleted { Stdio.print(line) }
 
         case .conflicts(let paths):
             // All three line groups go to stderr — that's where real git

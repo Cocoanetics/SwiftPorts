@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -35,7 +36,7 @@ struct ProjectCreate: AsyncParsableCommand {
                 "title": .string(title),
             ])
         let p = response.createProjectV2.projectV2
-        print("\(ANSI.green("✓")) Created project #\(p.number): \(p.title)")
-        print(p.url.absoluteString)
+        Stdio.print("\(ANSI.green("✓")) Created project #\(p.number): \(p.title)")
+        Stdio.print(p.url.absoluteString)
     }
 }

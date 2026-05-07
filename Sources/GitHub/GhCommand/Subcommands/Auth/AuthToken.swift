@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -20,9 +21,9 @@ struct AuthToken: AsyncParsableCommand {
     func run() async throws {
         let config = try await CommandContext.resolveConfig(host: hostname)
         guard let token = config.token else {
-            FileHandle.standardError.write(Data("no token configured\n".utf8))
+            Stdio.stderr.write(Data("no token configured\n".utf8))
             throw ExitCode(1)
         }
-        print(token)
+        Stdio.print(token)
     }
 }

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -27,22 +28,22 @@ struct ReleaseDelete: AsyncParsableCommand {
         let client = try await CommandContext.apiClient()
 
         if !skipPrompt {
-            FileHandle.standardError.write(Data(
+            Stdio.stderr.write(Data(
                 "Delete release \(tag) in \(target.slug)? [y/N] ".utf8))
             let line = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
             guard line == "y" || line == "yes" else {
-                print("Aborted.")
+                Stdio.print("Aborted.")
                 throw ExitCode(1)
             }
         }
 
         let release = try await findRelease(slug: target.slug, tag: tag, client: client)
         try await client.delete("repos/\(target.slug)/releases/\(release.id)")
-        print("✓ Deleted release \(tag)")
+        Stdio.print("✓ Deleted release \(tag)")
 
         if cleanupTag {
             try await client.delete("repos/\(target.slug)/git/refs/tags/\(tag)")
-            print("✓ Deleted git tag \(tag)")
+            Stdio.print("✓ Deleted git tag \(tag)")
         }
     }
 

@@ -32,6 +32,6 @@ struct GitInit: AsyncParsableCommand {
         // Real git prints the absolute .git directory path. We mirror
         // the style: "Initialized empty Git repository in /path/.git/".
         let suffix = bare ? "" : "/.git/"
-        print("Initialized empty Git repository in \(dest.path)\(suffix)")
+        Stdio.print("Initialized empty Git repository in \(dest.path)\(suffix)")
     }
 }

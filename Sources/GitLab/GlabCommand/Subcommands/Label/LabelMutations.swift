@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -37,7 +38,7 @@ struct LabelCreate: AsyncParsableCommand {
             method: .post,
             path: "projects/\(target.encodedPath)/labels",
             body: Body(name: name, color: normalized, description: labelDescription))
-        print("Created label \(label.name)")
+        Stdio.print("Created label \(label.name)")
     }
 }
 
@@ -61,7 +62,7 @@ struct LabelDelete: AsyncParsableCommand {
     func run() async throws {
         let target = try await CommandContext.resolveRepo(flag: repo)
         if !skipPrompt {
-            FileHandle.standardError.write(
+            Stdio.stderr.write(
                 Data("Delete label '\(name)' in \(target.fullPath)? [y/N] ".utf8))
             let line = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
             guard line == "y" || line == "yes" else { throw ExitCode(1) }
@@ -72,6 +73,6 @@ struct LabelDelete: AsyncParsableCommand {
         _ = try await client.raw(
             method: .delete,
             path: "projects/\(target.encodedPath)/labels/\(encoded)")
-        print("Deleted label \(name)")
+        Stdio.print("Deleted label \(name)")
     }
 }

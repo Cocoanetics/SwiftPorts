@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -23,6 +24,6 @@ struct Rm: AsyncParsableCommand {
         try await CommandContext.gitClient().remove(
             paths: paths, keepWorktree: cached, force: force)
         // Match real-git's per-file `rm '<path>'` confirmation lines.
-        for p in paths { print("rm '\(p)'") }
+        for p in paths { Stdio.print("rm '\(p)'") }
     }
 }

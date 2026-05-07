@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -49,14 +50,14 @@ struct IssueCreate: AsyncParsableCommand {
             path: "repos/\(target.slug)/issues",
             body: request)
 
-        print("Created issue #\(issue.number): \(issue.title)")
-        print(issue.htmlUrl.absoluteString)
+        Stdio.print("Created issue #\(issue.number): \(issue.title)")
+        Stdio.print(issue.htmlUrl.absoluteString)
     }
 
     private func resolveBody() throws -> String? {
         guard let body else { return nil }
         if body == "-" {
-            let data = FileHandle.standardInput.readDataToEndOfFile()
+            let data = Stdio.stdin.readDataToEndOfFile()
             return String(data: data, encoding: .utf8)
         }
         return body

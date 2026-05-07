@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -27,6 +28,6 @@ struct IssueClose: AsyncParsableCommand {
             method: .patch,
             path: "repos/\(target.slug)/issues/\(number)",
             body: request)
-        print("✓ Closed #\(issue.number)")
+        Stdio.print("✓ Closed #\(issue.number)")
     }
 }

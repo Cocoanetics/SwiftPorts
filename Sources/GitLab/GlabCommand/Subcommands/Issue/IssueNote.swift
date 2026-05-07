@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -36,6 +37,6 @@ struct IssueNote: AsyncParsableCommand {
         let path = "projects/\(target.encodedPath)/issues/\(parsed.iid)/notes"
         let note: Note = try await client.send(
             method: .post, path: path, body: CreateNote(body: message))
-        print("Posted note \(note.id) on #\(parsed.iid).")
+        Stdio.print("Posted note \(note.id) on #\(parsed.iid).")
     }
 }

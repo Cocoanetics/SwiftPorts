@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import ForgeKit
 import GitLab
@@ -37,7 +38,7 @@ struct CiRetry: AsyncParsableCommand {
             method: .post,
             path: "projects/\(target.encodedPath)/pipelines/\(id)/retry",
             body: Empty())
-        print("Retried #\(pipeline.id): \(CiSupport.renderStatus(pipeline.status))")
-        print(pipeline.webUrl.absoluteString)
+        Stdio.print("Retried #\(pipeline.id): \(CiSupport.renderStatus(pipeline.status))")
+        Stdio.print(pipeline.webUrl.absoluteString)
     }
 }

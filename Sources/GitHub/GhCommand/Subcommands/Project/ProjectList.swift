@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -60,19 +61,19 @@ struct ProjectList: AsyncParsableCommand {
                 "projects": trimmed.map { ProjectJSONOutput.project($0) },
                 "totalCount": connection.totalCount ?? trimmed.count,
             ]
-            print(try ProjectJSONOutput.render(payload))
+            Stdio.print(try ProjectJSONOutput.render(payload))
             return
         }
         if trimmed.isEmpty {
-            print("No projects.")
+            Stdio.print("No projects.")
             return
         }
-        print("Showing \(trimmed.count) of \(connection.totalCount ?? trimmed.count) projects.")
+        Stdio.print("Showing \(trimmed.count) of \(connection.totalCount ?? trimmed.count) projects.")
         for p in trimmed {
             let visibility = p.public ? "public" : "private"
             let state = p.closed ? "closed" : "open"
             let title = p.title.isEmpty ? "(no title)" : p.title
-            print("#\(p.number)\t\(state)\t\(visibility)\t\(title)\t\(p.url.absoluteString)")
+            Stdio.print("#\(p.number)\t\(state)\t\(visibility)\t\(title)\t\(p.url.absoluteString)")
         }
     }
 }

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -36,6 +37,6 @@ struct TagCreate: AsyncParsableCommand {
             method: .post,
             path: "projects/\(target.encodedPath)/repository/tags",
             body: body)
-        print("Created tag \(tag.name)")
+        Stdio.print("Created tag \(tag.name)")
     }
 }

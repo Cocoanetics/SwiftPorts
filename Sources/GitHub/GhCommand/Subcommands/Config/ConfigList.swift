@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 
@@ -12,12 +13,12 @@ struct ConfigList: AsyncParsableCommand {
         let store = ConfigFileStore()
         let file = try store.read()
         if file.values.isEmpty {
-            print("(no config set; \(store.path.path))")
+            Stdio.print("(no config set; \(store.path.path))")
             return
         }
         for key in file.values.keys.sorted() {
             if let value = file[key] {
-                print("\(key)=\(value)")
+                Stdio.print("\(key)=\(value)")
             }
         }
     }

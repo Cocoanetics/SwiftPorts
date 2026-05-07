@@ -34,7 +34,7 @@ struct RevParse: AsyncParsableCommand {
 
     func run() async throws {
         let client = CommandContext.gitClient()
-        let stdout = FileHandle.standardOutput
+        let stdout = Stdio.stdout
 
         if isInsideWorkTree {
             let inside = (try? await client.isInsideWorkTree()) ?? false

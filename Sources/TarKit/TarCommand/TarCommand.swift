@@ -119,7 +119,7 @@ public struct TarCommand: AsyncParsableCommand {
             at: url, paths: inputs, options: opts)
         if verbose {
             for e in written {
-                FileHandle.standardError.write(
+                Stdio.stderr.write(
                     Data("a \(e.path)\n".utf8))
             }
         }
@@ -141,7 +141,7 @@ public struct TarCommand: AsyncParsableCommand {
             from: archiveURL, options: opts)
         if verbose {
             for e in extracted {
-                FileHandle.standardError.write(
+                Stdio.stderr.write(
                     Data("x \(e.path)\n".utf8))
             }
         }
@@ -164,9 +164,9 @@ public struct TarCommand: AsyncParsableCommand {
                 let dateStr = e.modificationDate.map {
                     Self.dateFormatter.string(from: $0)
                 } ?? "-"
-                print("\(kindChar)\(modeStr) \(sizeStr) \(dateStr) \(e.path)")
+                Stdio.print("\(kindChar)\(modeStr) \(sizeStr) \(dateStr) \(e.path)")
             } else {
-                print(e.path)
+                Stdio.print(e.path)
             }
         }
     }

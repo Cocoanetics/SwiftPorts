@@ -1,4 +1,5 @@
 import Foundation
+import Sandbox
 import GitHub
 
 /// Output sinks for subcommand printing. Tiny abstraction so tests
@@ -11,10 +12,10 @@ public protocol Printer: Sendable {
 public struct StandardPrinter: Printer {
     public init() {}
     public func print(_ string: String) {
-        FileHandle.standardOutput.write(Data((string + "\n").utf8))
+        Stdio.stdout.write(Data((string + "\n").utf8))
     }
     public func error(_ string: String) {
-        FileHandle.standardError.write(Data((string + "\n").utf8))
+        Stdio.stderr.write(Data((string + "\n").utf8))
     }
 }
 

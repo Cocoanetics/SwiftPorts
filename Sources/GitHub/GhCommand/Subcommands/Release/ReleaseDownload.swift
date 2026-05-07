@@ -79,7 +79,7 @@ struct ReleaseDownload: AsyncParsableCommand {
         let session = URLSession(configuration: .default)
         for asset in matching {
             let dest = destDir.appendingPathComponent(asset.name)
-            print("→ \(asset.name) (\(ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file)))")
+            Stdio.print("→ \(asset.name) (\(ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file)))")
             try await Sandbox.authorize(asset.browserDownloadUrl)
             try await Sandbox.authorize(dest)
             let (data, _) = try await session.data(from: asset.browserDownloadUrl)
@@ -93,7 +93,7 @@ struct ReleaseDownload: AsyncParsableCommand {
                     at: extractDir, withIntermediateDirectories: true)
                 try await ArchiveFormatDetector.extract(
                     archive: dest, format: format, into: extractDir)
-                print("  ↳ extracted into \(extractDir.lastPathComponent)/")
+                Stdio.print("  ↳ extracted into \(extractDir.lastPathComponent)/")
                 if noKeepArchive {
                     try? FileManager.default.removeItem(at: dest)
                 }

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -25,6 +26,6 @@ struct Describe: AsyncParsableCommand {
         let result = try await client.describe(
             committish: committish, tags: tags,
             abbrev: abbrev, dirty: dirty)
-        print(result)
+        Stdio.print(result)
     }
 }

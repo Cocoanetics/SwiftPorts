@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import HTTPTypes
 import GitHub
@@ -100,9 +101,9 @@ struct ApiCommand: AsyncParsableCommand {
         )
 
         if includeHeaders {
-            print("HTTP \(response.status)")
-            if let ct = response.contentType { print("Content-Type: \(ct)") }
-            print("")
+            Stdio.print("HTTP \(response.status)")
+            if let ct = response.contentType { Stdio.print("Content-Type: \(ct)") }
+            Stdio.print("")
         }
 
         let isJSON = response.contentType?.contains("json") ?? false
@@ -110,7 +111,7 @@ struct ApiCommand: AsyncParsableCommand {
         if let filter = jqFilter, isJSON {
             do {
                 let lines = try Jq.evalString(filter: filter, on: response.body)
-                for line in lines { print(line) }
+                for line in lines { Stdio.print(line) }
             } catch let e as JqError {
                 throw ValidationError("jq: \(e.message)")
             }
@@ -118,9 +119,9 @@ struct ApiCommand: AsyncParsableCommand {
         }
 
         if isJSON {
-            print(JSONPretty.string(from: response.body))
+            Stdio.print(JSONPretty.string(from: response.body))
         } else {
-            print(String(data: response.body, encoding: .utf8) ?? "")
+            Stdio.print(String(data: response.body, encoding: .utf8) ?? "")
         }
     }
 
@@ -186,7 +187,7 @@ struct ApiCommand: AsyncParsableCommand {
     /// verbatim, with no parsing.
     static func readInputFile(_ path: String) throws -> Data {
         if path == "-" {
-            return FileHandle.standardInput.readDataToEndOfFile()
+            return Stdio.stdin.readDataToEndOfFile()
         }
         let url = URL(fileURLWithPath: path)
         do {

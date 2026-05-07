@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -58,9 +59,9 @@ struct PrMerge: AsyncParsableCommand {
             path: "repos/\(target.slug)/pulls/\(number)/merge",
             body: request)
         if response.merged {
-            print("\(ANSI.green("✓")) Merged #\(number) (\(String(response.sha.prefix(7))))")
+            Stdio.print("\(ANSI.green("✓")) Merged #\(number) (\(String(response.sha.prefix(7))))")
         } else {
-            print("\(ANSI.red("✗")) Merge failed: \(response.message ?? "unknown reason")")
+            Stdio.print("\(ANSI.red("✗")) Merge failed: \(response.message ?? "unknown reason")")
             throw ExitCode(1)
         }
     }

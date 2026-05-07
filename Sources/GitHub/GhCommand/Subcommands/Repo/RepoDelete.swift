@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -25,16 +26,16 @@ struct RepoDelete: AsyncParsableCommand {
     func run() async throws {
         let target = try await RepositoryResolver.resolve(flag: repo)
         if !skipPrompt {
-            FileHandle.standardError.write(Data(
+            Stdio.stderr.write(Data(
                 "\(ANSI.red("Permanently delete")) \(target.slug)? Type the repo name to confirm: ".utf8))
             let line = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard line == target.slug || line == target.name else {
-                FileHandle.standardError.write(Data("Aborted (input did not match).\n".utf8))
+                Stdio.stderr.write(Data("Aborted (input did not match).\n".utf8))
                 throw ExitCode(1)
             }
         }
         let client = try await CommandContext.apiClient()
         try await client.delete("repos/\(target.slug)")
-        print("\(ANSI.green("✓")) Deleted \(target.slug)")
+        Stdio.print("\(ANSI.green("✓")) Deleted \(target.slug)")
     }
 }

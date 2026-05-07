@@ -95,7 +95,7 @@ public struct ZipCommand: AsyncParsableCommand {
                     action = e.compressionMethod == .store ?
                         " storing: " : "deflating: "
                 }
-                print("\(action)\(e.path)")
+                Stdio.print("\(action)\(e.path)")
             }
         }
     }

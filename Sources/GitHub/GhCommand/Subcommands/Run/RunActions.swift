@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -17,7 +18,7 @@ struct RunCancel: AsyncParsableCommand {
         _ = try await client.raw(
             method: .post,
             path: "repos/\(target.slug)/actions/runs/\(id)/cancel")
-        print("\(ANSI.green("✓")) Cancelled run \(id)")
+        Stdio.print("\(ANSI.green("✓")) Cancelled run \(id)")
     }
 }
 
@@ -39,7 +40,7 @@ struct RunRerun: AsyncParsableCommand {
         _ = try await client.raw(
             method: .post,
             path: "repos/\(target.slug)/actions/runs/\(id)\(suffix)")
-        print("\(ANSI.green("✓")) Re-queued run \(id)\(failedOnly ? " (failed jobs only)" : "")")
+        Stdio.print("\(ANSI.green("✓")) Re-queued run \(id)\(failedOnly ? " (failed jobs only)" : "")")
     }
 }
 
@@ -55,12 +56,12 @@ struct RunDelete: AsyncParsableCommand {
     func run() async throws {
         let target = try await RepositoryResolver.resolve(flag: repo)
         if !skipPrompt {
-            FileHandle.standardError.write(Data("Delete run \(id) in \(target.slug)? [y/N] ".utf8))
+            Stdio.stderr.write(Data("Delete run \(id) in \(target.slug)? [y/N] ".utf8))
             let line = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
             guard line == "y" || line == "yes" else { throw ExitCode(1) }
         }
         let client = try await CommandContext.apiClient()
         try await client.delete("repos/\(target.slug)/actions/runs/\(id)")
-        print("\(ANSI.green("✓")) Deleted run \(id)")
+        Stdio.print("\(ANSI.green("✓")) Deleted run \(id)")
     }
 }

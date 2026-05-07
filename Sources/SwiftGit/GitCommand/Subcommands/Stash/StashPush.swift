@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import SwiftGit
 import libgit2
 
@@ -37,7 +38,7 @@ struct StashPush: AsyncParsableCommand {
             where err.message.lowercased().contains("nothing to stash")
             || err.code == GIT_ENOTFOUND.rawValue {
             // Real git: stdout + exit 0.
-            print("No local changes to save")
+            Stdio.print("No local changes to save")
             return
         }
 
@@ -47,6 +48,6 @@ struct StashPush: AsyncParsableCommand {
         // latest stash entry to print exactly what was recorded.
         let entries = try await client.stashList()
         guard let latest = entries.first else { return }
-        print("Saved working directory and index state \(latest.message)")
+        Stdio.print("Saved working directory and index state \(latest.message)")
     }
 }

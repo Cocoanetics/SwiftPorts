@@ -73,7 +73,7 @@ public struct UnzipCommand: AsyncParsableCommand {
         // `unzip -` reads the archive bytes from stdin and routes
         // through ZipKit's Data-based entry points.
         if archive == "-" {
-            let data = FileHandle.standardInput.readDataToEndOfFile()
+            let data = Stdio.stdin.readDataToEndOfFile()
             if list {
                 try await doList(source: .data(data), includes: includes, excludes: excludes)
                 return
@@ -127,11 +127,11 @@ public struct UnzipCommand: AsyncParsableCommand {
             include(path: entry.path, includes: includes, excludes: excludes)
         }
         if verbose {
-            print(" Length   Method     Size  CRC-32   Date     Name")
-            print(" ------   ------     ----  ------   ----     ----")
+            Stdio.print(" Length   Method     Size  CRC-32   Date     Name")
+            Stdio.print(" ------   ------     ----  ------   ----     ----")
         } else {
-            print("  Length      Date    Time    Name")
-            print("---------  ---------- -----   ----")
+            Stdio.print("  Length      Date    Time    Name")
+            Stdio.print("---------  ---------- -----   ----")
         }
         var totalUncompressed: Int64 = 0
         for e in filtered {
@@ -140,16 +140,16 @@ public struct UnzipCommand: AsyncParsableCommand {
             if verbose {
                 let method = e.compressionMethod == .store ? "Stored " : "Defl:N "
                 let crc = String(format: "%08X", e.crc32)
-                print(String(format: "%7lld  %@  %7lld  %@  %@  %@",
+                Stdio.print(String(format: "%7lld  %@  %7lld  %@  %@  %@",
                              e.uncompressedSize, method,
                              e.compressedSize, crc, date, e.path))
             } else {
-                print(String(format: "%9lld  %@   %@",
+                Stdio.print(String(format: "%9lld  %@   %@",
                              e.uncompressedSize, date, e.path))
             }
         }
-        print("---------                     -------")
-        print(String(format: "%9lld                     %lld file%@",
+        Stdio.print("---------                     -------")
+        Stdio.print(String(format: "%9lld                     %lld file%@",
                      totalUncompressed,
                      Int64(filtered.count),
                      filtered.count == 1 ? "" : "s"))
@@ -168,9 +168,9 @@ public struct UnzipCommand: AsyncParsableCommand {
         }
         if !quiet {
             for e in entries where e.kind == .file {
-                print("    testing: \(e.path)\t OK")
+                Stdio.print("    testing: \(e.path)\t OK")
             }
-            print("No errors detected in compressed data of \(label).")
+            Stdio.print("No errors detected in compressed data of \(label).")
         }
     }
 
@@ -185,7 +185,7 @@ public struct UnzipCommand: AsyncParsableCommand {
             {
                 try Task.checkCancellation()
                 let data = try await Archive.read(entry: e.path, from: url)
-                FileHandle.standardOutput.write(data)
+                Stdio.stdout.write(data)
             }
         case .data(let d):
             let entries = try await Archive.list(data: d)
@@ -194,7 +194,7 @@ public struct UnzipCommand: AsyncParsableCommand {
             {
                 try Task.checkCancellation()
                 let bytes = try await Archive.read(entry: e.path, data: d)
-                FileHandle.standardOutput.write(bytes)
+                Stdio.stdout.write(bytes)
             }
         }
     }
@@ -230,12 +230,12 @@ public struct UnzipCommand: AsyncParsableCommand {
             label = "<stdin>"
         }
         if !quiet {
-            print("Archive:  \(label)")
+            Stdio.print("Archive:  \(label)")
             for e in written {
                 let action = e.kind == .directory ? "  creating: " :
                              (e.compressionMethod == .store ? " extracting: " :
                                                               "  inflating: ")
-                print("\(action)\(e.path)")
+                Stdio.print("\(action)\(e.path)")
             }
         }
     }

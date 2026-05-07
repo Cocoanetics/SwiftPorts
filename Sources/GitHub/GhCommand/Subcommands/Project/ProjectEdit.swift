@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -52,7 +53,7 @@ struct ProjectEdit: AsyncParsableCommand {
         let response: UpdateProjectResponse = try await gql.query(
             ProjectMutations.updateProject, variables: variables)
         let p = response.updateProjectV2.projectV2
-        print("\(ANSI.green("✓")) Edited #\(p.number): \(p.title)")
+        Stdio.print("\(ANSI.green("✓")) Edited #\(p.number): \(p.title)")
     }
 }
 
@@ -84,7 +85,7 @@ struct ProjectClose: AsyncParsableCommand {
             ProjectMutations.updateProject,
             variables: ["id": .string(id), "closed": .bool(!undo)])
         let p = response.updateProjectV2.projectV2
-        print("\(ANSI.green("✓")) \(undo ? "Reopened" : "Closed") #\(p.number)")
+        Stdio.print("\(ANSI.green("✓")) \(undo ? "Reopened" : "Closed") #\(p.number)")
     }
 }
 
@@ -108,7 +109,7 @@ struct ProjectDelete: AsyncParsableCommand {
 
     func run() async throws {
         if !skipPrompt {
-            FileHandle.standardError.write(Data(
+            Stdio.stderr.write(Data(
                 "Permanently delete project #\(number)? [y/N] ".utf8))
             let line = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
             guard line == "y" || line == "yes" else { throw ExitCode(1) }
@@ -121,7 +122,7 @@ struct ProjectDelete: AsyncParsableCommand {
         let _: DeleteProjectResponse = try await gql.query(
             ProjectMutations.deleteProject,
             variables: ["id": .string(id)])
-        print("\(ANSI.green("✓")) Deleted project #\(number)")
+        Stdio.print("\(ANSI.green("✓")) Deleted project #\(number)")
     }
 }
 

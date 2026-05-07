@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -47,9 +48,9 @@ struct Checkout: AsyncParsableCommand {
                     name: name, startPoint: startPoint, force: force)
                 switch outcome {
                 case .createdNew(let n):
-                    print("Switched to a new branch '\(n)'")
+                    Stdio.print("Switched to a new branch '\(n)'")
                 case .resetExisting(let n):
-                    print("Switched to and reset branch '\(n)'")
+                    Stdio.print("Switched to and reset branch '\(n)'")
                 }
             } catch let err as Libgit2Error
                 where err.message.contains("already exists") {
@@ -77,14 +78,14 @@ struct Checkout: AsyncParsableCommand {
         }
         let priorBranch = try await client.currentBranch()
         if priorBranch == ref {
-            print("Already on '\(ref)'")
+            Stdio.print("Already on '\(ref)'")
             return
         }
         try await client.checkout(ref: ref)
         if let after = try? await client.currentBranch(), after == ref {
-            print("Switched to branch '\(ref)'")
+            Stdio.print("Switched to branch '\(ref)'")
         } else {
-            print("Note: switching to '\(ref)'.")
+            Stdio.print("Note: switching to '\(ref)'.")
         }
     }
 

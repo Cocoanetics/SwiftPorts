@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitHub
 import ForgeKit
@@ -41,13 +42,13 @@ struct CacheList: AsyncParsableCommand {
             "repos/\(target.slug)/actions/caches",
             query: [URLQueryItem(name: "per_page", value: String(min(limit, 100)))])
         if envelope.actionsCaches.isEmpty {
-            print("No caches in \(target.slug)."); return
+            Stdio.print("No caches in \(target.slug)."); return
         }
         for c in envelope.actionsCaches.prefix(limit) {
             let size = ByteCountFormatter.string(
                 fromByteCount: c.sizeInBytes, countStyle: .file)
             let when = ISO8601DateFormatter().string(from: c.lastAccessedAt)
-            print("\(c.id)\t\(size)\t\(c.ref)\t\(when)\t\(c.key)")
+            Stdio.print("\(c.id)\t\(size)\t\(c.ref)\t\(when)\t\(c.key)")
         }
     }
 }
@@ -71,7 +72,7 @@ struct CacheDelete: AsyncParsableCommand {
         let client = try await CommandContext.apiClient()
         if let id {
             try await client.delete("repos/\(target.slug)/actions/caches/\(id)")
-            print("\(ANSI.green("✓")) Deleted cache \(id)")
+            Stdio.print("\(ANSI.green("✓")) Deleted cache \(id)")
             return
         }
         guard let key else {
@@ -84,6 +85,6 @@ struct CacheDelete: AsyncParsableCommand {
             path: "repos/\(target.slug)/actions/caches",
             query: query)
         _ = response  // server returns the deleted IDs in the body
-        print("\(ANSI.green("✓")) Deleted caches matching key='\(key)'")
+        Stdio.print("\(ANSI.green("✓")) Deleted caches matching key='\(key)'")
     }
 }

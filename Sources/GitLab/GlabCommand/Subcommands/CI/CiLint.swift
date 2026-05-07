@@ -32,7 +32,7 @@ struct CiLint: AsyncParsableCommand {
 
         let content: String
         if path == "-" {
-            content = String(decoding: FileHandle.standardInput.availableData,
+            content = String(decoding: Stdio.stdin.availableData,
                              as: UTF8.self)
         } else {
             let url = Sandbox.resolve(path)
@@ -46,12 +46,12 @@ struct CiLint: AsyncParsableCommand {
             body: Body(content: content))
 
         if result.valid {
-            print("OK — config is valid.")
-            for w in result.warnings { print("warning: \(w)") }
+            Stdio.print("OK — config is valid.")
+            for w in result.warnings { Stdio.print("warning: \(w)") }
             return
         }
-        for e in result.errors { print("error: \(e)") }
-        for w in result.warnings { print("warning: \(w)") }
+        for e in result.errors { Stdio.print("error: \(e)") }
+        for w in result.warnings { Stdio.print("warning: \(w)") }
         throw ExitCode(1)
     }
 }

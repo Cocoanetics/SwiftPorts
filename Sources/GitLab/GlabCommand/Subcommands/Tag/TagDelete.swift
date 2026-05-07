@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import GitLab
 
@@ -23,6 +24,6 @@ struct TagDelete: AsyncParsableCommand {
         _ = try await client.raw(
             method: .delete,
             path: "projects/\(target.encodedPath)/repository/tags/\(encoded)")
-        print("Deleted tag \(tagName)")
+        Stdio.print("Deleted tag \(tagName)")
     }
 }

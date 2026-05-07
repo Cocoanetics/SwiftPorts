@@ -566,6 +566,7 @@ let package = Package(
         // invoked binary, matching how we treat the rest of our CLIs.
         .target(
             name: "JqKit",
+            dependencies: ["Sandbox"],
             path: "Sources/JqKit/Lib"
         ),
         .target(

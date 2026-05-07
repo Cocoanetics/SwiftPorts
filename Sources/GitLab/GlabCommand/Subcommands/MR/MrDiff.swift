@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import ForgeKit
 import GitLab
@@ -33,7 +34,7 @@ struct MrDiff: AsyncParsableCommand {
                 "projects/\(target.encodedPath)/merge_requests/\(iid)")
             let diffURL = merge.webUrl.appendingPathComponent("diffs")
             try await Browser.open(diffURL)
-            print("Opening \(diffURL.absoluteString).")
+            Stdio.print("Opening \(diffURL.absoluteString).")
             return
         }
 
@@ -41,7 +42,7 @@ struct MrDiff: AsyncParsableCommand {
             "projects/\(target.encodedPath)/merge_requests/\(iid)/changes")
 
         if json {
-            print(try CodableOutput.prettyJSON(changes.changes))
+            Stdio.print(try CodableOutput.prettyJSON(changes.changes))
             return
         }
 
@@ -57,9 +58,9 @@ struct MrDiff: AsyncParsableCommand {
             default:
                 header = ANSI.bold("=== \(change.newPath)")
             }
-            print(header)
-            print(colorizeDiff(change.diff))
-            print()
+            Stdio.print(header)
+            Stdio.print(colorizeDiff(change.diff))
+            Stdio.print()
         }
     }
 

@@ -1,4 +1,5 @@
 import ArgumentParser
+import Sandbox
 import Foundation
 import SwiftGit
 
@@ -27,7 +28,7 @@ struct Show: AsyncParsableCommand {
                 exitCode: 128)
         }
 
-        let stdout = FileHandle.standardOutput
+        let stdout = Stdio.stdout
 
         // If the spec resolves directly to an annotated tag, emit the
         // tag block then fall through to its target commit.
