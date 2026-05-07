@@ -1,5 +1,6 @@
 import Configuration
 import Foundation
+import Sandbox
 
 /// Static config for an API session: which host, which token, which UA.
 ///
@@ -28,6 +29,13 @@ public struct Configuration: Sendable {
     /// Build from a `ConfigReader`. Useful for tests (inject an
     /// `InMemoryProvider`) and embedders that want a custom provider
     /// chain.
+    ///
+    /// Available on macOS 15+ / iOS 18+ / tvOS 18+ / watchOS 11+ —
+    /// `swift-configuration`'s `ConfigReader` itself is gated to
+    /// those releases. Callers on older OSes use ``init(host:token:userAgent:)``
+    /// or ``fromEnvironment(_:)`` instead; ``live()`` automatically
+    /// dispatches to whichever path the OS supports.
+    @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
     public init(reader: ConfigReader, userAgent: String = Configuration.defaultUserAgent) {
         self.host = reader.string(forKey: "gh.host", default: Configuration.defaultHost)
         // GH_TOKEN beats GITHUB_TOKEN to mirror the upstream gh.
@@ -36,11 +44,26 @@ public struct Configuration: Sendable {
         self.userAgent = userAgent
     }
 
-    /// Build from the real process environment via
-    /// `EnvironmentVariablesProvider`. This is the path the CLI takes.
+    /// Build from the real process environment.
+    ///
+    /// On macOS 15+ / iOS 18+ / tvOS 18+ / watchOS 11+ this routes
+    /// through `swift-configuration`'s `EnvironmentVariablesProvider`,
+    /// which keeps the door open for the planned config-file layer.
+    /// On older OSes it falls back to reading
+    /// `ProcessInfo.processInfo.environment` directly via
+    /// ``fromEnvironment(_:)`` — same env-var precedence
+    /// (`GH_HOST`, `GH_TOKEN` beats `GITHUB_TOKEN`), no provider chain.
     public static func live() -> Configuration {
-        let reader = ConfigReader(provider: EnvironmentVariablesProvider())
-        return Configuration(reader: reader)
+        if #available(macOS 15, iOS 18, tvOS 18, watchOS 11, *) {
+            let reader = ConfigReader(provider: EnvironmentVariablesProvider())
+            return Configuration(reader: reader)
+        } else {
+            // `Sandbox.environment` falls back to the host process env
+            // when no sandbox is set, so this matches `ConfigReader`'s
+            // ambient behaviour while still going through the
+            // `AmbientAPIBanTests`-approved accessor.
+            return fromEnvironment(Sandbox.environment)
+        }
     }
 
     /// Test-only: build from a dict of env-style keys (`GH_TOKEN`,

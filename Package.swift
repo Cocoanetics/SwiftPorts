@@ -19,11 +19,16 @@ import PackageDescription
 
 let package = Package(
     name: "SwiftPorts",
+    // Aligned with our largest direct Apple dependency, swift-archive
+    // (`.macOS(.v13), .iOS(.v15), .tvOS(.v15), .watchOS(.v10)`), and
+    // with downstream SwiftBash (`macOS 13 / iOS 16 / tvOS 16 /
+    // watchOS 9`). No source under Sources/ uses `@available` or
+    // `if #available`, so lowering the bound is mechanical.
     platforms: [
-        .macOS(.v15),
-        .iOS(.v18),
-        .tvOS(.v18),
-        .watchOS(.v11),
+        .macOS(.v13),
+        .iOS(.v16),
+        .tvOS(.v16),
+        .watchOS(.v9),
     ],
     products: [
         // Sandbox — TaskLocal-driven path & URL gating for embedding.

@@ -2,7 +2,19 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
-import Synchronization
+
+/// Tiny `Mutex<T>` analogue backed by `NSLock`. Used by the test
+/// infrastructure here so the package's deployment floor (macOS 13)
+/// stays put — `Synchronization.Mutex` would force the floor up to
+/// macOS 15 / iOS 18.
+final class TestLockedBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T
+    init(_ initial: T) { self.value = initial }
+    func withLock<R>(_ body: (inout T) -> R) -> R {
+        lock.withLock { body(&value) }
+    }
+}
 
 /// `URLProtocol` you register on a `URLSessionConfiguration` to
 /// intercept all requests and return canned responses.
@@ -12,7 +24,7 @@ import Synchronization
 /// concurrent suites from racing each other on it.
 final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     typealias Handler = @Sendable (URLRequest) throws -> (HTTPURLResponse, Data)
-    private static let state = Mutex<Handler?>(nil)
+    private static let state = TestLockedBox<Handler?>(nil)
 
     static var handler: Handler? {
         get { state.withLock { $0 } }

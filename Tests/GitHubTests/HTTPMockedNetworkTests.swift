@@ -3,7 +3,6 @@ import Foundation
 import FoundationNetworking  // HTTPURLResponse is in this module on Linux
 #endif
 import HTTPTypes
-import Synchronization
 import Testing
 @testable import GitHub
 
@@ -82,7 +81,7 @@ struct HTTPMockedNetworkTests {
 
         @Test func paginatesLinkHeader() async throws {
             let session = MockURLProtocol.session()
-            let pageNumber = Mutex<Int>(0)
+            let pageNumber = TestLockedBox<Int>(0)
             MockURLProtocol.handler = { request in
                 let n = pageNumber.withLock { v -> Int in v += 1; return v }
                 let body: Data

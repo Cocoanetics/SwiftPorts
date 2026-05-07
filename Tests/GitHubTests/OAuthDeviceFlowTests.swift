@@ -3,7 +3,6 @@ import Foundation
 import FoundationNetworking  // HTTPURLResponse is in this module on Linux
 #endif
 import HTTPTypes
-import Synchronization
 import Testing
 @testable import GitHub
 
@@ -89,7 +88,7 @@ extension HTTPMockedNetworkTests {
 
         @Test func pollEventuallySucceeds() async throws {
             let session = MockURLProtocol.session()
-            let attempts = Mutex<Int>(0)
+            let attempts = TestLockedBox<Int>(0)
             MockURLProtocol.handler = { request in
                 let n = attempts.withLock { v -> Int in v += 1; return v }
                 let json: String
