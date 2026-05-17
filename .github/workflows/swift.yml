@@ -201,7 +201,13 @@ jobs:
       - name: Install Swift Android SDK
         uses: skiptools/swift-android-action@v2
         with:
-          swift-version: "6.3"
+          # Pin to a full patch version. With the floating "6.3" key,
+          # the action's cached host toolchain drifted to a 6.3.1 build
+          # while the Android SDK at swift-6.3-release/android-sdk/…
+          # stayed at the original 6.3 — emitting "module compiled with
+          # Swift 6.3 cannot be imported by the Swift 6.3.1 compiler"
+          # on every target. 6.3.2 ships matching host + SDK tarballs.
+          swift-version: "6.3.2"
           free-disk-space: true
           build-package: false
           build-tests: false
