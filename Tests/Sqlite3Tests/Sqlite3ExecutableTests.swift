@@ -527,6 +527,9 @@ import Testing
         let mem = try await run(["-safe", ":memory:"], input: ".open :memory:\nSELECT 7;\n")
         #expect(mem.exit == 0)
         #expect(mem.stdout == "7\n")
+        // `.open :memory:` must open a true in-memory database, never resolve
+        // to a real on-disk file named ":memory:" (regression guard).
+        #expect(!FileManager.default.fileExists(atPath: ":memory:"))
     }
 
     @Test func safeModeBlocksAttachAndLoadExtension() async throws {
@@ -552,7 +555,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
 
         func run(_ sql: String) async throws -> (out: String, err: String, exit: Int32) {
-            var shell = Shell(environment: Environment(
+            let shell = Shell(environment: Environment(
                 variables: ProcessInfo.processInfo.environment,
                 workingDirectory: root.path))
             shell.sandbox = .rooted(at: root)

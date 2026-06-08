@@ -763,9 +763,19 @@ final class Session {
                 err("Error: .open expects a filename\n")
                 return
             }
-            guard let url = await resolveAuthorized(path) else { return }
+            // ":memory:" / an empty name opens a fresh in-memory database
+            // (matching the command-line argument and real sqlite3) — it is
+            // never resolved to a path, so `.open :memory:` can't create a
+            // stray `:memory:` file on disk.
+            let location: SQLiteDatabase.Location
+            if path != ":memory:", !path.isEmpty {
+                guard let url = await resolveAuthorized(path) else { return }
+                location = .file(url.path)
+            } else {
+                location = .memory
+            }
             do {
-                let replacement = try SQLiteDatabase(.file(url.path))
+                let replacement = try SQLiteDatabase(location)
                 database.close()
                 database = replacement
                 if safeMode { database.enableSafeMode() }   // re-arm on the new connection
