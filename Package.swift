@@ -162,15 +162,13 @@ let package = Package(
         .library(name: "JqCommand", targets: ["JqCommand"]),
         .executable(name: "jq", targets: ["jq"]),
 
-        // SQLiteKit umbrella — `sqlite3` shell port over the vendored
-        // SQLite amalgamation. The SDK + shell-driver libraries link the
-        // C engine and so run everywhere it builds (macOS / iOS / tvOS /
-        // watchOS / visionOS / Linux / Android); the `sqlite3` executable
-        // is the valuable artifact on macOS / Linux (Apple-mobile builds
-        // it as a never-invoked stub, like the rest of our CLIs).
+        // SQLiteKit umbrella — `sqlite3` shell port. The SDK now lives in its
+        // own package (Cocoanetics/SQLiteKit); this repo keeps the shell-driver
+        // and CLI layers built on top of it. The `sqlite3` executable is the
+        // valuable artifact on macOS / Linux (Apple-mobile builds it as a
+        // never-invoked stub, like the rest of our CLIs).
         //
-        // Three layers, unlike most ports' two:
-        //   • SQLiteKit     — pure SDK over the amalgamation (no ShellKit).
+        // Two layers over the external SDK:
         //   • Sqlite3Shell  — the argv parser + dot-command / REPL driver,
         //                     ArgumentParser-free, reads IO through
         //                     `ShellKit.Shell.current`. Builds on Android.
@@ -180,7 +178,6 @@ let package = Package(
         //                     Android with the rest of the command set).
         // SwiftBash embeds `Sqlite3Shell` directly so its `sqlite3` builtin
         // works on every platform, Android included.
-        .library(name: "SQLiteKit", targets: ["SQLiteKit"]),
         .library(name: "Sqlite3Shell", targets: ["Sqlite3Shell"]),
         .library(name: "Sqlite3Command", targets: ["Sqlite3Command"]),
         .executable(name: "sqlite3", targets: ["sqlite3"]),
@@ -237,13 +234,12 @@ let package = Package(
     // Package traits — opt-in, build-time toggles. Off by default (none are
     // listed in any `.default(enabledTraits:)`).
     //
-    // FTS5 compiles the shared SQLite C target with -DSQLITE_ENABLE_FTS5 (via a
-    // CSQLite dependency trait). SQLiteVec compiles in the vendored sqlite-vec
-    // amalgamation (the CSQLiteVec target) for `vec0` vector / semantic search.
-    // SwiftPM defines a matching compilation condition for each when enabled.
-    //   • depending on this package:  .package(url: …, traits: ["FTS5", "SQLiteVec"])
+    // FTS5 and SQLiteVec forward to the external Cocoanetics/SQLiteKit
+    // package's same-named traits, which compile the engine with
+    // -DSQLITE_ENABLE_FTS5 and link in the vendored sqlite-vec amalgamation
+    // (`vec0` vector / semantic search) respectively.
+    //   • depending on this package:   .package(url: …, traits: ["FTS5", "SQLiteVec"])
     //   • building this package direct: swift build --traits FTS5,SQLiteVec
-    // See `fullTextSearchFTS5` / `semanticSearchSQLiteVec` in SQLiteKitTests.
     traits: [
         .trait(name: "FTS5",
                description: "Compile SQLite with FTS5 full-text search."),
@@ -314,18 +310,19 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-markdown",
                  from: "0.7.0"),
 
-        // Vendored SQLite amalgamation — a single public-domain
-        // `sqlite3.c` packaged as a SwiftPM C target, consumed the same
-        // way as the libgit2 fork above (depend on the package, don't host
-        // the 8.9 MB blob in this repo). Backs the SQLiteKit umbrella.
-        // Pinned exact so the engine version is identical on every
-        // platform (issue #43). Our own `FTS5` trait forwards to CSQLite's
-        // `FTS5` trait, which compiles the amalgamation with
-        // `-DSQLITE_ENABLE_FTS5`. Off unless the consumer opts in (see the
-        // `traits:` block above).
-        .package(url: "https://github.com/stephencelis/CSQLite",
-                 exact: "3.50.4",
-                 traits: [.trait(name: "FTS5", condition: .when(traits: ["FTS5"]))]),
+        // SQLiteKit — the SQLite SDK (vendored amalgamation + sqlite-vec +
+        // FTS5), extracted from this repo into its own package so it can be
+        // versioned independently and consumed with a minimal closure. Backs
+        // the `sqlite3` shell port. Pinned to `main` until SQLiteKit ships a
+        // tagged release. Our `FTS5` / `SQLiteVec` traits forward to
+        // SQLiteKit's same-named traits; off unless the consumer opts in (see
+        // the `traits:` block above).
+        .package(url: "https://github.com/Cocoanetics/SQLiteKit",
+                 branch: "main",
+                 traits: [
+                     .trait(name: "FTS5", condition: .when(traits: ["FTS5"])),
+                     .trait(name: "SQLiteVec", condition: .when(traits: ["SQLiteVec"])),
+                 ]),
     ],
     targets: androidFiltered(targets: [
         // MARK: ForgeKit (host-agnostic plumbing)
@@ -1065,71 +1062,13 @@ let package = Package(
         ),
 
         // MARK: SQLiteKit umbrella (issue #43)
-        // `sqlite3` shell port. The SDK (SQLiteKit) is a thin wrapper over
-        // the vendored amalgamation; Sqlite3Command holds the argv parser,
-        // dot-command dispatch, and REPL; `sqlite3` is the @main wrapper.
-        // The Linux/Android link libs match the (commented) shell target
-        // in the CSQLite package; the Apple SDKs provide these via
-        // libSystem, so they're gated to non-Apple platforms.
-        // CSQLiteShim — typed C wrappers for SQLite's variadic printf
-        // (`sqlite3_mprintf`), which Swift can't call directly. Gives
-        // SQLiteKit byte-exact access to the engine's `%!.20g` float
-        // formatting for round-trip output (.dump / quote / insert / JSON).
-        // Mirrors the CLibgit2Shim pattern.
-        .target(
-            name: "CSQLiteShim",
-            dependencies: [
-                .product(name: "SQLiteSwiftCSQLite", package: "CSQLite"),
-            ],
-            path: "Sources/CSQLiteShim",
-            publicHeadersPath: "include"
-        ),
-        // sqlite-vec, compiled statically into the engine for on-device vector
-        // search. Gated by the `SQLiteVec` trait: SQLiteKit links it only when
-        // the trait is on (below), and no product exposes it, so consumers
-        // don't build it unless they opt in. The vendored amalgamation
-        // (sqlite-vec.c) is compiled via sqlite-vec-shim.c — which adds the one
-        // missing system include — so it stays byte-for-byte upstream and is
-        // excluded from direct compilation. See Sources/CSQLiteVec/README.md.
-        .target(
-            name: "CSQLiteVec",
-            dependencies: [
-                .product(name: "SQLiteSwiftCSQLite", package: "CSQLite"),
-            ],
-            path: "Sources/CSQLiteVec",
-            exclude: ["sqlite-vec.c", "README.md", "LICENSE-MIT", "LICENSE-APACHE"],
-            publicHeadersPath: "include",
-            cSettings: [
-                // Static link against the core engine (no sqlite3ext.h
-                // api-routine indirection); empty the API export macro so the
-                // symbol isn't dllexport'd on Windows for a static build; drop
-                // the filesystem helpers to keep vectors in-database.
-                .define("SQLITE_CORE"),
-                .define("SQLITE_VEC_STATIC"),
-                .define("SQLITE_VEC_OMIT_FS"),
-            ]
-        ),
-        .target(
-            name: "SQLiteKit",
-            dependencies: [
-                .product(name: "SQLiteSwiftCSQLite", package: "CSQLite"),
-                "CSQLiteShim",
-                // Linked (and the amalgamation compiled) only when the
-                // SQLiteVec trait is enabled.
-                .target(name: "CSQLiteVec", condition: .when(traits: ["SQLiteVec"])),
-            ],
-            path: "Sources/SQLiteKit/Lib",
-            linkerSettings: [
-                .linkedLibrary("m", .when(platforms: [.linux, .android])),
-                .linkedLibrary("dl", .when(platforms: [.linux, .android])),
-                // Linux only: Android's Bionic merges pthread into libc —
-                // there is no separate libpthread.so, so `-lpthread` fails
-                // with "unable to find library -lpthread". (It only linked
-                // before because a stray host -L was supplying host
-                // libpthread.) The pthread symbols come from libc here.
-                .linkedLibrary("pthread", .when(platforms: [.linux])),
-            ]
-        ),
+        // `sqlite3` shell port over the external Cocoanetics/SQLiteKit SDK.
+        // The SDK — the vendored amalgamation plus the CSQLiteShim / CSQLiteVec
+        // C targets — now lives in that package. Here Sqlite3Shell holds the
+        // argv parser / dot-command / REPL driver, Sqlite3Command the thin
+        // ArgumentParser wrapper, and `sqlite3` the @main entry. The Linux /
+        // Android engine link libs (m / dl / pthread) come from SQLiteKit's
+        // own linker settings, propagated through the dependency.
         // The argv parser + dot-command / REPL driver, split out of
         // Sqlite3Command so it carries no ArgumentParser dependency. That
         // lets it build on Android (where the explicit-module scanner trips
@@ -1139,7 +1078,7 @@ let package = Package(
         .target(
             name: "Sqlite3Shell",
             dependencies: [
-                "SQLiteKit",
+                .product(name: "SQLiteKit", package: "SQLiteKit"),
                 .product(name: "ShellKit", package: "ShellKit"),
             ],
             path: "Sources/SQLiteKit/Sqlite3Shell"
@@ -1161,10 +1100,6 @@ let package = Package(
             dependencies: ["Sqlite3Command"],
             path: "Sources/SQLiteKit/sqlite3"
         ),
-        .testTarget(
-            name: "SQLiteKitTests",
-            dependencies: ["SQLiteKit"]
-        ),
         // Drives `Sqlite3Executable` directly (no ArgumentParser), so it
         // depends on `Sqlite3Shell` and runs on every platform — Android
         // included — exercising the shell port on the emulator in CI.
@@ -1172,7 +1107,7 @@ let package = Package(
             name: "Sqlite3Tests",
             dependencies: [
                 "Sqlite3Shell",
-                "SQLiteKit",
+                .product(name: "SQLiteKit", package: "SQLiteKit"),
             ]
         ),
     ])
