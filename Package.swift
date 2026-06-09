@@ -37,9 +37,9 @@ let androidDroppedTargets: Set<String> = [
     "unlz4", "lz4cat", "jq", "glam", "gh", "glab", "git", "rg", "fd",
     "sqlite3",
     // argv-parsing test targets (each needs a `*Command` lib)
-    // NB: Sqlite3Tests is intentionally absent — it now drives the
-    // ArgumentParser-free `Sqlite3Shell` target, so it builds and runs on
-    // Android too.
+    // NB: there is no Sqlite3 test target to drop here — the sqlite3 shell's
+    // tests moved to the external SQLiteKit package (Sqlite3ShellTests), which
+    // runs them on its own full matrix, Android emulator included.
     "ZipTests", "UnzipTests", "TarTests", "GzipTests", "Bzip2Tests",
     "XzTests", "ZstdTests", "Lz4Tests", "JqTests", "GlamTests",
     "GitCommandTests", "RgTests", "FdTests",
@@ -162,23 +162,19 @@ let package = Package(
         .library(name: "JqCommand", targets: ["JqCommand"]),
         .executable(name: "jq", targets: ["jq"]),
 
-        // SQLiteKit umbrella — `sqlite3` shell port. The SDK now lives in its
-        // own package (Cocoanetics/SQLiteKit); this repo keeps the shell-driver
-        // and CLI layers built on top of it. The `sqlite3` executable is the
-        // valuable artifact on macOS / Linux (Apple-mobile builds it as a
-        // never-invoked stub, like the rest of our CLIs).
+        // `sqlite3` shell port. Both the SQLite SDK *and* its `Sqlite3Shell`
+        // shell driver now live in the external Cocoanetics/SQLiteKit package;
+        // this repo keeps only the CLI packaging built on top of the driver.
+        // The `sqlite3` executable is the valuable artifact on macOS / Linux
+        // (Apple-mobile builds it as a never-invoked stub, like our other CLIs).
         //
-        // Two layers over the external SDK:
-        //   • Sqlite3Shell  — the argv parser + dot-command / REPL driver,
-        //                     ArgumentParser-free, reads IO through
-        //                     `ShellKit.Shell.current`. Builds on Android.
         //   • Sqlite3Command — the thin `Sqlite3: AsyncParsableCommand`
-        //                     wrapper around the driver (the only
-        //                     ArgumentParser-bearing layer; dropped on
-        //                     Android with the rest of the command set).
-        // SwiftBash embeds `Sqlite3Shell` directly so its `sqlite3` builtin
-        // works on every platform, Android included.
-        .library(name: "Sqlite3Shell", targets: ["Sqlite3Shell"]),
+        //                     wrapper around SQLiteKit's `Sqlite3Shell` driver
+        //                     (the only ArgumentParser-bearing layer; dropped
+        //                     on Android with the rest of the command set).
+        //   • sqlite3        — the @main entry point.
+        // SwiftBash embeds SQLiteKit's `Sqlite3Shell` driver directly so its
+        // `sqlite3` builtin works on every platform, Android included.
         .library(name: "Sqlite3Command", targets: ["Sqlite3Command"]),
         .executable(name: "sqlite3", targets: ["sqlite3"]),
 
@@ -311,12 +307,13 @@ let package = Package(
                  from: "0.7.0"),
 
         // SQLiteKit — the SQLite SDK (vendored amalgamation + sqlite-vec +
-        // FTS5), extracted from this repo into its own package so it can be
-        // versioned independently and consumed with a minimal closure. Backs
-        // the `sqlite3` shell port. Pinned to `main` until SQLiteKit ships a
-        // tagged release. Our `FTS5` / `SQLiteVec` traits forward to
-        // SQLiteKit's same-named traits; off unless the consumer opts in (see
-        // the `traits:` block above).
+        // FTS5) and its `Sqlite3Shell` CLI driver, extracted from this repo
+        // into their own package so they can be versioned independently and
+        // consumed with a minimal closure. Our `sqlite3` port wraps the
+        // `Sqlite3Shell` product (see the CLI port targets below). Pinned to
+        // `main` until SQLiteKit ships a tagged release. Our `FTS5` /
+        // `SQLiteVec` traits forward to SQLiteKit's same-named traits; off
+        // unless the consumer opts in (see the `traits:` block above).
         .package(url: "https://github.com/Cocoanetics/SQLiteKit",
                  branch: "main",
                  traits: [
@@ -1061,35 +1058,24 @@ let package = Package(
             ]
         ),
 
-        // MARK: SQLiteKit umbrella (issue #43)
-        // `sqlite3` shell port over the external Cocoanetics/SQLiteKit SDK.
-        // The SDK — the vendored amalgamation plus the CSQLiteShim / CSQLiteVec
-        // C targets — now lives in that package. Here Sqlite3Shell holds the
-        // argv parser / dot-command / REPL driver, Sqlite3Command the thin
-        // ArgumentParser wrapper, and `sqlite3` the @main entry. The Linux /
-        // Android engine link libs (m / dl / pthread) come from SQLiteKit's
-        // own linker settings, propagated through the dependency.
-        // The argv parser + dot-command / REPL driver, split out of
-        // Sqlite3Command so it carries no ArgumentParser dependency. That
-        // lets it build on Android (where the explicit-module scanner trips
-        // on ArgumentParser) and lets SwiftBash drive `sqlite3` in-process
-        // on every platform via a native ShellKit command. Reads IO /
-        // resolves + authorizes paths through `ShellKit.Shell.current`.
-        .target(
-            name: "Sqlite3Shell",
-            dependencies: [
-                .product(name: "SQLiteKit", package: "SQLiteKit"),
-                .product(name: "ShellKit", package: "ShellKit"),
-            ],
-            path: "Sources/SQLiteKit/Sqlite3Shell"
-        ),
+        // MARK: sqlite3 CLI port (issues #43, #56)
+        // Both the SQLite SDK and its `Sqlite3Shell` shell driver (the argv
+        // parser / dot-command / REPL engine) now live in the external
+        // Cocoanetics/SQLiteKit package. This repo keeps only the CLI
+        // packaging: the thin ArgumentParser wrapper and the @main entry. The
+        // Linux / Android engine link libs (m / dl / pthread) come from
+        // SQLiteKit's own linker settings, propagated through the dependency.
+        //
         // The ArgumentParser wrapper — just the `Sqlite3` command type over
-        // the `Sqlite3Shell` driver. Dropped on Android with the rest of
-        // the command layer (see `androidDroppedTargets`).
+        // SQLiteKit's `Sqlite3Shell` driver. Dropped on Android with the rest
+        // of the command layer (see `androidDroppedTargets`); the
+        // ArgumentParser-free driver itself stays available to Android hosts
+        // straight from SQLiteKit. The driver's tests live in SQLiteKit too,
+        // which runs them on its own full matrix (Android emulator included).
         .target(
             name: "Sqlite3Command",
             dependencies: [
-                "Sqlite3Shell",
+                .product(name: "Sqlite3Shell", package: "SQLiteKit"),
                 .product(name: "ShellKit", package: "ShellKit"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
@@ -1099,16 +1085,6 @@ let package = Package(
             name: "sqlite3",
             dependencies: ["Sqlite3Command"],
             path: "Sources/SQLiteKit/sqlite3"
-        ),
-        // Drives `Sqlite3Executable` directly (no ArgumentParser), so it
-        // depends on `Sqlite3Shell` and runs on every platform — Android
-        // included — exercising the shell port on the emulator in CI.
-        .testTarget(
-            name: "Sqlite3Tests",
-            dependencies: [
-                "Sqlite3Shell",
-                .product(name: "SQLiteKit", package: "SQLiteKit"),
-            ]
         ),
     ])
 )
