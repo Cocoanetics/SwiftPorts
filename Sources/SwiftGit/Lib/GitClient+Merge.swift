@@ -1,6 +1,6 @@
 import Foundation
 import ForgeKit
-import CGitKit
+import libgit2
 
 /// What `git merge`'s fast-forward decision was. Mirrors libgit2's
 /// `git_merge_analysis_t` filtered through the user's `--ff` choice.

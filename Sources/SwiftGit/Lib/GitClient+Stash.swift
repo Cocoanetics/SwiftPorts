@@ -1,6 +1,6 @@
 import Foundation
 import ForgeKit
-import CGitKit
+import libgit2
 
 /// Single entry returned by ``GitClient/stashList()``.
 public struct Libgit2StashEntry: Sendable {

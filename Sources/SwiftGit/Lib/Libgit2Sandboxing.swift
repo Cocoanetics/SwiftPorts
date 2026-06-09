@@ -1,7 +1,7 @@
 import Foundation
 import ShellKit
 import CLibgit2Shim
-import CGitKit
+import libgit2
 
 /// Bridges `Shell.current.environment.variables()` to libgit2's process-global option
 /// block. Keeps libgit2's own `getenv` calls inside its C internals

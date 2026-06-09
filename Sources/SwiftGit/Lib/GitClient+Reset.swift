@@ -1,6 +1,6 @@
 import Foundation
 import ForgeKit
-import CGitKit
+import libgit2
 
 /// Mode for whole-tree resets. Mirrors libgit2's `git_reset_t` 1:1.
 public enum ResetMode: Sendable {

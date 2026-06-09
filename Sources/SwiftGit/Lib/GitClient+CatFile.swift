@@ -1,5 +1,5 @@
 import Foundation
-import CGitKit
+import libgit2
 
 /// Compact metadata about a git object — what `cat-file -t/-s/-e` reads.
 public struct ObjectMetadata: Sendable {

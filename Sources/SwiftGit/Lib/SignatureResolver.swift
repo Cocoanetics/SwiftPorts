@@ -1,7 +1,7 @@
 import Foundation
 import ForgeKit
 import ShellKit
-import CGitKit
+import libgit2
 
 /// Real-git-compatible identity resolution for commit author + committer.
 ///

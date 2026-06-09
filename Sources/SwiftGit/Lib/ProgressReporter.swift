@@ -1,6 +1,6 @@
 import Foundation
 import ShellKit
-import CGitKit
+import libgit2
 
 /// Formats and emits `remote: …` / `Receiving objects: …` /
 /// `From <url>` / `<oldsha>..<newsha> <ref> -> <tracking>` lines to

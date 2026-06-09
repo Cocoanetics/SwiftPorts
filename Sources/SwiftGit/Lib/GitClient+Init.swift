@@ -1,6 +1,6 @@
 import Foundation
 import ShellKit
-import CGitKit
+import libgit2
 
 extension GitClient {
 

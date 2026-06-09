@@ -1,6 +1,6 @@
 import Foundation
 import ForgeKit
-import CGitKit
+import libgit2
 
 /// Where to land an applied patch. Mirrors libgit2's
 /// `git_apply_location_t` 1:1.

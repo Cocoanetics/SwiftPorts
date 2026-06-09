@@ -1,5 +1,5 @@
 import Foundation
-import CGitKit
+import libgit2
 
 /// Heap-allocated box holding the Swift `CredentialProvider`. We pass a
 /// raw pointer to this box as libgit2's `payload`, then unbox it inside

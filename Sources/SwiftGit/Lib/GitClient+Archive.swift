@@ -1,6 +1,6 @@
 import Foundation
 import ShellKit
-import CGitKit
+import libgit2
 
 // Selective imports — the libarchive wrapper module is named `Archive`
 // and its own `enum Archive` / `ArchiveFormat` / `ArchiveFilter` would

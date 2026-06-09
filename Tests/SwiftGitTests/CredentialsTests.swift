@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import CGitKit
+import libgit2
 @testable import SwiftGit
 
 @Suite("Credentials bridge")

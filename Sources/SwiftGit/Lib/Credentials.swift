@@ -1,5 +1,5 @@
 import Foundation
-import CGitKit
+import libgit2
 
 /// What an auth challenge is asking for. Mirrors libgit2's
 /// `GIT_CREDENTIAL_*` flags. The transport may permit several at once

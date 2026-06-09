@@ -1,6 +1,6 @@
 import Foundation
 import ForgeKit
-import CGitKit
+import libgit2
 
 /// Where to read/write a config entry. Mirrors `git config`'s scope flags.
 public enum ConfigScope: Sendable {

@@ -1,6 +1,6 @@
 import Foundation
 import ForgeKit
-import CGitKit
+import libgit2
 
 /// One entry in a `git status` report. We preserve both the index-side
 /// state (HEAD ↔ index) and the workdir-side state (index ↔ working

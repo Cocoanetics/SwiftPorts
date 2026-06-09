@@ -1,5 +1,5 @@
 import Foundation
-import CGitKit
+import libgit2
 
 /// Combined heap-allocated box held by every libgit2 callback during a
 /// fetch/clone/push. libgit2's `git_remote_callbacks` has one `payload`

@@ -1,6 +1,6 @@
 import Foundation
 import ForgeKit
-import CGitKit
+import libgit2
 
 /// One hunk returned by ``GitClient/blame(path:)``. Each line in a
 /// blamed file falls into exactly one hunk; `linesInHunk` tells you

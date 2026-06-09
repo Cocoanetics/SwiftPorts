@@ -1,5 +1,5 @@
 import Foundation
-import CGitKit
+import libgit2
 
 /// One entry produced by `lsTree`. Mirrors a single line of `git
 /// ls-tree`'s default output: `<mode> <type> <sha>\t<name>`.
