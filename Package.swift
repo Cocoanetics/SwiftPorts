@@ -286,13 +286,13 @@ let package = Package(
                           "LZMASupport",
                           "ZstdSupport"]),
 
-        // libgit2 1.9.x packaged as a SwiftPM C target. We pin to our
-        // own fork while https://github.com/ibrahimcetin/libgit2/pull/<TBD>
-        // is open — it adds Windows + Android arms to Package.swift so
-        // the SwiftPM build covers all five of our CI platforms. Roll
-        // back to upstream once the PR lands.
-        .package(url: "https://github.com/odrobnik/libgit2",
-                 branch: "windows-android-platforms"),
+        // libgit2, packaged for SwiftPM by Cocoanetics/GitKit: a pristine
+        // libgit2 submodule compiled directly, exposing the curated,
+        // Windows-safe C module `CGitKit` (the git2.h API). GitKit's version
+        // tracks libgit2's 1:1 (1.9.4 ⇒ libgit2 v1.9.4). This replaces our
+        // former odrobnik/libgit2 fork pin; GitKit covers all five CI platforms.
+        .package(url: "https://github.com/Cocoanetics/GitKit",
+                 from: "1.9.4"),
 
         // ShellKit owns the virtualised shell-environment surface
         // (IO sinks, Environment, Sandbox URL gate, NetworkConfig,
@@ -936,7 +936,7 @@ let package = Package(
         .target(
             name: "CLibgit2Shim",
             dependencies: [
-                .product(name: "libgit2", package: "libgit2"),
+                .product(name: "CGitKit", package: "GitKit"),
             ],
             path: "Sources/CLibgit2Shim",
             publicHeadersPath: "include"
@@ -949,7 +949,7 @@ let package = Package(
                 "CLibgit2Shim",
                 "ForgeKit",
                 .product(name: "ShellKit", package: "ShellKit"),
-                .product(name: "libgit2", package: "libgit2"),
+                .product(name: "CGitKit", package: "GitKit"),
                 // For `git archive` — libarchive's writer is the
                 // backend so the operation runs in-process and works
                 // under sandboxed iOS / tvOS / watchOS.
@@ -964,7 +964,7 @@ let package = Package(
                 "ForgeKit",
                 .product(name: "ShellKit", package: "ShellKit"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
-                .product(name: "libgit2", package: "libgit2"),
+                .product(name: "CGitKit", package: "GitKit"),
             ],
             path: "Sources/SwiftGit/GitCommand"
         ),

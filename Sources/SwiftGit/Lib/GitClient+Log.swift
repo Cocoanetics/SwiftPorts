@@ -1,6 +1,6 @@
 import Foundation
 import ForgeKit
-import libgit2
+import CGitKit
 
 /// One commit returned by ``GitClient/log(query:)``.
 public struct LogEntry: Sendable {

@@ -1,6 +1,6 @@
 import Foundation
 import ForgeKit
-import libgit2
+import CGitKit
 
 /// One entry returned by ``GitClient/tagList(pattern:)``. Annotated
 /// tags carry a `message` + `tagger`; lightweight tags don't.

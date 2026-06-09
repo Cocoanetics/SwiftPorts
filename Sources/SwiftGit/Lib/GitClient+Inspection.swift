@@ -1,6 +1,6 @@
 import Foundation
 import ShellKit
-import libgit2
+import CGitKit
 
 /// Rich result returned by ``GitClient/commitDetailed(message:author:allowEmpty:)``.
 /// The CLI uses this to format `git commit`'s `[branch sha] message` line

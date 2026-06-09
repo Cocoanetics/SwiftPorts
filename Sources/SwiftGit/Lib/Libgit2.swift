@@ -1,5 +1,5 @@
 import Foundation
-import libgit2
+import CGitKit
 
 /// Process-wide libgit2 init / shutdown bookkeeping.
 ///

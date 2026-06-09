@@ -1,6 +1,6 @@
 import ArgumentParser
 import ShellKit
-import libgit2
+import CGitKit
 
 struct VersionCommand: ParsableCommand {
     static let configuration = CommandConfiguration(

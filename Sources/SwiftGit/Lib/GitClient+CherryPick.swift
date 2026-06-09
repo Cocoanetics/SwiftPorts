@@ -1,6 +1,6 @@
 import Foundation
 import ForgeKit
-import libgit2
+import CGitKit
 
 /// Result of a `git cherry-pick`.
 public enum CherryPickOutcome: Sendable {
