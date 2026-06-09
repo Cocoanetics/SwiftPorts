@@ -1,5 +1,5 @@
 import Foundation
-import libgit2
+import CGitKit
 
 /// Output mode for ``GitClient/diff(_:format:paths:contextLines:)``.
 public enum DiffFormat: Sendable {

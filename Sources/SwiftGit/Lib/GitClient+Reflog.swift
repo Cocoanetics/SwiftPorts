@@ -1,6 +1,6 @@
 import Foundation
 import ForgeKit
-import libgit2
+import CGitKit
 
 /// One entry in a ref's reflog. Refs have a per-ref reflog stored in
 /// `.git/logs/refs/heads/<branch>` (or `.git/logs/HEAD` for HEAD).

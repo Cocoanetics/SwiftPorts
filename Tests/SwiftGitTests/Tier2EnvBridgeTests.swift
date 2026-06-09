@@ -16,7 +16,7 @@
 #if os(macOS)
 import Foundation
 import Testing
-import libgit2
+import CGitKit
 import ShellKit
 @testable import SwiftGit
 

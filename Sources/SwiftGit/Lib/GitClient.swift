@@ -1,7 +1,7 @@
 import Foundation
 import ForgeKit
 import ShellKit
-import libgit2
+import CGitKit
 
 /// In-process libgit2-backed implementation of
 /// ``ForgeKit/GitClient`` (the protocol). The simple name `GitClient`

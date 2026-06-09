@@ -1,6 +1,6 @@
 import Foundation
 import ForgeKit
-import libgit2
+import CGitKit
 
 /// What `git checkout -b` did. Real git distinguishes "switched to a
 /// new branch 'X'" (created fresh) from "switched to and reset

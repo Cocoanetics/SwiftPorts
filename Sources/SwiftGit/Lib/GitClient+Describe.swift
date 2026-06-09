@@ -1,5 +1,5 @@
 import Foundation
-import libgit2
+import CGitKit
 
 extension GitClient {
 

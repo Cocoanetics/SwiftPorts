@@ -1,7 +1,7 @@
 import ArgumentParser
 import ShellKit
 import SwiftGit
-import libgit2
+import CGitKit
 
 struct StashPush: AsyncParsableCommand {
     static let configuration = CommandConfiguration(

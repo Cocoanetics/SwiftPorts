@@ -1,6 +1,6 @@
 import Foundation
 import ForgeKit
-import libgit2
+import CGitKit
 
 /// Result of a rebase invocation.
 public enum RebaseOutcome: Sendable {

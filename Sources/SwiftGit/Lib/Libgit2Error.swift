@@ -1,5 +1,5 @@
 import Foundation
-import libgit2
+import CGitKit
 
 /// Wraps a non-zero return code from a `git_*` C call.
 ///
