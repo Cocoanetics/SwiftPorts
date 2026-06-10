@@ -1,8 +1,8 @@
 import Foundation
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` rev-parse /
-// ls-files operations (`SwiftGitCore/Repository+RevParse.swift`).
+// ls-files operations (`GitKit/Repository+RevParse.swift`).
 extension GitClient {
 
     /// Resolve `spec` to a full 40-char SHA — `git rev-parse <spec>`.

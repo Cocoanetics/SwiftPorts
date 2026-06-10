@@ -59,7 +59,7 @@ struct Grep: AsyncParsableCommand {
         var options: NSRegularExpression.Options = []
         if ignoreCase { options.insert(.caseInsensitive) }
 
-        let matches: [SwiftGit.GitClient.GrepMatch]
+        let matches: [GrepMatch]
         do {
             matches = try await client.grep(
                 pattern: pattern,

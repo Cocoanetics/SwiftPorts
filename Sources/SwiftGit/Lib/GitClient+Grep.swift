@@ -1,13 +1,13 @@
 import Foundation
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` grep operation
-// (`SwiftGitCore/Repository+Grep.swift`).
+// (`GitKit/Repository+Grep.swift`).
+// NB: no `GitClient.GrepMatch` alias — inside this module the name `GitKit`
+// resolves to the namespace enum (which shadows the module), so a member
+// typealias can't reference the module's type. Call sites use the bare
+// `GrepMatch`, re-exported from GitKit.
 extension GitClient {
-
-    /// The match type now lives in SwiftGitCore — this alias keeps the
-    /// `GitClient.GrepMatch` spelling working for existing call sites.
-    public typealias GrepMatch = SwiftGitCore.GrepMatch
 
     /// Search tracked (and optionally untracked) files for `pattern` — `git grep`.
     public func grep(

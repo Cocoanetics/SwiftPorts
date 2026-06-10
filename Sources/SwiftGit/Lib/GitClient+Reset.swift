@@ -1,8 +1,8 @@
 import Foundation
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` reset operations
-// (`SwiftGitCore/Repository+Reset.swift`).
+// (`GitKit/Repository+Reset.swift`).
 extension GitClient {
 
     /// Reset HEAD (and optionally the index + working tree) to `target` —

@@ -1,8 +1,8 @@
 import Foundation
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` reflog operation
-// (`SwiftGitCore/Repository+Reflog.swift`).
+// (`GitKit/Repository+Reflog.swift`).
 extension GitClient {
 
     /// Read the reflog for `refName` (default `HEAD`), newest first — `git reflog`.

@@ -1,9 +1,9 @@
 import Foundation
 import ForgeKit
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` stash operations
-// (`SwiftGitCore/Repository+Stash.swift`). Each call authorizes the
+// (`GitKit/Repository+Stash.swift`). Each call authorizes the
 // working directory and isolates libgit2's global config view via
 // `withRepository`, then hands off.
 extension GitClient {

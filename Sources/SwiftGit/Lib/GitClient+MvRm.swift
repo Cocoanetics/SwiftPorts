@@ -1,6 +1,6 @@
 import Foundation
 import ShellKit
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` mv/rm operations.
 // The worktree paths each operation will touch are authorized here —

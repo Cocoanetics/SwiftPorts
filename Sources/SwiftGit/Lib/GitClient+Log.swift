@@ -1,8 +1,8 @@
 import Foundation
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` log operation
-// (`SwiftGitCore/Repository+Log.swift`).
+// (`GitKit/Repository+Log.swift`).
 extension GitClient {
 
     /// Walk commit history per `query`, newest first — `git log`.

@@ -1,7 +1,7 @@
 import Foundation
 import ForgeKit
 import ShellKit
-@_exported import SwiftGitCore
+@_exported import GitKit
 
 /// In-process libgit2-backed implementation of
 /// ``ForgeKit/GitClient`` (the protocol). The simple name `GitClient`
@@ -10,13 +10,13 @@ import ShellKit
 /// below to disambiguate.
 ///
 /// `GitClient` is the **sandbox-aware face** over the pure
-/// `SwiftGitCore.Repository` SDK: every operation authorizes the paths it
+/// `GitKit.Repository` SDK: every operation authorizes the paths it
 /// will touch through ``ShellKit/Shell/authorize(_:)``, bridges the
 /// sandbox environment to libgit2's process-global options
 /// (`Libgit2Sandboxing`), opens the repository, and delegates to the
 /// corresponding `Repository` method. The core SDK itself performs no
 /// gating and reads no ambient shell state — hosts that don't need a
-/// sandbox use `SwiftGitCore` directly.
+/// sandbox use `GitKit` directly.
 ///
 /// Drop-in replacement for `ProcessGitClient` that doesn't need a `git`
 /// binary on `PATH`. Works on macOS / iOS / tvOS / watchOS — anywhere
@@ -142,7 +142,7 @@ public struct GitClient: ForgeKit.GitClient {
     /// libgit2's process-global options, open the repository, and run
     /// `body` on it. Every `GitClient` operation funnels through here, so
     /// the per-op sandbox check and config isolation happen in exactly one
-    /// place — and the `SwiftGitCore` SDK below stays shell-free.
+    /// place — and the `GitKit` SDK below stays shell-free.
     internal func withRepository<T>(_ body: (Repository) throws -> T) async throws -> T {
         try await Shell.authorize(workingDirectory)
         // Tier-2 (#18): bridge sandbox env to libgit2's process-global

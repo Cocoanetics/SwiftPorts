@@ -1,8 +1,8 @@
 import Foundation
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` apply operation
-// (`SwiftGitCore/Repository+Apply.swift`).
+// (`GitKit/Repository+Apply.swift`).
 extension GitClient {
 
     /// Apply a unified-diff patch from `patchData` — `git apply`.

@@ -1,8 +1,8 @@
 import Foundation
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` checkout operations
-// (`SwiftGitCore/Repository+Checkout.swift`). Each call authorizes the
+// (`GitKit/Repository+Checkout.swift`). Each call authorizes the
 // working directory and isolates libgit2's global config view via
 // `withRepository`, then hands off.
 extension GitClient {

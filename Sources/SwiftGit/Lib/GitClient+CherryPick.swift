@@ -1,9 +1,9 @@
 import Foundation
 import ForgeKit
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` cherry-pick
-// operations (`SwiftGitCore/Repository+CherryPick.swift`). Each call
+// operations (`GitKit/Repository+CherryPick.swift`). Each call
 // authorizes the working directory and isolates libgit2's global config
 // view via `withRepository`, then hands off.
 extension GitClient {

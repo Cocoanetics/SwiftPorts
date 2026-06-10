@@ -1,6 +1,6 @@
 import Foundation
 import ShellKit
-import SwiftGitCore
+import GitKit
 
 extension GitClient {
 
@@ -8,7 +8,7 @@ extension GitClient {
     /// the directory if it doesn't exist, then runs `git_repository_init`
     /// with the requested options. Mirrors `git init` semantics.
     ///
-    /// Sandbox-aware face over ``SwiftGitCore/Repository/initialize(at:bare:initialBranch:reinit:)``.
+    /// Sandbox-aware face over ``GitKit/Repository/initialize(at:bare:initialBranch:reinit:)``.
     ///
     /// - Parameters:
     ///   - bare: Create a bare repo (`init --bare`) — no working tree.

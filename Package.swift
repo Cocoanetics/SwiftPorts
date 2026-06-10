@@ -292,7 +292,7 @@ let package = Package(
         // tracks libgit2's 1:1 (1.9.4 ⇒ libgit2 v1.9.4). This replaces our
         // former odrobnik/libgit2 fork pin; GitKit covers all five CI platforms.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "1.9.4"),
+                 from: "2.0.0"),
 
         // ShellKit owns the virtualised shell-environment surface
         // (IO sinks, Environment, Sandbox URL gate, NetworkConfig,
@@ -943,30 +943,20 @@ let package = Package(
         ),
 
         // MARK: SwiftGit umbrella (libgit2-backed GitClient + `git` CLI)
-        // Two layers (GitKit#3 design v2):
-        //   • SwiftGitCore — the pure libgit2 SDK: an explicit `Repository`
-        //     handle (open/clone/init → operate) with every operation as a
-        //     method. Depends ONLY on the libgit2 C module — no ShellKit, no
-        //     ForgeKit, no ambient state — so it can later move wholesale
-        //     into Cocoanetics/GitKit.
-        //   • SwiftGit — the sandbox-aware `GitClient` face: each operation
-        //     authorizes paths via `Shell.authorize`, bridges sandbox env to
-        //     libgit2's process-global options (`Libgit2Sandboxing`), opens a
-        //     `Repository`, and delegates. Public API unchanged.
-        .target(
-            name: "SwiftGitCore",
-            dependencies: [
-                .product(name: "CGitKit", package: "GitKit"),
-            ],
-            path: "Sources/SwiftGit/Core"
-        ),
+        // The pure libgit2 Swift SDK (the `Repository` handle + operations)
+        // lives upstream in Cocoanetics/GitKit (its `GitKit` product) —
+        // extracted from here via the staged refactor in GitKit#3. This repo
+        // keeps `SwiftGit`, the sandbox-aware `GitClient` face: each
+        // operation authorizes paths via `Shell.authorize`, bridges sandbox
+        // env to libgit2's process-global options (`Libgit2Sandboxing`),
+        // opens a `Repository`, and delegates.
         .target(
             name: "SwiftGit",
             dependencies: [
-                "SwiftGitCore",
                 "CLibgit2Shim",
                 "ForgeKit",
                 .product(name: "ShellKit", package: "ShellKit"),
+                .product(name: "GitKit", package: "GitKit"),
                 .product(name: "CGitKit", package: "GitKit"),
                 // For `git archive` — libarchive's writer is the
                 // backend so the operation runs in-process and works
@@ -993,7 +983,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SwiftGitTests",
-            dependencies: ["SwiftGit", "SwiftGitCore", "ForgeKit", "TarKit"]
+            dependencies: ["SwiftGit", "ForgeKit", "TarKit"]
         ),
         .testTarget(
             name: "GitCommandTests",

@@ -1,8 +1,8 @@
 import Foundation
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` tree listing
-// (`SwiftGitCore/Repository+Tree.swift`). The call authorizes the
+// (`GitKit/Repository+Tree.swift`). The call authorizes the
 // working directory and isolates libgit2's global config view via
 // `withRepository`, then hands off.
 extension GitClient {

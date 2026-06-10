@@ -1,7 +1,7 @@
 import Foundation
 import ShellKit
 import CGitKit
-import SwiftGitCore
+import GitKit
 
 // Selective imports — the libarchive wrapper module is named `Archive`
 // and its own `enum Archive` / `ArchiveFormat` / `ArchiveFilter` would

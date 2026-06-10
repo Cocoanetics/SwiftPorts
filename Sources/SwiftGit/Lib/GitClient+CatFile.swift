@@ -1,8 +1,8 @@
 import Foundation
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` cat-file operations
-// (`SwiftGitCore/Repository+CatFile.swift`).
+// (`GitKit/Repository+CatFile.swift`).
 extension GitClient {
 
     /// Look up a single object's kind and size — `git cat-file -t -s`.

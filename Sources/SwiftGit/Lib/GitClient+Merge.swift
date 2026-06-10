@@ -1,9 +1,9 @@
 import Foundation
 import ForgeKit
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` merge operation
-// (`SwiftGitCore/Repository+Merge.swift`). Each call authorizes the
+// (`GitKit/Repository+Merge.swift`). Each call authorizes the
 // working directory and isolates libgit2's global config view via
 // `withRepository`, then hands off. `pull` / `pullRebase` live here in
 // full: they compose other sandbox-aware GitClient operations (fetch +

@@ -1,8 +1,8 @@
 import Foundation
-import SwiftGitCore
+import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` status operation
-// (`SwiftGitCore/Repository+Status.swift`). The call authorizes the
+// (`GitKit/Repository+Status.swift`). The call authorizes the
 // working directory and isolates libgit2's global config view via
 // `withRepository`, then hands off.
 extension GitClient {
