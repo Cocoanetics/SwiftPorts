@@ -11,8 +11,10 @@
 // Windows is gated out for the same reason as the symlink-escape
 // test — paths and CRLF complications.
 //
-// The test runs both arms in one function (`.serialized`) so the
-// option block isn't already in a known-bad state from a prior test.
+// The suite is `.serialized`, and the leak arm restores libgit2's
+// defaults before reading — the option block is process-global, and
+// the default-secure test (deliberately) leaves it pinned to a
+// sandbox home.
 #if os(macOS)
 import Foundation
 import Testing
@@ -76,6 +78,13 @@ struct Tier2EnvBridgeTests {
               let hostEmail, !hostEmail.isEmpty else {
             return
         }
+
+        // libgit2's option block is process-global, and the preceding
+        // `.serialized` test deliberately leaves it pinned to a sandbox
+        // home (the default-secure guarantee it proves). Restore
+        // libgit2's defaults so this negative control observes the
+        // HOST config search path again.
+        try Libgit2Sandboxing.shared.runIsolated(nil) {}
 
         let leaked = readUserNameAtGlobalLevel(repoAt: repoDir)
         #expect(leaked == hostName,

@@ -272,27 +272,35 @@ let package = Package(
         .package(url: "https://github.com/jpsim/Yams",
                  from: "6.0.0"),
         // libarchive-backed multi-format archive library (tar, zip, 7z,
-        // cpio, xar, ISO9660, …) with gzip/bzip2/xz/zstd filters. The
-        // platform-narrowed gating from
-        // https://github.com/marcprux/swift-archive/pull/2 is now on
-        // upstream `master` but not yet in a tagged release — track the
-        // branch until v3.8.8 (or later) ships, then move to a `from:`
-        // version pin.
+        // cpio, xar, ISO9660, …) with gzip/bzip2/xz/zstd filters — backs
+        // the tar/zip CLI ports. Pinned to the latest commit of upstream's
+        // default (`swift`) branch — it carries the platform-narrowed
+        // gating from marcprux/swift-archive#2, which no tagged release
+        // contains yet. GitKit's `Archive` trait pins the SAME revision
+        // (the dependency graph must agree on one version of the package);
+        // move both to a `from:` pin when upstream tags the gating.
         .package(url: "https://github.com/marcprux/swift-archive",
-                 branch: "swift",
+                 revision: "60f478d10ae730c4faed643d3fcc746c07a7e7e5",
                  traits: [.defaults,
                           "GzipSupport",
                           "Bzip2Support",
                           "LZMASupport",
                           "ZstdSupport"]),
 
-        // libgit2, packaged for SwiftPM by Cocoanetics/GitKit: a pristine
-        // libgit2 submodule compiled directly, exposing the curated,
-        // Windows-safe C module `CGitKit` (the git2.h API). GitKit's version
-        // tracks libgit2's 1:1 (1.9.4 ⇒ libgit2 v1.9.4). This replaces our
-        // former odrobnik/libgit2 fork pin; GitKit covers all five CI platforms.
+        // Cocoanetics/GitKit: the libgit2 C library (pristine submodule,
+        // curated Windows-safe `CGitKit` module) plus the typed Swift SDK
+        // (`Repository` + operations) SwiftGit's GitClient composes. GitKit
+        // versions independently of libgit2 (2.x vendors libgit2 v1.9.4).
+        // The `Archive` trait turns on `Repository.archive` (libarchive via
+        // the revision-pinned swift-archive above), backing our `git
+        // archive` subcommand. Referenced by BRANCH, not version: enabling
+        // the trait activates GitKit's revision-pinned dep, and SwiftPM only
+        // permits that from a branch/revision reference (a stable-version
+        // package may not activate an unstable-version dependency — the
+        // `from: "2.0.0"` form works only with the trait off).
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.0.0"),
+                 branch: "main",
+                 traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
         // (IO sinks, Environment, Sandbox URL gate, NetworkConfig,
@@ -956,12 +964,11 @@ let package = Package(
                 "CLibgit2Shim",
                 "ForgeKit",
                 .product(name: "ShellKit", package: "ShellKit"),
+                // `git archive` rides GitKit's trait-gated
+                // `Repository.archive` (see the GitKit package entry's
+                // `Archive` trait) — no direct libarchive dependency here.
                 .product(name: "GitKit", package: "GitKit"),
                 .product(name: "CGitKit", package: "GitKit"),
-                // For `git archive` — libarchive's writer is the
-                // backend so the operation runs in-process and works
-                // under sandboxed iOS / tvOS / watchOS.
-                .product(name: "Archive", package: "swift-archive"),
             ],
             path: "Sources/SwiftGit/Lib"
         ),
