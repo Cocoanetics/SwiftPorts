@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import CGitKit
 @testable import SwiftGit
+@testable import SwiftGitCore
 
 @Suite("Credentials bridge")
 struct CredentialsTests {

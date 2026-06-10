@@ -943,9 +943,27 @@ let package = Package(
         ),
 
         // MARK: SwiftGit umbrella (libgit2-backed GitClient + `git` CLI)
+        // Two layers (GitKit#3 design v2):
+        //   • SwiftGitCore — the pure libgit2 SDK: an explicit `Repository`
+        //     handle (open/clone/init → operate) with every operation as a
+        //     method. Depends ONLY on the libgit2 C module — no ShellKit, no
+        //     ForgeKit, no ambient state — so it can later move wholesale
+        //     into Cocoanetics/GitKit.
+        //   • SwiftGit — the sandbox-aware `GitClient` face: each operation
+        //     authorizes paths via `Shell.authorize`, bridges sandbox env to
+        //     libgit2's process-global options (`Libgit2Sandboxing`), opens a
+        //     `Repository`, and delegates. Public API unchanged.
+        .target(
+            name: "SwiftGitCore",
+            dependencies: [
+                .product(name: "CGitKit", package: "GitKit"),
+            ],
+            path: "Sources/SwiftGit/Core"
+        ),
         .target(
             name: "SwiftGit",
             dependencies: [
+                "SwiftGitCore",
                 "CLibgit2Shim",
                 "ForgeKit",
                 .product(name: "ShellKit", package: "ShellKit"),
@@ -975,7 +993,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SwiftGitTests",
-            dependencies: ["SwiftGit", "ForgeKit", "TarKit"]
+            dependencies: ["SwiftGit", "SwiftGitCore", "ForgeKit", "TarKit"]
         ),
         .testTarget(
             name: "GitCommandTests",

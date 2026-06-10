@@ -1,6 +1,7 @@
 import Foundation
 import ShellKit
 import CGitKit
+import SwiftGitCore
 
 // Selective imports — the libarchive wrapper module is named `Archive`
 // and its own `enum Archive` / `ArchiveFormat` / `ArchiveFilter` would
@@ -73,7 +74,12 @@ extension GitClient {
     private func collectBlobEntries(
         treeish: String, prefix: String
     ) async throws -> WalkResult {
-        try await withRepository { repo in
+        // This operation stays wrapper-side (it depends on the Archive
+        // package, which the pure core deliberately doesn't) and works on
+        // the raw libgit2 handle through `Repository.pointer` — the same
+        // escape hatch any embedder gets.
+        try await withRepository { repository in
+            let repo: OpaquePointer? = repository.pointer
             var obj: OpaquePointer?
             try check(treeish.withCString { name in
                 git_revparse_single(&obj, repo, name)

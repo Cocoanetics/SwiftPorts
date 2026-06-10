@@ -1,6 +1,4 @@
 import Foundation
-import ForgeKit
-import ShellKit
 import CGitKit
 
 /// Real-git-compatible identity resolution for commit author + committer.
@@ -16,21 +14,23 @@ import CGitKit
 ///
 /// libgit2's `git_signature_default` only does step 5; the env-var path
 /// is what we add here for parity.
-enum SignatureResolver {
+public enum SignatureResolver {
 
-    enum Role { case author, committer }
+    public enum Role { case author, committer }
 
     /// Build a `git_signature` honoring env-var overrides. The returned
     /// pointer is owned by the caller and must be freed with
     /// `git_signature_free`.
     ///
     /// `override` lets the caller pin a name+email (e.g. `git commit
-    /// --author`); env DATE still applies if set.
-    static func resolve(
+    /// --author`); env DATE still applies if set. `env` defaults to the
+    /// process environment; an embedder that virtualises its environment
+    /// (e.g. a shell host) passes its own view instead.
+    public static func resolve(
         role: Role,
-        override: GitSignature? = nil,
+        override: Signature? = nil,
         repo: OpaquePointer?,
-        env: [String: String] = Shell.current.environment.variables
+        env: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> UnsafeMutablePointer<git_signature>? {
         let prefix = role == .author ? "GIT_AUTHOR" : "GIT_COMMITTER"
 

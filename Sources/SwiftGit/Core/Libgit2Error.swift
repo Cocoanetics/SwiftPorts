@@ -11,6 +11,12 @@ public struct Libgit2Error: Error, LocalizedError, Sendable {
     public let klass: Int32
     public let message: String
 
+    public init(code: Int32, klass: Int32, message: String) {
+        self.code = code
+        self.klass = klass
+        self.message = message
+    }
+
     public var errorDescription: String? {
         "libgit2 error (\(code)/\(klass)): \(message)"
     }
@@ -28,8 +34,12 @@ public struct Libgit2Error: Error, LocalizedError, Sendable {
 
 /// Throws ``Libgit2Error`` if `rc < 0`. Returns `rc` otherwise so the
 /// caller can use it (some libgit2 APIs return the count on success).
+///
+/// Public because ``Repository/pointer`` is a deliberate escape hatch:
+/// embedders calling raw `git_*` API through it want the same rc-to-error
+/// translation the SDK uses.
 @discardableResult
-func check(_ rc: Int32) throws -> Int32 {
+public func check(_ rc: Int32) throws -> Int32 {
     if rc < 0 { throw Libgit2Error.last(code: rc) }
     return rc
 }

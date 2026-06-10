@@ -1,6 +1,16 @@
 import Foundation
-import ShellKit
 import CGitKit
+
+/// Progress-output plumbing for the network operations
+/// (``Repository/clone(from:to:credentials:progress:)``, fetch, push).
+public enum GitProgress {
+    /// The default progress sink: the process's real standard error.
+    /// Embedders that virtualise IO (e.g. shell hosts) pass their own
+    /// sink to the operation instead.
+    public static let standardError: @Sendable (String) -> Void = { text in
+        FileHandle.standardError.write(Data(text.utf8))
+    }
+}
 
 /// Formats and emits `remote: …` / `Receiving objects: …` /
 /// `From <url>` / `<oldsha>..<newsha> <ref> -> <tracking>` lines to
@@ -17,8 +27,25 @@ struct ProgressReporter {
     var headerEmitted = false
     /// `From` (fetch) vs `To` (push) — the header verb.
     let direction: Direction
+    /// Where progress text goes. Defaults to the process's stderr; an
+    /// embedder (e.g. a shell host) injects its own sink to route the
+    /// output through its IO plumbing instead.
+    let output: @Sendable (String) -> Void
 
     enum Direction { case fetch, push }
+
+    init(
+        headerURL: String?,
+        direction: Direction,
+        output: @escaping @Sendable (String) -> Void = ProgressReporter.standardError
+    ) {
+        self.headerURL = headerURL
+        self.direction = direction
+        self.output = output
+    }
+
+    /// Default sink: the process's real standard error.
+    static let standardError = GitProgress.standardError
 
     /// Pending per-ref summary lines. We collect them inside the
     /// callbacks (which fire mid-operation) and flush them in the
@@ -54,10 +81,8 @@ struct ProgressReporter {
     /// header still emit.
     var suppressTransferProgress = false
 
-    static let stderr = Shell.current.stderr
-
-    static func write(_ s: String) {
-        stderr.write(Data(s.utf8))
+    func write(_ s: String) {
+        output(s)
     }
 
     /// Emit the `From <url>\n` / `To <url>\n` header on first call.
@@ -65,7 +90,7 @@ struct ProgressReporter {
         guard !headerEmitted, let url = headerURL else { return }
         headerEmitted = true
         let verb = direction == .fetch ? "From" : "To"
-        Self.write("\(verb) \(url)\n")
+        write("\(verb) \(url)\n")
     }
 
     /// True if `url` points at a local repo (file:// or a plain path
@@ -90,7 +115,7 @@ struct ProgressReporter {
         guard !refLines.isEmpty else { return }
         emitHeaderIfNeeded()
         for line in refLines {
-            Self.write(line + "\n")
+            write(line + "\n")
         }
         refLines.removeAll(keepingCapacity: false)
     }

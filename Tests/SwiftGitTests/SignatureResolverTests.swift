@@ -51,7 +51,7 @@ struct SignatureResolverTests {
         // Manually invoke the resolver (no shell-out for env scope).
         try await client.withRepository { repo in
             let sig = try SignatureResolver.resolve(
-                role: .author, repo: repo,
+                role: .author, repo: repo.pointer,
                 env: ["GIT_AUTHOR_NAME": "Override Person",
                       "GIT_AUTHOR_EMAIL": "over@example.com"])
             defer { _ = sig.flatMap { $0 } }
@@ -71,7 +71,7 @@ struct SignatureResolverTests {
         try await client.withRepository { repo in
             // Only email overridden; name should still come from config.
             let sig = try SignatureResolver.resolve(
-                role: .author, repo: repo,
+                role: .author, repo: repo.pointer,
                 env: ["GIT_AUTHOR_EMAIL": "just-email@example.com"])
             let name = sig.flatMap { $0.pointee.name.map { String(cString: $0) } }
             let email = sig.flatMap { $0.pointee.email.map { String(cString: $0) } }
@@ -99,7 +99,7 @@ struct SignatureResolverTests {
 
         try await client.withRepository { repo in
             let sig = try SignatureResolver.resolve(
-                role: .author, repo: repo,
+                role: .author, repo: repo.pointer,
                 env: ["GIT_AUTHOR_NAME": "Some Name",
                       "EMAIL": "envvar@example.com"])
             let email = sig.flatMap { $0.pointee.email.map { String(cString: $0) } }
@@ -115,7 +115,7 @@ struct SignatureResolverTests {
 
         try await client.withRepository { repo in
             let sig = try SignatureResolver.resolve(
-                role: .committer, repo: repo,
+                role: .committer, repo: repo.pointer,
                 env: ["GIT_COMMITTER_DATE": "1700000000 +0100"])
             let when = sig?.pointee.when.time ?? 0
             let off = sig?.pointee.when.offset ?? 0
@@ -133,7 +133,7 @@ struct SignatureResolverTests {
         try await client.withRepository { repo in
             // 2024-01-15 10:30:00 UTC → 1705314600.
             let sig = try SignatureResolver.resolve(
-                role: .committer, repo: repo,
+                role: .committer, repo: repo.pointer,
                 env: ["GIT_COMMITTER_DATE": "2024-01-15T10:30:00Z"])
             #expect(sig?.pointee.when.time == 1705314600)
             #expect(sig?.pointee.when.offset == 0)

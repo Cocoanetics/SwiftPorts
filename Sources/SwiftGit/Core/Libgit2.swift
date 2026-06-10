@@ -8,14 +8,17 @@ import CGitKit
 /// We intentionally never call `git_libgit2_shutdown()` — the library is
 /// meant to live for the duration of the process, and shutting down
 /// while another thread is mid-operation is unsafe.
-enum Libgit2 {
+public enum Libgit2 {
     private static let initialized: Bool = {
         let rc = git_libgit2_init()
         precondition(rc >= 0, "git_libgit2_init failed with \(rc)")
         return true
     }()
 
-    static func ensureInitialized() {
+    /// Public so hosts that poke libgit2's process-global state *before*
+    /// any `Repository` call (e.g. option bridges setting search paths)
+    /// can guarantee the library is initialized first.
+    public static func ensureInitialized() {
         _ = initialized
     }
 }

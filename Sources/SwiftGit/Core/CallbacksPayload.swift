@@ -110,9 +110,9 @@ private let combinedSidebandTrampoline: git_transport_message_cb = {
             // Flush whatever we accumulated, prefixing only if this is
             // a fresh line (i.e. the prior chunk ended at a terminator).
             if !box.reporter!.sidebandLineOpen {
-                ProgressReporter.write("remote: \(current)\(ch)")
+                box.reporter!.write("remote: \(current)\(ch)")
             } else {
-                ProgressReporter.write("\(current)\(ch)")
+                box.reporter!.write("\(current)\(ch)")
             }
             current = ""
             box.reporter!.sidebandLineOpen = false
@@ -122,9 +122,9 @@ private let combinedSidebandTrampoline: git_transport_message_cb = {
     }
     if !current.isEmpty {
         if !box.reporter!.sidebandLineOpen {
-            ProgressReporter.write("remote: \(current)")
+            box.reporter!.write("remote: \(current)")
         } else {
-            ProgressReporter.write(current)
+            box.reporter!.write(current)
         }
         box.reporter!.sidebandLineOpen = true
     }
@@ -147,9 +147,9 @@ private let combinedTransferTrampoline: git_indexer_progress_cb = {
             box.reporter!.lastTransferPct = pct
             let line = "Receiving objects: \(pct)% (\(received)/\(total))"
             if received == total {
-                ProgressReporter.write(line + ", done.\n")
+                box.reporter!.write(line + ", done.\n")
             } else {
-                ProgressReporter.write(line + "\r")
+                box.reporter!.write(line + "\r")
             }
         }
     }
@@ -162,9 +162,9 @@ private let combinedTransferTrampoline: git_indexer_progress_cb = {
             box.reporter!.lastDeltaPct = pct
             let line = "Resolving deltas: \(pct)% (\(indexedDeltas)/\(totalDeltas))"
             if indexedDeltas == totalDeltas {
-                ProgressReporter.write(line + ", done.\n")
+                box.reporter!.write(line + ", done.\n")
             } else {
-                ProgressReporter.write(line + "\r")
+                box.reporter!.write(line + "\r")
             }
         }
     }
@@ -238,9 +238,9 @@ private let combinedPackProgressTrampoline: git_packbuilder_progress = {
 
     let line = "\(label): \(pct)% (\(currentI)/\(totalI))"
     if currentI == totalI {
-        ProgressReporter.write(line + ", done.\n")
+        box.reporter!.write(line + ", done.\n")
     } else {
-        ProgressReporter.write(line + "\r")
+        box.reporter!.write(line + "\r")
     }
     return 0
 }
@@ -266,9 +266,9 @@ private let combinedPushTransferTrampoline: git_push_transfer_progress_cb = {
     let bytesStr = humanBytes(Int(bytes))
     let line = "Writing objects: \(pct)% (\(currentI)/\(totalI)), \(bytesStr)"
     if currentI == totalI {
-        ProgressReporter.write(line + ", done.\n")
+        box.reporter!.write(line + ", done.\n")
     } else {
-        ProgressReporter.write(line + "\r")
+        box.reporter!.write(line + "\r")
     }
     return 0
 }
