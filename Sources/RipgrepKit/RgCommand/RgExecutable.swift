@@ -10,16 +10,19 @@ import ShellKit
 /// drive the CLI behavior in-process.
 public enum RgExecutable {
 
-    /// `stdinIsReadable` decides the no-path default: search `stdin`
-    /// when true, walk the cwd when false. Defaults to the host
-    /// process's fd 0 (`TTY.isStdinReadable`); tests pass it
-    /// explicitly so the routing doesn't depend on the harness.
+    /// `stdinIsReadable` overrides the no-path stdin-vs-cwd routing:
+    /// search `stdin` when true, walk the cwd when false. `nil` (the
+    /// default) derives the answer from the execution context —
+    /// standalone asks the host process's fd 0, an embedded shell
+    /// asks the `stdin` binding itself; see `stdinLooksReadable`.
+    /// Tests pass it explicitly so the routing never depends on what
+    /// the harness bound to fd 0.
     @discardableResult
     public static func run(argv: [String],
                            stdin: InputSource,
                            stdout: OutputSink,
                            stderr: OutputSink,
-                           stdinIsReadable: Bool = TTY.isStdinReadable
+                           stdinIsReadable: Bool? = nil
     ) async throws -> Int32 {
         do {
             let parsed = try Parser.parse(argv)
@@ -43,15 +46,13 @@ public enum RgExecutable {
             }
 
             // Resolve roots — empty argv means cwd or stdin. Stdin
-            // wins only when it's actually readable input (pipe /
-            // file / socket); a terminal, a GUI or CI host's
-            // `/dev/null`, or a closed fd all mean "no stdin", and
-            // real rg walks the cwd there. Gating on `!isStdinTTY`
-            // read empty stdin in those environments and reported
-            // no matches (issue #65).
+            // wins only when it's actually attached input; "nothing
+            // there" means real rg walks the cwd. Gating on
+            // `!isStdinTTY` read empty stdin under GUI/CI hosts and
+            // reported no matches (issue #65).
             let resolvedRoots: [(URL, String)]
             if parsed.paths.isEmpty {
-                if stdinIsReadable {
+                if stdinIsReadable ?? stdinLooksReadable(stdin) {
                     resolvedRoots = []  // engine reads stdin
                 } else {
                     // Default-cwd search: real rg searches "./" but
@@ -106,6 +107,22 @@ public enum RgExecutable {
             stderr.write("rg: \(error)\n")
             return 2
         }
+    }
+
+    /// No-path routing default. Standalone — `Shell.current` is the
+    /// process-default shell — mirrors real rg's `is_readable_stdin()`
+    /// against fd 0: read a pipe/file/socket, walk the cwd on a
+    /// terminal, `/dev/null`, or a closed fd (issue #65). Embedded,
+    /// fd 0 of the host app says nothing about the shell's own
+    /// pipeline (an iBash `echo x | rg pat` must read the pipe even
+    /// though the app's fd 0 is a terminal), so the answer comes
+    /// from the binding itself: the canonical `.empty` means nothing
+    /// attached, anything else was bound on purpose.
+    private static func stdinLooksReadable(_ stdin: InputSource) -> Bool {
+        if Shell.current === Shell.processDefault {
+            return TTY.isStdinReadable
+        }
+        return !stdin.isCanonicalEmpty
     }
 
     /// `--files` mode — emit the list of files that would be searched,
