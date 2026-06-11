@@ -187,7 +187,11 @@ final class Session {
         do {
             try active.buffer.write(to: active.url, atomically: true, encoding: .utf8)
         } catch {
-            err("Error: unable to write \"\(active.url.path)\"\n")
+            // `active.url` is the resolved (host) location; fold it
+            // back to the script-visible spelling so a path-mapped
+            // sandbox doesn't leak the embedder's host layout on
+            // stderr (identity without a mapping — issue #66).
+            err("Error: unable to write \"\(Shell.displayPath(for: active.url))\"\n")
             exitCode = 1
         }
     }

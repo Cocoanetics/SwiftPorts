@@ -226,7 +226,7 @@ public enum Archive {
         do {
             writer = try ArchiveWriter(path: zipURL.path, format: .zip)
         } catch {
-            throw ZipKitError.archiveOpenFailed(zipURL.path)
+            throw ZipKitError.archiveOpenFailed(Shell.displayPath(for: zipURL))
         }
 
         var written: [Entry] = []
@@ -434,7 +434,7 @@ public enum Archive {
         do {
             return try ArchiveReader(path: url.path)
         } catch {
-            throw ZipKitError.archiveOpenFailed(url.path)
+            throw ZipKitError.archiveOpenFailed(Shell.displayPath(for: url))
         }
     }
 

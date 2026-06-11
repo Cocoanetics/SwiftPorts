@@ -1,4 +1,5 @@
 import Foundation
+import ShellKit
 
 public enum TarKitError: Error, LocalizedError, Sendable, Equatable {
     case archiveOpenFailed(String)
@@ -9,14 +10,18 @@ public enum TarKitError: Error, LocalizedError, Sendable, Equatable {
     /// is the only safe response for untrusted tarballs.
     case unsafeEntryPath(String)
 
+    // URL payloads are resolved (host) locations; the rendered message
+    // folds them back through `Shell.displayPath` so a path-mapped
+    // sandbox never sees the embedder's host layout on stderr
+    // (identity without a mapping — issue #66).
     public var errorDescription: String? {
         switch self {
         case .archiveOpenFailed(let path):
             return "tar: cannot open archive '\(path)'"
         case .writeFailed(let url, let underlying):
-            return "tar: cannot write '\(url.path)': \(underlying)"
+            return "tar: cannot write '\(Shell.displayPath(for: url))': \(underlying)"
         case .readFailed(let url, let underlying):
-            return "tar: cannot read '\(url.path)': \(underlying)"
+            return "tar: cannot read '\(Shell.displayPath(for: url))': \(underlying)"
         case .unsafeEntryPath(let path):
             return "tar: refusing to extract unsafe entry path '\(path)'"
         }

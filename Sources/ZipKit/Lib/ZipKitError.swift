@@ -1,4 +1,5 @@
 import Foundation
+import ShellKit
 
 public enum ZipKitError: Error, LocalizedError, Sendable {
     case archiveOpenFailed(String)
@@ -19,10 +20,14 @@ public enum ZipKitError: Error, LocalizedError, Sendable {
             return "CRC mismatch on \(entry): expected \(String(expected, radix: 16)), got \(String(actual, radix: 16))"
         case .entryNotFound(let name):
             return "No such entry in archive: \(name)"
+        // URL payloads are resolved (host) locations; fold them back
+        // through `Shell.displayPath` so a path-mapped sandbox never
+        // sees the embedder's host layout on stderr (identity without
+        // a mapping — issue #66).
         case .destinationExists(let url):
-            return "Destination already exists: \(url.path) (use --overwrite or --never-overwrite to choose)"
+            return "Destination already exists: \(Shell.displayPath(for: url)) (use --overwrite or --never-overwrite to choose)"
         case .writeFailed(let url, let underlying):
-            return "Couldn't write \(url.path): \(underlying)"
+            return "Couldn't write \(Shell.displayPath(for: url)): \(underlying)"
         case .unsafeEntryPath(let path):
             return "Refusing to extract unsafe entry path: \(path)"
         }

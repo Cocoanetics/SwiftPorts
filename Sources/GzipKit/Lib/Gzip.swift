@@ -142,7 +142,7 @@ public enum Gzip {
         try await Shell.authorize(target)
         if FileManager.default.fileExists(atPath: target.path) && !overwrite {
             throw GzipKitError.compressionFailed(
-                "'\(target.path)' already exists; pass overwrite: true to replace")
+                "'\(Shell.displayPath(for: target))' already exists; pass overwrite: true to replace")
         }
         let bytes = try Data(contentsOf: source)
         let compressed = try await compress(bytes)
@@ -171,7 +171,7 @@ public enum Gzip {
         try await Shell.authorize(target)
         if FileManager.default.fileExists(atPath: target.path) && !overwrite {
             throw GzipKitError.decompressionFailed(
-                "'\(target.path)' already exists; pass overwrite: true to replace")
+                "'\(Shell.displayPath(for: target))' already exists; pass overwrite: true to replace")
         }
         let bytes = try Data(contentsOf: source)
         let decompressed = try await decompress(bytes)

@@ -189,7 +189,7 @@ public enum Archive {
                 format: .tar,
                 filters: options.compression.libarchiveFilters)
         } catch {
-            throw TarKitError.archiveOpenFailed(url.path)
+            throw TarKitError.archiveOpenFailed(Shell.displayPath(for: url))
         }
 
         var written: [Entry] = []
@@ -323,7 +323,7 @@ public enum Archive {
         do {
             return try ArchiveReader(path: url.path)
         } catch {
-            throw TarKitError.archiveOpenFailed(url.path)
+            throw TarKitError.archiveOpenFailed(Shell.displayPath(for: url))
         }
     }
 

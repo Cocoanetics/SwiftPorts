@@ -145,7 +145,7 @@ public enum Zstd {
         try await Shell.authorize(target)
         if FileManager.default.fileExists(atPath: target.path) && !overwrite {
             throw ZstdKitError.compressionFailed(
-                "'\(target.path)' already exists; pass overwrite: true to replace")
+                "'\(Shell.displayPath(for: target))' already exists; pass overwrite: true to replace")
         }
         let bytes = try Data(contentsOf: source)
         let compressed = try await compress(bytes)
@@ -173,7 +173,7 @@ public enum Zstd {
         try await Shell.authorize(target)
         if FileManager.default.fileExists(atPath: target.path) && !overwrite {
             throw ZstdKitError.decompressionFailed(
-                "'\(target.path)' already exists; pass overwrite: true to replace")
+                "'\(Shell.displayPath(for: target))' already exists; pass overwrite: true to replace")
         }
         let bytes = try Data(contentsOf: source)
         let decompressed = try await decompress(bytes)
