@@ -44,8 +44,14 @@ public struct Repository: Codable, Sendable, Identifiable {
     public let networkCount: Int?
     public let subscribersCount: Int?
 
-    // `parent` and `source` are recursive `Repository` references on
-    // forks. Omitted here because Swift structs can't recursively
-    // contain themselves; reintroduce via a reference-typed wrapper
-    // (`final class`) when fork support actually lands.
+    /// The repository this fork was created from. Only present on
+    /// forks, and only in single-repo payloads (`GET /repos/…`), not
+    /// in lists. Boxed via ``Indirect`` because the reference is
+    /// recursive. For a fork of a fork, `parent` is the immediate
+    /// parent; nested values carry no `parent`/`source` of their own.
+    @Indirect public var parent: Repository?
+
+    /// The root of the fork network — differs from ``parent`` for a
+    /// fork of a fork. Same availability and boxing as ``parent``.
+    @Indirect public var source: Repository?
 }
