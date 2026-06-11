@@ -350,6 +350,41 @@ import Testing
         }
     }
 
+    @Test func absolutePathFoldsToVirtualUnderPathMapping() async throws {
+        // Under a path-mapped sandbox (SwiftBash --sandbox, #83) the
+        // shell's CWD is a VIRTUAL spelling; `Shell.resolve` /
+        // `Shell.currentDirectory` translate it to the mapped host
+        // dir for the walk, and `-a` output folds the host paths back
+        // so the embedder's disk layout never reaches the script.
+        let root = try makeTree(["found.txt": "x", "sub/inner.txt": "y"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mapping = PathMapping(mounts: [
+            .init(virtual: "/work", host: root.path)
+        ])
+        var env = Environment()
+        env.workingDirectory = "/work"
+        let shell = Shell(environment: env)
+        shell.sandbox = .confined(to: mapping, home: "/work")
+        let stdoutSink = OutputSink()
+        let stderrSink = OutputSink()
+        shell.stdout = stdoutSink
+        shell.stderr = stderrSink
+        let exit = try await Shell.$current.withValue(shell) {
+            try await FdExecutable.run(
+                argv: ["--color=never", "-a", "-t", "f"],
+                stdin: shell.stdin,
+                stdout: stdoutSink,
+                stderr: stderrSink)
+        }
+        stdoutSink.finish()
+        stderrSink.finish()
+        let stdout = await stdoutSink.readAllString()
+        #expect(exit == 0)
+        let lines = Set(stdout.split(separator: "\n").map(String.init))
+        #expect(lines == ["/work/found.txt", "/work/sub/inner.txt"])
+        #expect(!stdout.contains(root.path))
+    }
+
     @Test func stripCwdPrefix() async throws {
         let r = try await run(["--color=never", "--strip-cwd-prefix", "-t", "f"], in: [
             "a.txt": "x",

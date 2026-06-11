@@ -56,7 +56,13 @@ struct Printer {
     /// typed); `--absolute-path` and `--strip-cwd-prefix` override.
     private func path(for entry: Walker.Entry) -> String {
         if options.absolutePath {
-            return entry.url.standardizedFileURL.path
+            // `entry.url` is the I/O-facing URL — under a path-mapped
+            // sandbox that's the translated HOST path. Fold it back
+            // to the script-visible spelling before printing so the
+            // embedder's host layout doesn't leak (a no-op without a
+            // mapping).
+            return Shell.displayPath(
+                for: entry.url.standardizedFileURL.path)
         }
         var p = entry.displayPath
         if options.stripCwdPrefix && p.hasPrefix("./") {

@@ -208,7 +208,10 @@ enum Lz4Engine {
                 }
                 if verbose {
                     Shell.current.stderr.write(
-                        Data("\(file) -> \(result.path)\n".utf8))
+                        // Fold the resolved (host) output path back to the
+                        // script-visible spelling under a path-mapped
+                        // sandbox (a no-op otherwise).
+                        Data("\(file) -> \(Shell.displayPath(for: result))\n".utf8))
                 }
             }
         }

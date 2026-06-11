@@ -58,7 +58,10 @@ struct RevParse: AsyncParsableCommand {
             let trimmed = path.hasSuffix("/") && path.count > 1
                 ? String(path.dropLast())
                 : path
-            stdout.write(Data("\(trimmed)\n".utf8))
+            // libgit2 reports the HOST path; fold it back to the
+            // script-visible spelling under a path-mapped sandbox
+            // (a no-op otherwise).
+            stdout.write(Data("\(Shell.displayPath(for: trimmed))\n".utf8))
             return
         }
 
@@ -93,6 +96,9 @@ struct RevParse: AsyncParsableCommand {
             : path
         let cwd = Shell.currentDirectory.path
         if trimmed == "\(cwd)/.git" { return ".git" }
-        return trimmed
+        // Absolute fallback: libgit2 reports the HOST path; fold it
+        // back to the script-visible spelling under a path-mapped
+        // sandbox (a no-op otherwise).
+        return Shell.displayPath(for: trimmed)
     }
 }
