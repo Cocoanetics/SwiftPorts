@@ -31,7 +31,11 @@ struct GitInit: AsyncParsableCommand {
             bare: bare, initialBranch: initialBranch, reinit: true)
         // Real git prints the absolute .git directory path. We mirror
         // the style: "Initialized empty Git repository in /path/.git/".
+        // `dest` is the resolved HOST path; fold it back to the
+        // script-visible spelling under a path-mapped sandbox (a
+        // no-op otherwise).
         let suffix = bare ? "" : "/.git/"
-        Shell.print("Initialized empty Git repository in \(dest.path)\(suffix)")
+        Shell.print("Initialized empty Git repository in "
+            + Shell.displayPath(for: dest) + suffix)
     }
 }
