@@ -1,0 +1,93 @@
+[
+  {
+    "url": "https://api.github.com/repos/cli/cli/pulls/comments/10",
+    "pull_request_review_id": 80,
+    "id": 10,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDEw",
+    "diff_hunk": "@@ -16,33 +16,40 @@ func main() {\n-\tfmt.Println(\"hi\")\n+\tfmt.Println(\"hello\")",
+    "path": "cmd/gh/main.go",
+    "position": 1,
+    "original_position": 4,
+    "commit_id": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+    "original_commit_id": "9c48853fa3dc5c1c3d6f1f1cd1f2743e72652840",
+    "user": {
+      "login": "vilmibm",
+      "id": 98482,
+      "node_id": "MDQ6VXNlcn98482=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/98482?v=4",
+      "html_url": "https://github.com/vilmibm",
+      "url": "https://api.github.com/users/vilmibm",
+      "type": "User",
+      "site_admin": false
+    },
+    "body": "Use the greeting constant here.",
+    "created_at": "2020-01-13T16:00:49Z",
+    "updated_at": "2020-01-13T16:00:49Z",
+    "html_url": "https://github.com/cli/cli/pull/1#discussion_r10",
+    "pull_request_url": "https://api.github.com/repos/cli/cli/pulls/1",
+    "author_association": "MEMBER",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/cli/cli/pulls/comments/10"
+      },
+      "html": {
+        "href": "https://github.com/cli/cli/pull/1#discussion_r10"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/cli/cli/pulls/1"
+      }
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 22,
+    "original_line": 22,
+    "side": "RIGHT",
+    "subject_type": "line",
+    "reactions": {
+      "url": "https://api.github.com/repos/cli/cli/pulls/comments/10/reactions",
+      "total_count": 1,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    }
+  },
+  {
+    "url": "https://api.github.com/repos/cli/cli/pulls/comments/11",
+    "pull_request_review_id": 81,
+    "id": 11,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDEx",
+    "diff_hunk": "@@ -16,33 +16,40 @@ func main() {\n-\tfmt.Println(\"hi\")\n+\tfmt.Println(\"hello\")",
+    "path": "cmd/gh/main.go",
+    "position": null,
+    "original_position": 4,
+    "commit_id": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+    "original_commit_id": "9c48853fa3dc5c1c3d6f1f1cd1f2743e72652840",
+    "in_reply_to_id": 10,
+    "user": {
+      "login": "mislav",
+      "id": 887,
+      "node_id": "MDQ6VXNlcn887=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/887?v=4",
+      "html_url": "https://github.com/mislav",
+      "url": "https://api.github.com/users/mislav",
+      "type": "User",
+      "site_admin": false
+    },
+    "body": "Agreed \u2014 and please gofmt.",
+    "created_at": "2020-01-14T09:00:00Z",
+    "updated_at": "2020-01-14T09:01:30Z",
+    "html_url": "https://github.com/cli/cli/pull/1#discussion_r11",
+    "pull_request_url": "https://api.github.com/repos/cli/cli/pulls/1",
+    "author_association": "CONTRIBUTOR",
+    "line": null,
+    "original_line": 22,
+    "side": "RIGHT",
+    "subject_type": "line"
+  }
+]

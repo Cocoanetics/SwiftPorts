@@ -1,0 +1,72 @@
+[
+  {
+    "id": 80,
+    "node_id": "MDE3OlB1bGxSZXF1ZXN0UmV2aWV3ODA=",
+    "user": {
+      "login": "vilmibm",
+      "id": 98482,
+      "node_id": "MDQ6VXNlcn98482=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/98482?v=4",
+      "html_url": "https://github.com/vilmibm",
+      "url": "https://api.github.com/users/vilmibm",
+      "type": "User",
+      "site_admin": false
+    },
+    "body": "Looks great, one nit inline.",
+    "state": "APPROVED",
+    "html_url": "https://github.com/cli/cli/pull/1#pullrequestreview-80",
+    "pull_request_url": "https://api.github.com/repos/cli/cli/pulls/1",
+    "author_association": "MEMBER",
+    "_links": {
+      "html": {
+        "href": "https://github.com/cli/cli/pull/1#pullrequestreview-80"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/cli/cli/pulls/1"
+      }
+    },
+    "submitted_at": "2020-01-13T17:43:43Z",
+    "commit_id": "ecdd80bb57125d7ba9641ffaa4d7d2c19d3f3091"
+  },
+  {
+    "id": 81,
+    "node_id": "MDE3OlB1bGxSZXF1ZXN0UmV2aWV3ODE=",
+    "user": {
+      "login": "mislav",
+      "id": 887,
+      "node_id": "MDQ6VXNlcn887=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/887?v=4",
+      "html_url": "https://github.com/mislav",
+      "url": "https://api.github.com/users/mislav",
+      "type": "User",
+      "site_admin": false
+    },
+    "body": "",
+    "state": "CHANGES_REQUESTED",
+    "html_url": "https://github.com/cli/cli/pull/1#pullrequestreview-81",
+    "pull_request_url": "https://api.github.com/repos/cli/cli/pulls/1",
+    "author_association": "CONTRIBUTOR",
+    "submitted_at": "2020-01-14T09:05:11Z",
+    "commit_id": "ecdd80bb57125d7ba9641ffaa4d7d2c19d3f3091"
+  },
+  {
+    "id": 82,
+    "node_id": "MDE3OlB1bGxSZXF1ZXN0UmV2aWV3ODI=",
+    "user": {
+      "login": "octocat",
+      "id": 583231,
+      "node_id": "MDQ6VXNlcn583231=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/583231?v=4",
+      "html_url": "https://github.com/octocat",
+      "url": "https://api.github.com/users/octocat",
+      "type": "User",
+      "site_admin": false
+    },
+    "body": "",
+    "state": "PENDING",
+    "html_url": "https://github.com/cli/cli/pull/1#pullrequestreview-82",
+    "pull_request_url": "https://api.github.com/repos/cli/cli/pulls/1",
+    "author_association": "NONE",
+    "commit_id": null
+  }
+]
