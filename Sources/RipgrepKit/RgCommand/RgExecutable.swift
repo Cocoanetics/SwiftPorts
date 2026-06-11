@@ -10,11 +10,17 @@ import ShellKit
 /// drive the CLI behavior in-process.
 public enum RgExecutable {
 
+    /// `stdinIsReadable` decides the no-path default: search `stdin`
+    /// when true, walk the cwd when false. Defaults to the host
+    /// process's fd 0 (`TTY.isStdinReadable`); tests pass it
+    /// explicitly so the routing doesn't depend on the harness.
     @discardableResult
     public static func run(argv: [String],
                            stdin: InputSource,
                            stdout: OutputSink,
-                           stderr: OutputSink) async throws -> Int32 {
+                           stderr: OutputSink,
+                           stdinIsReadable: Bool = TTY.isStdinReadable
+    ) async throws -> Int32 {
         do {
             let parsed = try Parser.parse(argv)
 
@@ -36,16 +42,23 @@ public enum RgExecutable {
                 break
             }
 
-            // Resolve roots — empty argv means cwd or stdin.
+            // Resolve roots — empty argv means cwd or stdin. Stdin
+            // wins only when it's actually readable input (pipe /
+            // file / socket); a terminal, a GUI or CI host's
+            // `/dev/null`, or a closed fd all mean "no stdin", and
+            // real rg walks the cwd there. Gating on `!isStdinTTY`
+            // read empty stdin in those environments and reported
+            // no matches (issue #65).
             let resolvedRoots: [(URL, String)]
             if parsed.paths.isEmpty {
-                let stdinAttached = !TTY.isStdinTTY
-                if stdinAttached {
+                if stdinIsReadable {
                     resolvedRoots = []  // engine reads stdin
                 } else {
-                    // Default-cwd search uses "./<path>" as the
-                    // display shape, mirroring real rg.
-                    resolvedRoots = [(Shell.currentDirectory, "./")]
+                    // Default-cwd search: real rg searches "./" but
+                    // strips the prefix for display (`a.txt`, not
+                    // `./a.txt`); root display "." gives the Walker
+                    // the same shape.
+                    resolvedRoots = [(Shell.currentDirectory, ".")]
                 }
             } else {
                 resolvedRoots = parsed.paths.map { p -> (URL, String) in
@@ -102,7 +115,7 @@ public enum RgExecutable {
         stdout: OutputSink
     ) throws -> Int32 {
         let roots: [Walker.Root] = parsed.paths.isEmpty
-            ? [Walker.Root(url: Shell.currentDirectory, display: "./")]
+            ? [Walker.Root(url: Shell.currentDirectory, display: ".")]
             : parsed.paths.map { Walker.Root(url: Shell.resolve($0), display: $0) }
         let walker = Walker(options: parsed.config.walker)
         var count = 0

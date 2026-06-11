@@ -8,6 +8,8 @@ import Glibc
 import Musl
 #elseif canImport(Android)
 import Android
+#elseif os(Windows)
+import WinSDK
 #endif
 
 /// Lightweight TTY + colour-capability detection. Mirrors what gh does
@@ -57,6 +59,45 @@ public enum TTY {
         return _isatty(0) != 0
 #else
         return isatty(0) != 0
+#endif
+    }
+
+    /// True when stdin is connected to input worth *reading* — a
+    /// regular file, FIFO/pipe, or (Unix) socket — as opposed to an
+    /// interactive terminal or a character device like `/dev/null`.
+    ///
+    /// Mirrors ripgrep's `is_readable_stdin()`: tools that treat "no
+    /// path argument" as "search the cwd" gate the stdin-vs-walk
+    /// decision on this, not on `!isStdinTTY` — a GUI host or CI
+    /// harness hands its children `/dev/null` (not a TTY, but not
+    /// readable input either), and real rg walks the cwd there.
+    /// Detection errors mean "not readable": when in doubt, walk —
+    /// that also keeps a closed fd 0 out of the stdin-reading path.
+    public static var isStdinReadable: Bool {
+#if os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
+        // No terminal — and fd 0 of the host process tells an embedded
+        // shell nothing about its own pipeline. Walk-the-cwd is the
+        // only sane default; an embedder that pipes into a command
+        // does so through the bound shell's `InputSource`, not fd 0.
+        return false
+#elseif os(Windows)
+        // Upstream (via winapi_util) asks GetFileType: a disk file or
+        // a pipe is readable input; console (FILE_TYPE_CHAR) is not.
+        if _isatty(0) != 0 { return false }
+        guard let handle = GetStdHandle(STD_INPUT_HANDLE),
+              handle != INVALID_HANDLE_VALUE else { return false }
+        let type = GetFileType(handle)
+        return type == DWORD(FILE_TYPE_DISK) || type == DWORD(FILE_TYPE_PIPE)
+#else
+        if isatty(0) != 0 { return false }
+        var status = stat()
+        guard fstat(0, &status) == 0 else { return false }
+        switch status.st_mode & S_IFMT {
+        case S_IFREG, S_IFIFO, S_IFSOCK:
+            return true
+        default:
+            return false
+        }
 #endif
     }
 
