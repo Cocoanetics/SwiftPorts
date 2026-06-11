@@ -47,6 +47,15 @@ jobs:
         run: swift build --build-tests -v
       - name: Test (macOS)
         run: swift test -v --skip-build --no-parallel
+      - name: Smoke-test standalone argv handling (macOS)
+        # The standalone binaries read argv through `Shell.arguments`
+        # ($@ semantics); the unit suites never exercise that seam. A
+        # double-drop there made gh ignore its first real argument —
+        # one --version invocation catches total argv-deafness
+        # (issue #69).
+        run: |
+          swift build --product gh
+          .build/debug/gh --version
       - name: Test engine traits FTS5 + SQLiteVec (macOS)
         # Build the SQLite subgraph once with both opt-in engine traits and run
         # their on-state proofs: fullTextSearchFTS5 (#if FTS5 — MATCH / bm25) and
@@ -103,6 +112,12 @@ jobs:
         run: swift build --build-tests -v
       - name: Test (Linux)
         run: swift test -v --skip-build --no-parallel
+      - name: Smoke-test standalone argv handling (Linux)
+        # Same seam as the macOS smoke: `Shell.arguments` ($@
+        # semantics) feeding a standalone entry point (issue #69).
+        run: |
+          swift build --product gh
+          .build/debug/gh --version
       - name: Test engine traits FTS5 + SQLiteVec (Linux)
         # One rebuild with both engine traits: validates FTS5 full-text search
         # and the sqlite-vec amalgamation compile + KNN on Linux. The default

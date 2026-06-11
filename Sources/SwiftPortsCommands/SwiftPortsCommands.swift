@@ -39,7 +39,12 @@ public enum SwiftPortsCommands {
         var commands: [Command] = [
             // JSON processor + forge CLIs (each with its own subcommand tree).
             Shell.parsableCommand(Jq.self),
-            Shell.parsableCommand(GhCommand.self),
+            // gh rides an argv preprocessor: the bare `--json` rewrite
+            // must hold on the embedded path too, where the standalone
+            // entry (`GhCommand.main()`, which applies it) never runs.
+            ArgvRewritingCommand(
+                base: Shell.parsableCommand(GhCommand.self),
+                rewrite: GhCommand.preprocess),
             Shell.parsableCommand(GlabCommand.self),
             Shell.parsableCommand(GitCommand.self),
             // search / find.
@@ -82,5 +87,26 @@ public enum SwiftPortsCommands {
         #endif
 
         return commands
+    }
+}
+
+/// A ``Command`` decorator that rewrites the argument portion of argv
+/// (everything after `argv[0]`, which stays the command name) before
+/// delegating to the wrapped bridge. Lets a port share one argv
+/// affordance — e.g. gh's bare `--json` rewrite — between its
+/// standalone `main()` and its embedded face, instead of the fix
+/// living only in the entry point embedders never run.
+private struct ArgvRewritingCommand: Command {
+    let base: Command
+    let rewrite: @Sendable ([String]) -> [String]
+
+    var name: String { base.name }
+
+    func run(_ argv: [String]) async throws -> ExitStatus {
+        guard let commandName = argv.first else {
+            return try await base.run(argv)
+        }
+        return try await base.run(
+            [commandName] + rewrite(Array(argv.dropFirst())))
     }
 }
