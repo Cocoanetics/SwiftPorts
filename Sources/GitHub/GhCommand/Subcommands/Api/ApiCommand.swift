@@ -102,9 +102,14 @@ struct ApiCommand: AsyncParsableCommand {
 
         if includeHeaders {
             // The preamble carries its own upstream-exact line
-            // endings (`\n` status line, `\r\n` header lines).
+            // endings (`\n` status line, `\r\n` header lines). When
+            // the transport doesn't report the negotiated protocol
+            // (corelibs never fires URLSessionTaskMetrics), assume
+            // HTTP/2 — what GitHub negotiates with both upstream gh
+            // and URLSession.
             Shell.print(
                 Self.formatIncludeHeaders(
+                    proto: response.httpVersion ?? "HTTP/2.0",
                     status: response.status,
                     headerFields: response.headerFields),
                 terminator: "")

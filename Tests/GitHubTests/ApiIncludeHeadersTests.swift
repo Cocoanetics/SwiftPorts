@@ -59,7 +59,7 @@ import Testing
         fields[HTTPField.Name("content-type")!] = "application/json; charset=utf-8"
         fields[HTTPField.Name("x-ratelimit-limit")!] = "5000"
         fields[HTTPField.Name("server")!] = "github.com"
-        let out = ApiCommand.formatIncludeHeaders(status: 200, headerFields: fields)
+        let out = ApiCommand.formatIncludeHeaders(proto: "HTTP/2.0", status: 200, headerFields: fields)
         // The status line ends \n; every header line and the closing
         // blank line end \r\n — gh writes exactly these bytes.
         #expect(out == "HTTP/2.0 200 OK\n"
@@ -75,7 +75,7 @@ import Testing
         fields[HTTPField.Name("vary")!] = "Accept"
         fields[HTTPField.Name("access-control-allow-origin")!] = "*"
         fields[HTTPField.Name("date")!] = "Fri, 12 Jun 2026 07:36:41 GMT"
-        let out = ApiCommand.formatIncludeHeaders(status: 200, headerFields: fields)
+        let out = ApiCommand.formatIncludeHeaders(proto: "HTTP/2.0", status: 200, headerFields: fields)
         #expect(out == "HTTP/2.0 200 OK\n"
             + "Access-Control-Allow-Origin: *\r\n"
             + "Date: Fri, 12 Jun 2026 07:36:41 GMT\r\n"
@@ -90,7 +90,7 @@ import Testing
         var fields = HTTPFields()
         fields[HTTPField.Name("status")!] = "200 OK"
         fields[HTTPField.Name("server")!] = "github.com"
-        let out = ApiCommand.formatIncludeHeaders(status: 200, headerFields: fields)
+        let out = ApiCommand.formatIncludeHeaders(proto: "HTTP/2.0", status: 200, headerFields: fields)
         #expect(out == "HTTP/2.0 200 OK\nServer: github.com\r\n\r\n")
     }
 
@@ -98,7 +98,7 @@ import Testing
         var fields = HTTPFields()
         fields.append(HTTPField(name: HTTPField.Name("vary")!, value: "Accept"))
         fields.append(HTTPField(name: HTTPField.Name("vary")!, value: "Accept-Encoding"))
-        let out = ApiCommand.formatIncludeHeaders(status: 200, headerFields: fields)
+        let out = ApiCommand.formatIncludeHeaders(proto: "HTTP/2.0", status: 200, headerFields: fields)
         #expect(out.contains("Vary: Accept, Accept-Encoding\r\n"))
     }
 
@@ -106,8 +106,28 @@ import Testing
         // Go synthesizes `Status = "<code> " + StatusText(code)`; for
         // unknown codes the text is empty and gh prints the trailing
         // space.
-        let out = ApiCommand.formatIncludeHeaders(status: 599, headerFields: [:])
+        let out = ApiCommand.formatIncludeHeaders(proto: "HTTP/2.0", status: 599, headerFields: [:])
         #expect(out == "HTTP/2.0 599 \n\r\n")
+    }
+
+    @Test func statusLineShowsNegotiatedProtocol() {
+        // A GitHub Enterprise host may only negotiate HTTP/1.1;
+        // upstream prints the real `resp.Proto`, so the renderer
+        // takes it as input rather than assuming h2.
+        let out = ApiCommand.formatIncludeHeaders(proto: "HTTP/1.1", status: 200, headerFields: [:])
+        #expect(out == "HTTP/1.1 200 OK\n\r\n")
+    }
+
+    @Test func protoTokenMapsALPNNamesToGoForm() {
+        // URLSessionTaskMetrics reports ALPN-style names; gh prints
+        // Go's resp.Proto tokens.
+        #expect(APIClient.protoToken(fromNetworkProtocolName: "h2") == "HTTP/2.0")
+        #expect(APIClient.protoToken(fromNetworkProtocolName: "h2c") == "HTTP/2.0")
+        #expect(APIClient.protoToken(fromNetworkProtocolName: "http/1.1") == "HTTP/1.1")
+        #expect(APIClient.protoToken(fromNetworkProtocolName: "http/1.0") == "HTTP/1.0")
+        #expect(APIClient.protoToken(fromNetworkProtocolName: "h3") == "HTTP/3.0")
+        #expect(APIClient.protoToken(fromNetworkProtocolName: "spdy/3") == nil)
+        #expect(APIClient.protoToken(fromNetworkProtocolName: nil) == nil)
     }
 
     // MARK: transparent-decompression header scrub

@@ -10,25 +10,24 @@ extension ApiCommand {
     /// header, and a blank separator line.
     ///
     /// Exactly the bytes upstream writes:
-    /// - `HTTP/2.0 <code> <text>\n`. Go's net/http synthesizes the
+    /// - `<proto> <code> <text>\n`. Go's net/http synthesizes the
     ///   status for HTTP/2 responses as `"<code> " + StatusText(code)`
     ///   (the wire carries no reason phrase) and gh prints
-    ///   `resp.Proto resp.Status`. URLSession doesn't expose the
-    ///   negotiated protocol version; GitHub negotiates HTTP/2 with
-    ///   both clients, so the proto token is fixed. Unknown codes
-    ///   keep Go's trailing space (`HTTP/2.0 599 `).
+    ///   `resp.Proto resp.Status`. `proto` is the negotiated
+    ///   protocol in Go's form (`HTTP/2.0`, `HTTP/1.1`). Unknown
+    ///   codes keep Go's trailing space (`HTTP/2.0 599 `).
     /// - one `Name: value\r\n` line per header — names in Go's
     ///   canonical-MIME form, ASCII-sorted, repeated fields joined
     ///   with ", ", the legacy `Status` header skipped.
     /// - a closing `\r\n`.
-    static func formatIncludeHeaders(status: Int, headerFields: HTTPFields) -> String {
+    static func formatIncludeHeaders(proto: String, status: Int, headerFields: HTTPFields) -> String {
         var grouped: [String: [String]] = [:]
         for field in headerFields {
             grouped[canonicalHeaderName(field.name.rawName), default: []].append(field.value)
         }
         grouped["Status"] = nil
 
-        var out = "HTTP/2.0 \(status) \(statusText(status))\n"
+        var out = "\(proto) \(status) \(statusText(status))\n"
         for name in grouped.keys.sorted() {
             out += "\(name): \(grouped[name]!.joined(separator: ", "))\r\n"
         }

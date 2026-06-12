@@ -173,11 +173,12 @@ public actor APIClient {
         logger.debug("HTTP \(method.rawValue) \(url.absoluteString)")
 
         let (data, response): (Data, HTTPResponse)
+        let metrics = TaskMetricsCollector()
         do {
             if let body {
-                (data, response) = try await session.upload(for: request, from: body)
+                (data, response) = try await session.upload(for: request, from: body, delegate: metrics)
             } else {
-                (data, response) = try await session.data(for: request)
+                (data, response) = try await session.data(for: request, delegate: metrics)
             }
         } catch {
             throw APIError.transport(underlying: error)
@@ -209,11 +210,26 @@ public actor APIClient {
             contentType: contentType,
             oauthScopes: scopes,
             headerFields: Self.scrubbedHeaderFields(response.headerFields),
+            httpVersion: Self.protoToken(fromNetworkProtocolName: metrics.protocolName),
             url: url
         )
 
         try checkStatus(apiResponse)
         return apiResponse
+    }
+
+    /// Map `URLSessionTaskMetrics`' ALPN-style protocol name to Go's
+    /// `resp.Proto` form — what gh prints in the `--include` status
+    /// line. nil when the transport didn't report one (or reported
+    /// something Go has no token for).
+    static func protoToken(fromNetworkProtocolName name: String?) -> String? {
+        switch name {
+        case "h2", "h2c": return "HTTP/2.0"
+        case "http/1.1": return "HTTP/1.1"
+        case "http/1.0": return "HTTP/1.0"
+        case "h3": return "HTTP/3.0"
+        default: return nil
+        }
     }
 
     /// Drop the transfer headers that no longer describe `body` once
@@ -267,6 +283,38 @@ public actor APIClient {
         } catch {
             throw APIError.decoding(underlying: error, url: r.url)
         }
+    }
+}
+
+// MARK: Task metrics
+
+/// Captures the negotiated protocol from `URLSessionTaskMetrics` so
+/// `gh api --include` can print the real `resp.Proto` like upstream
+/// (e.g. a GitHub Enterprise host that only speaks HTTP/1.1). On
+/// Darwin the callback fires per task; corelibs-foundation declares
+/// it but never invokes it, so on Linux the value stays nil and
+/// callers fall back.
+private final class TaskMetricsCollector: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var name: String?
+
+    var protocolName: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return name
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didFinishCollecting metrics: URLSessionTaskMetrics
+    ) {
+        // The last transaction is the one that produced the response
+        // (earlier entries are redirects).
+        let reported = metrics.transactionMetrics.last?.networkProtocolName
+        lock.lock()
+        name = reported
+        lock.unlock()
     }
 }
 

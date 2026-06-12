@@ -17,6 +17,11 @@ public struct APIResponse: Sendable {
     /// stopped describing `body` after transparent decompression are
     /// already scrubbed (see `APIClient.scrubbedHeaderFields`).
     public let headerFields: HTTPFields
+    /// Negotiated protocol in Go's `resp.Proto` form (`HTTP/2.0`,
+    /// `HTTP/1.1`). nil when the transport doesn't report it —
+    /// corelibs-foundation never fires `URLSessionTaskMetrics`, and
+    /// mocked sessions may not either.
+    public let httpVersion: String?
     public let url: URL
 
     public init(
@@ -28,6 +33,7 @@ public struct APIResponse: Sendable {
         contentType: String?,
         oauthScopes: [String]? = nil,
         headerFields: HTTPFields = [:],
+        httpVersion: String? = nil,
         url: URL
     ) {
         self.status = status
@@ -38,6 +44,7 @@ public struct APIResponse: Sendable {
         self.contentType = contentType
         self.oauthScopes = oauthScopes
         self.headerFields = headerFields
+        self.httpVersion = httpVersion
         self.url = url
     }
 }
