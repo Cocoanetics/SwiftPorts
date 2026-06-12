@@ -53,12 +53,44 @@ import Testing
     }
 
     @Test func arrayConstructionAndArithmetic() throws {
-        // evalString mirrors jq's -r: strings come back unquoted,
-        // non-strings get the default pretty formatting.
+        // evalString mirrors `gh api --jq`: strings come back
+        // unquoted (-r), non-strings as compact single-line JSON.
         let out = try Jq.evalString(
             filter: "[.[] * 2]",
             on: Data("[1,2,3]".utf8))
-        #expect(out == ["[\n  2,\n  4,\n  6\n]"])
+        #expect(out == ["[2,4,6]"])
+    }
+
+    @Test func evalStringEmitsCompactObjectsWithSortedKeys() throws {
+        // gh embeds gojq, which does not preserve object key order —
+        // it sorts keys on output. Pinned against gh 2.89.0:
+        // `gh api rate_limit --jq .resources.core` prints exactly
+        // this shape (input order is limit,used,remaining,reset).
+        let input = Data(
+            #"{"resources":{"core":{"limit":5000,"used":35,"remaining":4965,"reset":1781252070}}}"#
+                .utf8)
+        let out = try Jq.evalString(filter: ".resources.core", on: input)
+        #expect(out == [#"{"limit":5000,"remaining":4965,"reset":1781252070,"used":35}"#])
+    }
+
+    @Test func evalStringSortsObjectKeysRecursively() throws {
+        // gojq's sort applies at every nesting level, verified live:
+        // `--jq '{outer: {b: 2, a: .resources.core}}'` → keys a,b and
+        // sorted keys inside a.
+        let input = Data(#"{"z":{"b":1,"a":{"d":4,"c":3}}}"#.utf8)
+        let out = try Jq.evalString(filter: "{outer: .z}", on: input)
+        #expect(out == [#"{"outer":{"a":{"c":3,"d":4},"b":1}}"#])
+    }
+
+    @Test func evalStringKeepsScalarFormatting() throws {
+        // Pinned against gh 2.89.0: numbers print bare, null/true as
+        // JSON literals, strings raw — one result per line.
+        let input = Data(#"{"rate":{"limit":5000}}"#.utf8)
+        #expect(try Jq.evalString(filter: ".rate.limit", on: input) == ["5000"])
+        #expect(try Jq.evalString(filter: "[.rate.limit, null, true]", on: input)
+            == ["[5000,null,true]"])
+        #expect(try Jq.evalString(filter: #""str-" + (.rate.limit|tostring)"#, on: input)
+            == ["str-5000"])
     }
 
     @Test func lengthBuiltin() throws {

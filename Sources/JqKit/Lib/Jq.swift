@@ -29,11 +29,14 @@ public enum Jq {
     }
 
     /// Apply `filter` to `json` and return raw string results — one
-    /// per output value. Strings are unquoted (jq's `-r` mode);
-    /// non-strings are formatted as compact JSON.
+    /// per output value, the way `gh api --jq` prints them. Strings
+    /// are unquoted (jq's `-r` mode); everything else is compact
+    /// single-line JSON with object keys sorted recursively, matching
+    /// the gojq engine upstream gh embeds (gojq does not preserve
+    /// object key order — it sorts on output).
     public static func evalString(filter: String, on json: Data) throws -> [String] {
         let results = try evalValues(filter: filter, on: json)
-        let opts = JqFormatter.Options(raw: true)
+        let opts = JqFormatter.Options(compact: true, raw: true, sortKeys: true)
         return results.map { JqFormatter.format($0, options: opts) }
     }
 

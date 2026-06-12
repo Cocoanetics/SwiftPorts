@@ -108,6 +108,33 @@ struct HTTPMockedNetworkTests {
             #expect(items.count == 2)
             #expect(items.map(\.id) == [1, 2])
         }
+
+        @Test func rawSurfacesCompleteHeaderFields() async throws {
+            // `gh api --include` renders every response header, so
+            // APIResponse must carry the full set — not just the
+            // handful of parsed convenience properties.
+            let session = MockURLProtocol.session()
+            MockURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: [
+                        "Content-Type": "application/json",
+                        "X-GitHub-Request-Id": "C0DE:BEEF",
+                        "Server": "github.com",
+                    ])!
+                return (response, Data("{}".utf8))
+            }
+            let client = APIClient(
+                configuration: Configuration(),
+                session: session
+            )
+            let response = try await client.raw(method: .get, path: "user")
+            #expect(response.headerFields[HTTPField.Name("X-GitHub-Request-Id")!] == "C0DE:BEEF")
+            #expect(response.headerFields[HTTPField.Name("Server")!] == "github.com")
+            #expect(response.headerFields[.contentType] == "application/json")
+        }
     }
 
     @Suite struct GraphQLClientTests {

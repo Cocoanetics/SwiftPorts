@@ -208,11 +208,32 @@ public actor APIClient {
             rateLimitResetAt: resetAt,
             contentType: contentType,
             oauthScopes: scopes,
+            headerFields: Self.scrubbedHeaderFields(response.headerFields),
             url: url
         )
 
         try checkStatus(apiResponse)
         return apiResponse
+    }
+
+    /// Drop the transfer headers that no longer describe `body` once
+    /// the transport has transparently decompressed it. URLSession
+    /// inflates compressed bodies but reports the original
+    /// `Content-Encoding` / `Content-Length` fields; Go's transport
+    /// deletes both when it inflates (h2_bundle.go `handleResponse`),
+    /// so upstream `gh api --include` never shows them on compressed
+    /// responses. Mirror Go so the fields always describe the bytes
+    /// actually in `body`.
+    static func scrubbedHeaderFields(_ fields: HTTPFields) -> HTTPFields {
+        guard let encoding = fields[.contentEncoding] else { return fields }
+        let transparentlyDecoded: Set<String> = ["gzip", "deflate", "br", "zstd"]
+        guard transparentlyDecoded.contains(
+            encoding.trimmingCharacters(in: .whitespaces).lowercased())
+        else { return fields }
+        var scrubbed = fields
+        scrubbed[.contentEncoding] = nil
+        scrubbed[.contentLength] = nil
+        return scrubbed
     }
 
     // MARK: Status mapping

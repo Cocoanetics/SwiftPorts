@@ -64,7 +64,7 @@ struct ApiCommand: AsyncParsableCommand {
     var hostname: String?
 
     @Flag(name: [.customShort("i"), .customLong("include")],
-          help: "Include HTTP response status line and headers.")
+          help: "Include HTTP response status line and headers in the output.")
     var includeHeaders: Bool = false
 
     @Option(name: [.customShort("q"), .customLong("jq")],
@@ -101,9 +101,13 @@ struct ApiCommand: AsyncParsableCommand {
         )
 
         if includeHeaders {
-            Shell.print("HTTP \(response.status)")
-            if let ct = response.contentType { Shell.print("Content-Type: \(ct)") }
-            Shell.print("")
+            // The preamble carries its own upstream-exact line
+            // endings (`\n` status line, `\r\n` header lines).
+            Shell.print(
+                Self.formatIncludeHeaders(
+                    status: response.status,
+                    headerFields: response.headerFields),
+                terminator: "")
         }
 
         let isJSON = response.contentType?.contains("json") ?? false
