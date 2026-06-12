@@ -127,11 +127,13 @@ struct ApiCommand: AsyncParsableCommand {
             return
         }
 
-        if isJSON {
-            Shell.print(JSONPretty.string(from: response.body))
-        } else {
-            Shell.print(String(data: response.body, encoding: .utf8) ?? "")
-        }
+        // Body bytes go out exactly as received — upstream pipes the
+        // response through io.Copy when stdout is not a TTY: no
+        // re-formatting, no key re-ordering, no added newline (and a
+        // 204's empty body prints nothing). Upstream's only other
+        // mode is TTY colorized pretty-printing, which the port
+        // (colorless throughout) doesn't enter.
+        Shell.current.stdout.write(response.body)
     }
 
     private func buildBody() async throws -> Data? {

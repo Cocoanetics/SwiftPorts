@@ -87,11 +87,11 @@ struct ApiCommand: AsyncParsableCommand {
             return
         }
 
-        if isJSON {
-            Shell.print(JSONPretty.string(from: response.body))
-        } else {
-            Shell.print(String(data: response.body, encoding: .utf8) ?? "")
-        }
+        // Body bytes go out exactly as received — upstream glab pipes
+        // the response through io.Copy when color is off (its
+        // processResponse), same as gh: no re-formatting, no added
+        // newline, 204 prints nothing.
+        Shell.current.stdout.write(response.body)
     }
 
     private func buildBody() throws -> Data? {
