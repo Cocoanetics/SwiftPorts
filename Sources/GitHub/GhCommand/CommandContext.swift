@@ -1,3 +1,4 @@
+import ArgumentParser
 import Foundation
 import ForgeKit
 import GitHub
@@ -16,12 +17,32 @@ enum CommandContext {
 
     static func apiClient(host: String? = nil) async throws -> APIClient {
         let config = try await resolveConfig(host: host)
+        try requireAuthentication(config)
         return APIClient(configuration: config)
     }
 
     static func graphQLClient(host: String? = nil) async throws -> GraphQLClient {
         let config = try await resolveConfig(host: host)
+        try requireAuthentication(config)
         return GraphQLClient(configuration: config)
+    }
+
+    /// Upstream gh refuses to start API commands without a token
+    /// (`pkg/cmd/root/help.go` authHelp, `exitAuth` = 4) instead of
+    /// letting the request fall into the anonymous per-IP rate-limit
+    /// pool — which is where the baffling "Authenticate with GH_TOKEN
+    /// to raise the limit" errors in issue #75 came from. The auth
+    /// subcommands resolve their config directly and stay usable
+    /// without a token.
+    static func requireAuthentication(_ config: Configuration) throws {
+        guard config.token == nil else { return }
+        Shell.current.stderr.write(Data(
+            """
+            To get started with GitHub CLI, please run:  gh auth login
+            Alternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.
+
+            """.utf8))
+        throw ExitCode(4)
     }
 
     /// libgit2-backed git client rooted in the caller's working

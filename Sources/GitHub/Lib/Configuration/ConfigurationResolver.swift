@@ -107,4 +107,17 @@ public enum TokenSource: Sendable {
         case .none: return "(none)"
         }
     }
+
+    /// The token-source column upstream `gh auth status` prints
+    /// (status.go `buildEntry`): the env var name, "keyring", or the
+    /// hosts.yml path. `humanReadable` stays for prose messages.
+    public var ghStatusLabel: String {
+        switch self {
+        case .ghTokenEnv: return "GH_TOKEN"
+        case .githubTokenEnv: return "GITHUB_TOKEN"
+        case .secretStore: return "keyring"
+        case .hostsFile: return HostsFileStore.defaultPath.path
+        case .none: return "(none)"
+        }
+    }
 }

@@ -3,6 +3,9 @@ import ShellKit
 import Foundation
 import GitHub
 import ForgeKit
+#if canImport(FoundationNetworking)
+import FoundationNetworking  // URLError lives here on Linux/Windows
+#endif
 
 struct AuthStatus: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -20,47 +23,79 @@ struct AuthStatus: AsyncParsableCommand {
 
     func run() async throws {
         let config = try await CommandContext.resolveConfig(host: hostname)
-        let hostsToken = (try? HostsFileStore().read())?[config.host]?.oauthToken
+        let hostsEntry = (try? HostsFileStore().read())?[config.host]
         let source = TokenSource.detect(
-            configToken: config.token, hostsToken: hostsToken)
-
-        Shell.print("\(config.host)")
+            configToken: config.token, hostsToken: hostsEntry?.oauthToken)
 
         guard let token = config.token else {
-            Shell.print("  \(ANSI.red("✗")) Not logged in. Run `gh auth login` or set GH_TOKEN.")
-            throw ExitCode(1)
-        }
-
-        let client = GraphQLClient(configuration: config)
-        // Use REST /user too, just for the X-OAuth-Scopes header.
-        let restClient = APIClient(configuration: config)
-        do {
-            let result: ViewerQuery = try await client.query(ViewerQuery.query)
-            Shell.print("  \(ANSI.green("✓")) Logged in to \(ANSI.bold(config.host)) as \(ANSI.bold(result.viewer.login)) \(ANSI.dim("(token from \(source.humanReadable))"))")
-            Shell.print("    URL: \(result.viewer.url.absoluteString)")
-            if let scopesResponse = try? await restClient.raw(method: .get, path: "user"),
-               let scopes = scopesResponse.oauthScopes {
-                let label = scopes.isEmpty ? "(none)" : scopes.joined(separator: ", ")
-                Shell.print("    Token scopes: \(label)")
-            }
-            if showToken {
-                Shell.print("    Token: \(token)")
+            // Upstream wording: host-specific when --hostname was
+            // given, the generic get-started line otherwise.
+            let message: String
+            if let hostname {
+                message = "You are not logged into any accounts on \(hostname)"
             } else {
-                Shell.print("    Token: \(ANSI.dim(redact(token)))")
+                message = "You are not logged into any GitHub hosts. To log in, run: \(ANSI.bold("gh auth login"))"
             }
-        } catch let APIError.unauthenticated(url) {
-            Shell.print("  \(ANSI.red("✗")) Token rejected by \(url.absoluteString) (HTTP 401).")
-            Shell.print("    Source: \(source.humanReadable)")
+            Shell.current.stderr.write(Data((message + "\n").utf8))
             throw ExitCode(1)
+        }
+
+        let sourceLabel = source.ghStatusLabel
+        // Upstream trusts the login recorded in hosts.yml for stored
+        // tokens and only asks the API when the token came from the
+        // environment. The same single GET /user that supplies that
+        // fallback also carries the X-OAuth-Scopes header, so the
+        // auth probe and the scopes probe can never disagree (#75:
+        // a separately-failing scopes probe used to silently drop
+        // the "Token scopes:" line).
+        var login = sourceLabel.hasSuffix("_TOKEN") ? nil : hostsEntry?.user
+
+        let state: AuthStatusEntry.State
+        do {
+            let client = APIClient(configuration: config)
+            let response = try await client.raw(method: .get, path: "user")
+            if login == nil {
+                login = try? JSONDecoder.gitHub()
+                    .decode(ProbeLogin.self, from: response.body).login
+            }
+            // 200 with no extractable login mirrors upstream's failed
+            // CurrentLoginName fetch: the entry reports as an error.
+            state = login == nil ? .invalidToken : .success(scopes: response.oauthScopes)
         } catch {
-            Shell.print("  \(ANSI.red("✗")) Auth probe failed: \(error.localizedDescription)")
+            state = Self.isTimeout(error) ? .timeout : .invalidToken
+        }
+
+        let entry = AuthStatusEntry(
+            state: state,
+            host: config.host,
+            login: login,
+            sourceLabel: sourceLabel,
+            gitProtocol: hostsEntry?.gitProtocol ?? "https",
+            token: showToken ? token : AuthStatusEntry.maskToken(token)
+        )
+
+        // Upstream routes the whole listing to stderr when any entry
+        // failed, and exits 1.
+        if entry.isSuccess {
+            Shell.print(ANSI.bold(config.host))
+            for line in entry.lines { Shell.print(line) }
+        } else {
+            var block = ANSI.bold(config.host) + "\n"
+            block += entry.lines.joined(separator: "\n") + "\n"
+            Shell.current.stderr.write(Data(block.utf8))
             throw ExitCode(1)
         }
     }
 
-    private func redact(_ token: String) -> String {
-        guard token.count > 8 else { return String(repeating: "*", count: token.count) }
-        let prefix = token.prefix(4)
-        return "\(prefix)" + String(repeating: "*", count: token.count - 4)
+    /// Upstream singles out network timeouts for their own entry
+    /// state; every other probe failure renders as an invalid token.
+    private static func isTimeout(_ error: Error) -> Bool {
+        guard case APIError.transport(let underlying) = error else { return false }
+        return (underlying as? URLError)?.code == .timedOut
     }
+}
+
+/// Minimal slice of the GET /user payload the status probe needs.
+private struct ProbeLogin: Decodable {
+    let login: String
 }
