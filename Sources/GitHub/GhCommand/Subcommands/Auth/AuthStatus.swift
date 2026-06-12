@@ -53,14 +53,25 @@ struct AuthStatus: AsyncParsableCommand {
         let state: AuthStatusEntry.State
         do {
             let client = APIClient(configuration: config)
-            let response = try await client.raw(method: .get, path: "user")
-            if login == nil {
+            if login != nil {
+                // Stored login known — upstream only probes the API
+                // root for these (GetScopes) and ignores the body, so
+                // app tokens (ghs_…), which can't GET /user, still
+                // validate and just render without a scopes line.
+                let response = try await client.raw(method: .get, path: "")
+                state = .success(scopes: response.oauthScopes)
+            } else {
+                // No stored login (env tokens, or a stored token with
+                // no hosts.yml user): fetch it the way upstream's
+                // CurrentLoginName does, from the same response that
+                // carries the scopes header. A 200 with no extractable
+                // login mirrors upstream's failed login fetch: the
+                // entry reports as an error.
+                let response = try await client.raw(method: .get, path: "user")
                 login = try? JSONDecoder.gitHub()
                     .decode(ProbeLogin.self, from: response.body).login
+                state = login == nil ? .invalidToken : .success(scopes: response.oauthScopes)
             }
-            // 200 with no extractable login mirrors upstream's failed
-            // CurrentLoginName fetch: the entry reports as an error.
-            state = login == nil ? .invalidToken : .success(scopes: response.oauthScopes)
         } catch {
             state = Self.isTimeout(error) ? .timeout : .invalidToken
         }
