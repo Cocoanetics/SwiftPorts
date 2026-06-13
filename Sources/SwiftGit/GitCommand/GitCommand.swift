@@ -55,5 +55,44 @@ public struct GitCommand: AsyncParsableCommand {
         ]
     )
 
+    /// Rewrite a bare `--color` (the exact token, no `=<when>`) into
+    /// `--color=always` for the `diff` / `status` subcommands — the two
+    /// that bind a `--color` option. Real git documents `--color[=<when>]`
+    /// where omitting `<when>` means `always`, and only attaches the value
+    /// with `=` — so `git diff --color <ref>` keeps `<ref>` as a revision
+    /// and never swallows it as the color value. swift-argument-parser's
+    /// `@Option` can't express an optional, attached-only value, so we
+    /// normalise the bare form here, before parsing.
+    ///
+    /// Tokens after a standalone `--` are pathspecs and pass through
+    /// untouched, so `git diff -- --color` still filters a file literally
+    /// named `--color`.
+    ///
+    /// Shared by every entry path: the standalone binary (`Entry`) and the
+    /// embedded shellkit face (`SwiftPortsCommands`). Embedded git never
+    /// runs the binary's entry point, so a rewrite living only there would
+    /// leave the two faces disagreeing (same rationale as gh's bare-`--json`
+    /// rewrite).
+    public static func preprocess(_ args: [String]) -> [String] {
+        // Only `diff` / `status` define `--color`; leave every other
+        // subcommand's argv exactly as given.
+        guard let subcommand = args.first,
+              subcommand == "diff" || subcommand == "status" else {
+            return args
+        }
+        var out: [String] = []
+        out.reserveCapacity(args.count)
+        var afterDoubleDash = false
+        for arg in args {
+            if arg == "--" { afterDoubleDash = true }
+            if !afterDoubleDash, arg == "--color" {
+                out.append("--color=always")
+            } else {
+                out.append(arg)
+            }
+        }
+        return out
+    }
+
     public init() {}
 }

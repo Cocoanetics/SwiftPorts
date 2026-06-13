@@ -139,13 +139,20 @@ struct Diff: AsyncParsableCommand {
         let context = unified.map { UInt32(max(0, $0)) }
         var output = try await client.diff(
             target, format: format, paths: paths, contextLines: context)
-        // Colorize the unified-patch form only. The machine-readable
-        // formats (`--raw`, `--name-only`, `--name-status`, `--stat`,
-        // `--shortstat`, `--numstat`) stay uncolored so downstream
-        // pipes don't have to strip escapes.
-        if format == .patch, !output.isEmpty {
-            let palette = ColorPalette(enabled: color.resolved())
-            output = palette.colorizePatch(output)
+        // Colorize the human-readable forms the way real git does — the
+        // unified patch and the `--stat` histogram. `--shortstat` (which
+        // real git leaves plain) and the machine-readable formats
+        // (`--raw`, `--name-only`, `--name-status`, `--numstat`) stay
+        // uncolored so downstream pipes don't have to strip escapes.
+        if !output.isEmpty {
+            switch format {
+            case .patch:
+                output = ColorPalette(enabled: color.resolved()).colorizePatch(output)
+            case .stat:
+                output = ColorPalette(enabled: color.resolved()).colorizeDiffStat(output)
+            default:
+                break
+            }
         }
         if !output.isEmpty {
             Shell.current.stdout.write(Data(output.utf8))

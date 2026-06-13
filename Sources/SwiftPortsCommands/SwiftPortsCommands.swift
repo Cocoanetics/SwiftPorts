@@ -46,7 +46,12 @@ public enum SwiftPortsCommands {
                 base: Shell.parsableCommand(GhCommand.self),
                 rewrite: GhCommand.preprocess),
             Shell.parsableCommand(GlabCommand.self),
-            Shell.parsableCommand(GitCommand.self),
+            // git rides an argv preprocessor too: the bare `--color`
+            // rewrite must hold on the embedded path, where the standalone
+            // entry (`Entry.main`, which applies it) never runs.
+            ArgvRewritingCommand(
+                base: Shell.parsableCommand(GitCommand.self),
+                rewrite: GitCommand.preprocess),
             // search / find.
             Shell.parsableCommand(Rg.self),
             Shell.parsableCommand(FdCommand.self),

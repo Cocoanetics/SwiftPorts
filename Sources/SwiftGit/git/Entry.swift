@@ -17,7 +17,11 @@ struct Entry {
             // was a leftover from when this read `CommandLine.arguments`
             // directly; double-dropping made `git <subcommand>` (with
             // no extra args) silently print the root help.
-            let argv = Self.preprocess(Shell.arguments)
+            // `Self.preprocess` splits git's attached short-option forms
+            // (`-U3`, log `-1`); `GitCommand.preprocess` normalises a bare
+            // `--color` into `--color=always`. The latter is shared with
+            // the embedded shellkit face so both git entry points agree.
+            let argv = GitCommand.preprocess(Self.preprocess(Shell.arguments))
             var cmd = try GitCommand.parseAsRoot(argv)
             if var asyncCmd = cmd as? any AsyncParsableCommand {
                 try await asyncCmd.run()

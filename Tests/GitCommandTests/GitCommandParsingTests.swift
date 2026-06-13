@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 import ArgumentParser
+import ForgeKit
 @testable import GitCommand
 
 @Suite("GitCommand argv parsing")
@@ -292,6 +293,53 @@ struct GitCommandParsingTests {
         #expect(try parse(["diff", "--numstat"], as: Diff.self).numStat == true)
         #expect(try parse(["diff", "--raw"], as: Diff.self).raw == true)
         #expect(try parse(["diff", "-p"], as: Diff.self).patch == true)
+    }
+
+    // MARK: - bare `--color` normalization (GitCommand.preprocess)
+
+    @Test("preprocess: bare --color → --color=always for diff / status")
+    func preprocessBareColor() {
+        #expect(GitCommand.preprocess(["diff", "--color"]) == ["diff", "--color=always"])
+        #expect(GitCommand.preprocess(["status", "--color"]) == ["status", "--color=always"])
+    }
+
+    @Test("preprocess: --color=<when> is left untouched")
+    func preprocessColorWithValueUntouched() {
+        #expect(GitCommand.preprocess(["diff", "--color=never"]) == ["diff", "--color=never"])
+        #expect(GitCommand.preprocess(["diff", "--color=auto"]) == ["diff", "--color=auto"])
+    }
+
+    @Test("preprocess: --color after -- stays a pathspec")
+    func preprocessColorAfterDoubleDash() {
+        #expect(GitCommand.preprocess(["diff", "--", "--color"]) == ["diff", "--", "--color"])
+        #expect(
+            GitCommand.preprocess(["diff", "--color", "--", "--color"])
+                == ["diff", "--color=always", "--", "--color"])
+    }
+
+    @Test("preprocess: non-color subcommands pass through unchanged")
+    func preprocessOtherSubcommands() {
+        #expect(GitCommand.preprocess(["log", "--color"]) == ["log", "--color"])
+        #expect(GitCommand.preprocess(["commit", "-m", "x"]) == ["commit", "-m", "x"])
+    }
+
+    @Test("diff: bare --color parses to .always, ref kept as a revision")
+    func diffBareColorParses() throws {
+        let cmd = try parse(GitCommand.preprocess(["diff", "--color"]), as: Diff.self)
+        #expect(cmd.color == .always)
+        // A following ref must NOT be swallowed as the color value.
+        let withRef = try parse(
+            GitCommand.preprocess(["diff", "--color", "HEAD"]), as: Diff.self)
+        #expect(withRef.color == .always)
+        #expect(withRef.rest == ["HEAD"])
+    }
+
+    @Test("diff: --color=never / status bare --color parse correctly")
+    func diffStatusColorValues() throws {
+        #expect(try parse(["diff", "--color=never"], as: Diff.self).color == .never)
+        let status = try parse(
+            GitCommand.preprocess(["status", "--color"]), as: Status.self)
+        #expect(status.color == .always)
     }
 
     @Test("diff: --unified / -U <n>")
