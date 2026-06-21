@@ -21,7 +21,7 @@ public struct ConfigurationResolver: Sendable {
     public static let defaultService = "com.swiftgl.glab"
 
     public init(
-        secretStore: any SecretStore = DefaultSecretStore.make(),
+        secretStore: any SecretStore = SystemSecretStore.shared,
         service: String = Self.defaultService
     ) {
         self.secretStore = secretStore

@@ -353,12 +353,46 @@ let package = Package(
             name: "ForgeKit",
             dependencies: [
                 .product(name: "ShellKit", package: "ShellKit"),
+                // Linux secret persistence via libsecret (Secret Service).
+                // Linux-gated exactly like CLZMA→XzKit, so the C shim never
+                // enters the Apple / Windows / Android module graphs (and
+                // its pkg-config is never evaluated off-Linux).
+                .target(name: "CSecretShim", condition: .when(platforms: [.linux])),
             ],
-            path: "Sources/ForgeKit"
+            path: "Sources/ForgeKit",
+            linkerSettings: [
+                // Windows secret persistence: Credential Manager
+                // (CredReadW/CredWriteW/CredDeleteW live in Advapi32).
+                .linkedLibrary("Advapi32", .when(platforms: [.windows])),
+            ]
         ),
         .testTarget(
             name: "ForgeKitTests",
             dependencies: ["ForgeKit"]
+        ),
+
+        // MARK: libsecret shim (Linux secret persistence)
+        // CLibSecret exposes the system libsecret headers (pkg-config
+        // `libsecret-1`); CSecretShim wraps its C-variadic password API in
+        // fixed-arity functions that ForgeKit's `LibSecretStore` calls.
+        // Both are Linux-only — ForgeKit's `.when(platforms: [.linux])`
+        // dependency keeps them out of every other platform's graph (same
+        // pattern as CLZMA for XzKit), so the `pkgConfig` below is only
+        // ever resolved on Linux.
+        .systemLibrary(
+            name: "CLibSecret",
+            path: "Sources/CLibSecret",
+            pkgConfig: "libsecret-1",
+            providers: [
+                .apt(["libsecret-1-dev"]),
+                .brew(["libsecret"]),
+            ]
+        ),
+        .target(
+            name: "CSecretShim",
+            dependencies: ["CLibSecret"],
+            path: "Sources/CSecretShim",
+            publicHeadersPath: "include"
         ),
 
         // MARK: ZipKit umbrella

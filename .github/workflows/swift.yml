@@ -98,12 +98,17 @@ jobs:
         # are needed by Bzip2Kit / XzKit / ZstdKit and by libarchive's
         # filters once Bzip2Support / LZMASupport / ZstdSupport traits
         # are on. lz4 backs Lz4Kit (libarchive's lz4 filter is not
-        # enabled in our build — Lz4Kit is the path).
+        # enabled in our build — Lz4Kit is the path). libsecret-1-dev
+        # supplies <libsecret/secret.h> (pkg-config libsecret-1) for
+        # ForgeKit's LibSecretStore — Linux token persistence via the
+        # Secret Service. (No keyring daemon runs in CI, so the
+        # functional libsecret suite stays opt-in; this only needs the
+        # headers to compile + link the shim.)
         run: |
           apt-get update
           apt-get install -y libssl-dev pkg-config ca-certificates \
                              zlib1g-dev libbz2-dev liblzma-dev \
-                             libzstd-dev liblz4-dev
+                             libzstd-dev liblz4-dev libsecret-1-dev
       - name: Verify Swift version
         run: swift --version
       - name: Build (Linux)
