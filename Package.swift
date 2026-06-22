@@ -60,11 +60,105 @@ func androidFiltered(products list: [Product]) -> [Product] {
         ? list.filter { !androidDroppedTargets.contains($0.name) }
         : list
 }
-func androidFiltered(targets list: [Target]) -> [Target] {
-    buildingForAndroid
-        ? list.filter { !androidDroppedTargets.contains($0.name) }
-        : list
+// `extraHostGated` carries the host-gated system-library shims (issue #80).
+// They're passed as a separate parameter — rather than concatenated onto the
+// big `targets:` literal with `+` at the call site — so that ~90-element
+// literal stays a *direct* argument the type-checker checks top-down against
+// `[Target]`. Wrapping such a literal in a `+` expression instead forces
+// expensive bidirectional overload inference across the whole thing and makes
+// Xcode's manifest compiler time out ("unable to type-check this expression in
+// reasonable time"). Here `+` only ever joins the two small shim arrays.
+func androidFiltered(targets list: [Target], plus extraHostGated: [Target] = []) -> [Target] {
+    let all = list + extraHostGated
+    return buildingForAndroid
+        ? all.filter { !androidDroppedTargets.contains($0.name) }
+        : all
 }
+
+// MARK: Host-gated system-library shims (issue #80)
+//
+// A `systemLibrary` target with a `pkgConfig:` is probed by SwiftPM/Xcode
+// during package resolution on *every* host — `.when(platforms:)` only
+// conditions the build-graph *edge* that consumes it, not the declaration
+// itself. So a Linux/Windows-only system library that is merely *declared*
+// off-host still gets `pkg-config`'d on macOS, and a failed probe prints a
+// spurious provider hint (`brew install …`) on every build (surfaced via the
+// iBash app in Xcode).
+//
+// Gate such declarations on the host with `#if`, which is evaluated against
+// the machine running the manifest: off-host the target doesn't exist, so
+// nothing is probed. Each consuming edge keeps its `.when(platforms:)`
+// condition — that's what still prunes the library for the *Android*
+// destination cross-built from a Linux host, the one case `#if os(Linux)`
+// can't see. The only scenario host-gating gives up is cross-compiling *for*
+// Linux/Windows *from* macOS — which couldn't link the system library from a
+// Mac host anyway.
+//
+// libsecret is Linux-only (Apple → Keychain, Windows → Credential Manager);
+// liblzma / liblz4 are Linux+Windows (Apple → Compression.framework). bzip2 /
+// zstd are *not* gated — they're genuinely compiled on macOS, so their probe
+// is legitimate.
+#if os(Linux)
+let secretTargets: [Target] = [
+    // CLibSecret exposes the system libsecret headers (pkg-config
+    // `libsecret-1`); CSecretShim wraps its C-variadic password API in
+    // fixed-arity functions that ForgeKit's `LibSecretStore` calls.
+    .systemLibrary(
+        name: "CLibSecret",
+        path: "Sources/CLibSecret",
+        pkgConfig: "libsecret-1",
+        providers: [
+            .apt(["libsecret-1-dev"]),
+            .brew(["libsecret"]),
+        ]
+    ),
+    .target(
+        name: "CSecretShim",
+        dependencies: ["CLibSecret"],
+        path: "Sources/CSecretShim",
+        publicHeadersPath: "include"
+    ),
+]
+let forgeKitSecretDependencies: [Target.Dependency] = [
+    .target(name: "CSecretShim", condition: .when(platforms: [.linux])),
+]
+#else
+let secretTargets: [Target] = []
+let forgeKitSecretDependencies: [Target.Dependency] = []
+#endif
+
+#if os(Linux) || os(Windows)
+let compressionShimTargets: [Target] = [
+    .systemLibrary(
+        name: "CLZMA",
+        path: "Sources/CLZMA",
+        pkgConfig: "liblzma",
+        providers: [
+            .brew(["xz"]),
+            .apt(["liblzma-dev"]),
+        ]
+    ),
+    .systemLibrary(
+        name: "CLz4",
+        path: "Sources/CLz4",
+        pkgConfig: "liblz4",
+        providers: [
+            .brew(["lz4"]),
+            .apt(["liblz4-dev"]),
+        ]
+    ),
+]
+let xzKitShimDependencies: [Target.Dependency] = [
+    .target(name: "CLZMA", condition: .when(platforms: [.linux, .windows])),
+]
+let lz4KitShimDependencies: [Target.Dependency] = [
+    .target(name: "CLz4", condition: .when(platforms: [.linux, .windows])),
+]
+#else
+let compressionShimTargets: [Target] = []
+let xzKitShimDependencies: [Target.Dependency] = []
+let lz4KitShimDependencies: [Target.Dependency] = []
+#endif
 
 // SwiftPorts is a monorepo of pure-Swift, cross-platform
 // reimplementations of standard CLI tools and SDK clients.
@@ -354,11 +448,12 @@ let package = Package(
             dependencies: [
                 .product(name: "ShellKit", package: "ShellKit"),
                 // Linux secret persistence via libsecret (Secret Service).
-                // Linux-gated exactly like CLZMA→XzKit, so the C shim never
-                // enters the Apple / Windows / Android module graphs (and
-                // its pkg-config is never evaluated off-Linux).
-                .target(name: "CSecretShim", condition: .when(platforms: [.linux])),
-            ],
+                // The CSecretShim edge is host-gated — see
+                // `forgeKitSecretDependencies` near the top of this file
+                // (issue #80). The CLibSecret systemLibrary it pulls in must
+                // not even be *declared* off-Linux, or SwiftPM probes its
+                // `pkgConfig` on every host.
+            ] + forgeKitSecretDependencies,
             path: "Sources/ForgeKit",
             linkerSettings: [
                 // Windows secret persistence: Credential Manager
@@ -372,28 +467,12 @@ let package = Package(
         ),
 
         // MARK: libsecret shim (Linux secret persistence)
-        // CLibSecret exposes the system libsecret headers (pkg-config
-        // `libsecret-1`); CSecretShim wraps its C-variadic password API in
-        // fixed-arity functions that ForgeKit's `LibSecretStore` calls.
-        // Both are Linux-only — ForgeKit's `.when(platforms: [.linux])`
-        // dependency keeps them out of every other platform's graph (same
-        // pattern as CLZMA for XzKit), so the `pkgConfig` below is only
-        // ever resolved on Linux.
-        .systemLibrary(
-            name: "CLibSecret",
-            path: "Sources/CLibSecret",
-            pkgConfig: "libsecret-1",
-            providers: [
-                .apt(["libsecret-1-dev"]),
-                .brew(["libsecret"]),
-            ]
-        ),
-        .target(
-            name: "CSecretShim",
-            dependencies: ["CLibSecret"],
-            path: "Sources/CSecretShim",
-            publicHeadersPath: "include"
-        ),
+        // The CLibSecret systemLibrary + CSecretShim targets are host-gated
+        // and live in `secretTargets` near the top of this file (issue #80) —
+        // they must not be *declared* off-Linux, or SwiftPM/Xcode probe
+        // CLibSecret's `pkgConfig` during resolution on every host (a spurious
+        // `brew install libsecret` note on macOS). They're appended to this
+        // `targets:` array below via `+ secretTargets`.
 
         // MARK: ZipKit umbrella
         .target(
@@ -531,15 +610,14 @@ let package = Package(
                 .apt(["libbz2-dev"]),
             ]
         ),
-        .systemLibrary(
-            name: "CLZMA",
-            path: "Sources/CLZMA",
-            pkgConfig: "liblzma",
-            providers: [
-                .brew(["xz"]),
-                .apt(["liblzma-dev"]),
-            ]
-        ),
+        // CLZMA + CLz4 are NOT declared here: they're Linux/Windows-only
+        // (Apple platforms back XzKit / Lz4Kit with Compression.framework),
+        // so they're host-gated in `compressionShimTargets` near the top of
+        // this file and appended below via `+ compressionShimTargets`
+        // (issue #80) — otherwise their `pkgConfig` (liblzma / liblz4) is
+        // probed on macOS, where the CI installs neither, printing spurious
+        // `brew install xz` / `brew install lz4` notes. CBzip2 / CZstd stay
+        // declared unconditionally: they're genuinely compiled on macOS.
         .systemLibrary(
             name: "CZstd",
             path: "Sources/CZstd",
@@ -547,15 +625,6 @@ let package = Package(
             providers: [
                 .brew(["zstd"]),
                 .apt(["libzstd-dev"]),
-            ]
-        ),
-        .systemLibrary(
-            name: "CLz4",
-            path: "Sources/CLz4",
-            pkgConfig: "liblz4",
-            providers: [
-                .brew(["lz4"]),
-                .apt(["liblz4-dev"]),
             ]
         ),
         .target(
@@ -659,9 +728,9 @@ let package = Package(
             name: "XzKit",
             dependencies: [
                 .product(name: "ShellKit", package: "ShellKit"),
-                .target(name: "CLZMA",
-                        condition: .when(platforms: [.linux, .windows])),
-            ],
+                // CLZMA edge is host-gated — see `xzKitShimDependencies` near
+                // the top of this file (issue #80).
+            ] + xzKitShimDependencies,
             path: "Sources/XzKit/Lib"
         ),
         .target(
@@ -751,9 +820,9 @@ let package = Package(
             name: "Lz4Kit",
             dependencies: [
                 .product(name: "ShellKit", package: "ShellKit"),
-                .target(name: "CLz4",
-                        condition: .when(platforms: [.linux, .windows])),
-            ],
+                // CLz4 edge is host-gated — see `lz4KitShimDependencies` near
+                // the top of this file (issue #80).
+            ] + lz4KitShimDependencies,
             path: "Sources/Lz4Kit/Lib"
         ),
         .target(
@@ -1187,5 +1256,11 @@ let package = Package(
             ],
             path: "Sources/SwiftPortsCommands"
         ),
-    ])
+    // Host-gated system-library shims (issue #80) are passed via `plus:`
+    // (not concatenated onto this literal — see `androidFiltered` above).
+    // They're empty off-host, so they add nothing on macOS/iOS and are never
+    // probed there. None are in `androidDroppedTargets`, so the filter passes
+    // them through on the Android (Linux-host) build, where their
+    // `.when(platforms:)` consuming edges prune them for the Android slice.
+    ], plus: secretTargets + compressionShimTargets)
 )
