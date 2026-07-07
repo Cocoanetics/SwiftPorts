@@ -169,7 +169,7 @@ struct HTTPMockedNetworkTests {
             body: request)
 
         #expect(merge.iid == 2)
-        #expect(merge.detailedMergeStatus == .checking)
+        #expect(merge.detailedMergeStatus == "checking")
         #expect(seenMethod.withLock { $0 } == "POST")
         #expect(seenURL.withLock { $0 }?.contains("projects/group%2Frepo/merge_requests") == true)
 

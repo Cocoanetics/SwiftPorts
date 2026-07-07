@@ -42,9 +42,7 @@ import Testing
         let mr = try JSONDecoder.gitLab().decode(MergeRequest.self, from: json)
         #expect(mr.iid == 11)
         #expect(mr.state == .opened)
-        #expect(mr.detailedMergeStatus == .mergeable)
-        #expect(mr.detailedMergeStatus?.isMergeable == true)
-        #expect(mr.detailedMergeStatus?.isTransient == false)
+        #expect(mr.detailedMergeStatus == "mergeable")
         #expect(mr.sourceBranch == "feature/hello")
         #expect(mr.targetBranch == "main")
         #expect(mr.author?.username == "alice")
@@ -66,7 +64,7 @@ import Testing
         #expect(mr.state == .unknown("weird_future_state"))
     }
 
-    @Test func decodesUnknownDetailedMergeStatusGracefully() throws {
+    @Test func decodesDetailedMergeStatusAsString() throws {
         let json = """
         {
           "id": 1, "iid": 1, "project_id": 1,
@@ -77,21 +75,7 @@ import Testing
         }
         """.data(using: .utf8)!
         let mr = try JSONDecoder.gitLab().decode(MergeRequest.self, from: json)
-        #expect(mr.detailedMergeStatus == .unknown("future_status"))
-        #expect(mr.detailedMergeStatus?.rawValue == "future_status")
-    }
-
-    @Test func detailedMergeStatusClassifiesMergeability() {
-        #expect(DetailedMergeStatus.mergeable.isMergeable)
-        #expect(!DetailedMergeStatus.mergeable.isTransient)
-        #expect(DetailedMergeStatus.checking.isTransient)
-        #expect(DetailedMergeStatus.preparing.isTransient)
-        #expect(DetailedMergeStatus.unchecked.isTransient)
-        #expect(DetailedMergeStatus.approvalsSyncing.isTransient)
-        #expect(DetailedMergeStatus.ciStillRunning.isTransient)
-        #expect(!DetailedMergeStatus.conflict.isMergeable)
-        #expect(!DetailedMergeStatus.conflict.isTransient)
-        #expect(!DetailedMergeStatus.ciMustPass.isTransient)
+        #expect(mr.detailedMergeStatus == "future_status")
     }
 }
 

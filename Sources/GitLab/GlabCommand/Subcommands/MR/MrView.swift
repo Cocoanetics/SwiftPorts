@@ -85,7 +85,7 @@ struct MrView: AsyncParsableCommand {
             Shell.print("reviewers: \(reviewers.map { "@\($0.username)" }.joined(separator: ", "))")
         }
         if let detail = merge.detailedMergeStatus {
-            Shell.print("merge status: \(detail.rawValue)")
+            Shell.print("merge status: \(detail)")
         }
         Shell.print("url: \(merge.webUrl.absoluteString)")
         if let body = merge.description, !body.isEmpty {

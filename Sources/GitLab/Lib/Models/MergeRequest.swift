@@ -35,7 +35,7 @@ public struct MergeRequest: Codable, Sendable, Identifiable {
     public let targetProjectId: Int?
     public let webUrl: URL
     public let mergeStatus: String?
-    public let detailedMergeStatus: DetailedMergeStatus?
+    public let detailedMergeStatus: String?
     public let sha: String?
     public let mergeCommitSha: String?
     public let squashCommitSha: String?
