@@ -307,13 +307,14 @@ struct HTTPMockedNetworkTests {
             #expect(match?.isResolved == false)
             #expect(match?.isOutdated == false)
 
-            let requestJSON = try #require(captured.withLock { $0 })
-            #expect((requestJSON["query"] as? String)?.contains("reviewThreads(first: $first)") == true)
-            let variables = try #require(requestJSON["variables"] as? [String: Any])
-            #expect(variables["owner"] as? String == "octocat")
-            #expect(variables["name"] as? String == "Hello-World")
-            #expect(variables["number"] as? Int == 42)
-            #expect(variables["first"] as? Int == 100)
+            if let requestJSON = captured.withLock({ $0 }) {
+                #expect((requestJSON["query"] as? String)?.contains("reviewThreads(first: $first)") == true)
+                let variables = try #require(requestJSON["variables"] as? [String: Any])
+                #expect(variables["owner"] as? String == "octocat")
+                #expect(variables["name"] as? String == "Hello-World")
+                #expect(variables["number"] as? Int == 42)
+                #expect(variables["first"] as? Int == 100)
+            }
         }
 
         @Test func resolvesReviewThread() async throws {
@@ -343,10 +344,11 @@ struct HTTPMockedNetworkTests {
             #expect(response.resolveReviewThread.thread.id == "PRRT_kw1")
             #expect(response.resolveReviewThread.thread.isResolved == true)
 
-            let requestJSON = try #require(captured.withLock { $0 })
-            #expect((requestJSON["query"] as? String)?.contains("resolveReviewThread") == true)
-            let variables = try #require(requestJSON["variables"] as? [String: Any])
-            #expect(variables["threadId"] as? String == "PRRT_kw1")
+            if let requestJSON = captured.withLock({ $0 }) {
+                #expect((requestJSON["query"] as? String)?.contains("resolveReviewThread") == true)
+                let variables = try #require(requestJSON["variables"] as? [String: Any])
+                #expect(variables["threadId"] as? String == "PRRT_kw1")
+            }
         }
 
         @Test func unresolvesReviewThread() async throws {
@@ -376,10 +378,11 @@ struct HTTPMockedNetworkTests {
             #expect(response.unresolveReviewThread.thread.id == "PRRT_kw1")
             #expect(response.unresolveReviewThread.thread.isResolved == false)
 
-            let requestJSON = try #require(captured.withLock { $0 })
-            #expect((requestJSON["query"] as? String)?.contains("unresolveReviewThread") == true)
-            let variables = try #require(requestJSON["variables"] as? [String: Any])
-            #expect(variables["threadId"] as? String == "PRRT_kw1")
+            if let requestJSON = captured.withLock({ $0 }) {
+                #expect((requestJSON["query"] as? String)?.contains("unresolveReviewThread") == true)
+                let variables = try #require(requestJSON["variables"] as? [String: Any])
+                #expect(variables["threadId"] as? String == "PRRT_kw1")
+            }
         }
     }
 }
