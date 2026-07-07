@@ -75,12 +75,26 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "26.0"
+      - name: Install iOS Simulator runtime
+        # macos-latest ships Xcode 26 but not the matching iOS 26 simulator
+        # runtime, so `OS=latest` resolves to an uninstalled runtime and
+        # xcodebuild fails with "iOS 26.0 is not installed". Download it first.
+        run: xcodebuild -downloadPlatform iOS
       - name: Test (iOS Simulator)
         run: |
-          xcodebuild \
-            -scheme SwiftPorts-Package \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
-            test
+          set -euo pipefail
+          # `name=iPhone 16,OS=latest` doesn't reliably match after a runtime
+          # download (no seeded device set), so resolve a concrete available iOS
+          # simulator — creating one if needed — and test against it by UDID.
+          UDID=$(xcrun simctl list devices available --json \
+            | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; ids=[x['udid'] for r,v in d.items() if 'iOS' in r for x in v if x.get('isAvailable')]; print(ids[0] if ids else '')")
+          if [ -z "$UDID" ]; then
+            RT=$(xcrun simctl list runtimes iOS --json \
+              | python3 -c "import json,sys; r=[x['identifier'] for x in json.load(sys.stdin)['runtimes'] if x.get('isAvailable')]; print(r[0])")
+            UDID=$(xcrun simctl create ci-iphone "iPhone 16" "$RT")
+          fi
+          echo "Testing on iOS simulator $UDID"
+          xcodebuild -scheme SwiftPorts-Package -destination "id=$UDID" test
 
   build-linux:
     # Linux: full build + test, parity with Apple platforms.

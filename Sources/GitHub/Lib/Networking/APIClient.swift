@@ -45,6 +45,29 @@ public actor APIClient {
         return try decode(T.self, from: response)
     }
 
+    /// Conditional `GET path` using `If-None-Match`. A `304 Not
+    /// Modified` response is surfaced as ``Conditional/notModified``
+    /// instead of a decoding error.
+    public func get<T: Decodable>(
+        _ path: String,
+        as type: T.Type = T.self,
+        query: [URLQueryItem] = [],
+        ifNoneMatch: String?
+    ) async throws -> Conditional<T> {
+        var headers = HTTPFields()
+        if let ifNoneMatch {
+            headers[.ifNoneMatch] = ifNoneMatch
+        }
+        let url = makeURL(path: path, query: query)
+        let response = try await perform(
+            method: .get,
+            url: url,
+            body: nil,
+            extraHeaders: headers)
+        if response.status == 304 { return .notModified }
+        return .modified(try decode(T.self, from: response), etag: response.etag)
+    }
+
     /// `GET path` returning every page of a paginated list, walking
     /// `Link: rel="next"` headers until exhausted.
     public func paginate<T: Decodable>(
@@ -256,6 +279,7 @@ public actor APIClient {
 
     private func checkStatus(_ r: APIResponse) throws {
         if (200..<300).contains(r.status) { return }
+        if r.status == 304 { return }
         if r.status == 404 { throw APIError.notFound(url: r.url) }
         if r.status == 401 { throw APIError.unauthenticated(url: r.url) }
         if r.status == 403,
