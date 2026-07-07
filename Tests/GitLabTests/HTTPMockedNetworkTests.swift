@@ -2,6 +2,7 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+import HTTPTypes
 import Testing
 @testable import GitLab
 
@@ -182,6 +183,33 @@ struct HTTPMockedNetworkTests {
             #expect(object?["labels"] as? String == "bug")
             #expect(object?["remove_source_branch"] as? Bool == true)
         }
+    }
+
+    @Test func rawSurfacesHeaderFieldsAndETag() async throws {
+        let session = MockURLProtocol.session()
+        let etag = #""repo-list-1""#
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "ETag": etag,
+                    "X-GitLab-Request-Id": "01HABCDE",
+                ])!
+            return (response, Data("[]".utf8))
+        }
+        let client = APIClient(
+            configuration: Configuration(),
+            session: session
+        )
+
+        let response = try await client.raw(method: .get, path: "projects")
+
+        #expect(response.headerFields[HTTPField.Name("X-GitLab-Request-Id")!] == "01HABCDE")
+        #expect(response.headerFields[.contentType] == "application/json")
+        #expect(response.etag == etag)
     }
 }
 
