@@ -24,6 +24,8 @@ public struct APIResponse: Sendable {
     public let httpVersion: String?
     public let url: URL
 
+    public var etag: String? { headerFields[.eTag] }
+
     public init(
         status: Int,
         body: Data,

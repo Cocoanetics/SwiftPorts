@@ -135,6 +135,74 @@ struct HTTPMockedNetworkTests {
             #expect(response.headerFields[HTTPField.Name("Server")!] == "github.com")
             #expect(response.headerFields[.contentType] == "application/json")
         }
+
+        @Test func conditionalGetReturnsNotModified() async throws {
+            let session = MockURLProtocol.session()
+            let oldEtag = #""etag-1""#
+            let seenIfNoneMatch = TestLockedBox<String?>(nil)
+            MockURLProtocol.handler = { request in
+                seenIfNoneMatch.withLock {
+                    $0 = request.value(forHTTPHeaderField: "If-None-Match")
+                }
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 304,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: nil)!
+                return (response, Data())
+            }
+            let client = APIClient(
+                configuration: Configuration(),
+                session: session
+            )
+            let result: Conditional<ConditionalPayload> = try await client.get(
+                "cacheable",
+                ifNoneMatch: oldEtag)
+            #expect(seenIfNoneMatch.withLock { $0 } == oldEtag)
+            switch result {
+            case .notModified:
+                break
+            case .modified:
+                Issue.record("expected not modified")
+            }
+        }
+
+        @Test func conditionalGetReturnsModifiedWithETag() async throws {
+            let session = MockURLProtocol.session()
+            let oldEtag = #""etag-1""#
+            let newEtag = #""etag-2""#
+            let seenIfNoneMatch = TestLockedBox<String?>(nil)
+            MockURLProtocol.handler = { request in
+                seenIfNoneMatch.withLock {
+                    $0 = request.value(forHTTPHeaderField: "If-None-Match")
+                }
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: [
+                        "Content-Type": "application/json",
+                        "ETag": newEtag,
+                    ])!
+                return (response, Data(#"{"id":1,"name":"cacheable"}"#.utf8))
+            }
+            let client = APIClient(
+                configuration: Configuration(),
+                session: session
+            )
+            let result: Conditional<ConditionalPayload> = try await client.get(
+                "cacheable",
+                ifNoneMatch: oldEtag)
+            #expect(seenIfNoneMatch.withLock { $0 } == oldEtag)
+            switch result {
+            case .modified(let value, let etag):
+                #expect(value.id == 1)
+                #expect(value.name == "cacheable")
+                #expect(etag == newEtag)
+            case .notModified:
+                Issue.record("expected modified")
+            }
+        }
     }
 
     @Suite struct GraphQLClientTests {
@@ -198,4 +266,9 @@ struct HTTPMockedNetworkTests {
             #expect(envelope.errors?.count == 1)
         }
     }
+}
+
+private struct ConditionalPayload: Decodable, Sendable {
+    let id: Int
+    let name: String
 }
