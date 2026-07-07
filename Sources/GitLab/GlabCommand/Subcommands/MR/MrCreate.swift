@@ -63,19 +63,6 @@ struct MrCreate: AsyncParsableCommand {
     @Flag(name: .long, help: "Print as JSON.")
     var json: Bool = false
 
-    private struct CreateRequest: Encodable {
-        let title: String
-        let description: String?
-        let sourceBranch: String
-        let targetBranch: String?
-        let labels: String?
-        let assigneeIds: [Int]?
-        let reviewerIds: [Int]?
-        let milestoneId: Int?
-        let removeSourceBranch: Bool?
-        let squash: Bool?
-    }
-
     func run() async throws {
         let target = try await CommandContext.resolveRepo(flag: repo)
         let client = try await CommandContext.apiClient(host: target.host)
@@ -108,11 +95,11 @@ struct MrCreate: AsyncParsableCommand {
             ? "Draft: \(title)"
             : title
 
-        let request = CreateRequest(
+        let request = MergeRequestCreateRequest(
             title: actualTitle,
-            description: description,
             sourceBranch: source,
             targetBranch: targetBranch,
+            description: description,
             labels: labels.isEmpty ? nil : labels.joined(separator: ","),
             assigneeIds: assigneeIds,
             reviewerIds: reviewerIds,

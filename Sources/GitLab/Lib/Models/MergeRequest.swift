@@ -44,4 +44,6 @@ public struct MergeRequest: Codable, Sendable, Identifiable {
     public let forceRemoveSourceBranch: Bool?
     public let squash: Bool?
     public let hasConflicts: Bool?
+    public let pipeline: Pipeline?
+    public let headPipeline: Pipeline?
 }
