@@ -95,7 +95,7 @@ import Testing
         #expect(note.position?.newPath == "Sources/App.swift")
         #expect(note.position?.newLine == 42)
         #expect(note.position?.lineRange?.start?.oldLine == 40)
-        #expect(discussion.position?.oldPath == "Sources/App.swift")
+        #expect(note.position?.oldPath == "Sources/App.swift")
         #expect(discussion.notes[1].type == "DiscussionNote")
     }
 }

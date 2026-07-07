@@ -11,8 +11,4 @@ public struct NotePosition: Codable, Sendable {
     public let oldLine: Int?
     public let newLine: Int?
     public let lineRange: NoteLineRange?
-    public let width: Int?
-    public let height: Int?
-    public let x: Double?
-    public let y: Double?
 }

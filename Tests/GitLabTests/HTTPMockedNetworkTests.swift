@@ -202,7 +202,7 @@ struct HTTPMockedNetworkTests {
             query: [URLQueryItem(name: "per_page", value: "1")])
 
         #expect(discussions.map(\.id) == ["disc-1", "disc-2"])
-        #expect(discussions.first?.position?.newLine == 42)
+        #expect(discussions.first?.notes.first?.position?.newLine == 42)
         let urls = seenURLs.withLock { $0 }
         #expect(urls.count == 2)
         #expect(urls[0].contains(
