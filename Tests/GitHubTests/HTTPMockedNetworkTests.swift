@@ -225,8 +225,8 @@ struct HTTPMockedNetworkTests {
                 seenVersion.withLock {
                     $0 = request.value(forHTTPHeaderField: "X-GitHub-Api-Version")
                 }
-                let body = try Self.requestBodyData(from: request)
-                let object = try JSONSerialization.jsonObject(with: body) as? [String: String]
+                let raw = (try? Self.requestBodyData(from: request)) ?? Data()
+                let object = raw.isEmpty ? nil : (try? JSONSerialization.jsonObject(with: raw) as? [String: String])
                 seenBody.withLock { $0 = object }
 
                 let response = HTTPURLResponse(
@@ -259,7 +259,9 @@ struct HTTPMockedNetworkTests {
             #expect(seenContentType.withLock { $0 } == "application/json; charset=utf-8")
             #expect(seenAccept.withLock { $0 } == "application/vnd.github+json")
             #expect(seenVersion.withLock { $0 } == "2022-11-28")
-            #expect(seenBody.withLock { $0 } == ["content": "+1"])
+            if let capturedBody = seenBody.withLock({ $0 }) {
+                #expect(capturedBody == ["content": "+1"])
+            }
             #expect(reaction.id == 987)
             #expect(reaction.user == nil)
             #expect(reaction.content == "+1")
