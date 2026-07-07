@@ -123,6 +123,95 @@ struct HTTPMockedNetworkTests {
         }
     }
 
+    @Test func mergeRequestDiscussionsFetchUsesEncodedProjectPathAndPaginates() async throws {
+        let session = MockURLProtocol.session()
+        let seenURLs = TestLockedBox<[String]>([])
+        MockURLProtocol.handler = { request in
+            seenURLs.withLock { $0.append(request.url!.absoluteString) }
+            let components = URLComponents(
+                url: request.url!,
+                resolvingAgainstBaseURL: false)
+            let page = components?.queryItems?
+                .first(where: { $0.name == "page" })?.value
+
+            let body: Data
+            var headers = ["Content-Type": "application/json"]
+            if page == "2" {
+                body = Data("""
+                [
+                  {
+                    "id": "disc-2",
+                    "individual_note": true,
+                    "notes": [
+                      {
+                        "id": 2,
+                        "type": null,
+                        "body": "follow-up",
+                        "author": {"id": 1, "username": "root"},
+                        "system": false
+                      }
+                    ]
+                  }
+                ]
+                """.utf8)
+            } else {
+                headers["X-Next-Page"] = "2"
+                body = Data("""
+                [
+                  {
+                    "id": "disc-1",
+                    "individual_note": false,
+                    "notes": [
+                      {
+                        "id": 1,
+                        "type": "DiffNote",
+                        "body": "needs work",
+                        "author": {"id": 1, "username": "root"},
+                        "system": false,
+                        "resolvable": true,
+                        "resolved": false,
+                        "resolved_by": null,
+                        "position": {
+                          "old_path": "Sources/App.swift",
+                          "new_path": "Sources/App.swift",
+                          "position_type": "text",
+                          "new_line": 42
+                        }
+                      }
+                    ]
+                  }
+                ]
+                """.utf8)
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: headers)!
+            return (response, body)
+        }
+
+        let client = APIClient(
+            configuration: Configuration(),
+            session: session
+        )
+        let repo = RepositoryReference(pathSegments: ["group", "sub", "repo"])
+        let discussions = try await client.mergeRequestDiscussions(
+            project: repo,
+            mergeRequestIID: 42,
+            query: [URLQueryItem(name: "per_page", value: "1")])
+
+        #expect(discussions.map(\.id) == ["disc-1", "disc-2"])
+        #expect(discussions.first?.notes.first?.position?.newLine == 42)
+        let urls = seenURLs.withLock { $0 }
+        #expect(urls.count == 2)
+        #expect(urls[0].contains(
+            "projects/group%2Fsub%2Frepo/merge_requests/42/discussions"))
+        #expect(urls[0].contains("per_page=1"))
+        #expect(urls[1].contains("page=2"))
+    }
+
     @Test func sendsMergeRequestCreateRequest() async throws {
         let session = MockURLProtocol.session()
         let seenMethod = TestLockedBox<String?>(nil)
