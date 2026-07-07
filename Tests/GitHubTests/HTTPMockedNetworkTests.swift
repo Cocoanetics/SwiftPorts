@@ -265,10 +265,146 @@ struct HTTPMockedNetworkTests {
             #expect(envelope.data?.viewer.login == "octocat")
             #expect(envelope.errors?.count == 1)
         }
+
+        @Test func queriesReviewThreadsByPR() async throws {
+            let session = MockURLProtocol.session()
+            let captured = TestLockedBox<[String: Any]?>(nil)
+            MockURLProtocol.handler = { request in
+                captured.withLock {
+                    $0 = try? JSONSerialization.jsonObject(
+                        with: requestBodyData(request)) as? [String: Any]
+                }
+                let body = Data(#"""
+                    {"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
+                      {"id":"PRRT_kw1","isResolved":false,"isOutdated":false,"comments":{"nodes":[{"databaseId":101},{"databaseId":102}]}},
+                      {"id":"PRRT_kw2","isResolved":true,"isOutdated":true,"comments":{"nodes":[{"databaseId":201}]}}
+                    ]}}}}}
+                    """#.utf8)
+                let response = HTTPURLResponse(
+                    url: request.url!, statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"])!
+                return (response, body)
+            }
+            let client = GraphQLClient(
+                configuration: Configuration(),
+                session: session)
+            let response: PullRequestReviewThreadsResponse = try await client.query(
+                PullRequestQueries.reviewThreads,
+                variables: [
+                    "owner": .string("octocat"),
+                    "name": .string("Hello-World"),
+                    "number": .int(42),
+                    "first": .int(100),
+                ])
+
+            let threads = try #require(response.repository?.pullRequest?.reviewThreads.nodes)
+            #expect(threads.count == 2)
+            let match = threads.first { thread in
+                thread.comments.nodes.contains { $0.databaseId == 102 }
+            }
+            #expect(match?.id == "PRRT_kw1")
+            #expect(match?.isResolved == false)
+            #expect(match?.isOutdated == false)
+
+            let requestJSON = try #require(captured.withLock { $0 })
+            #expect((requestJSON["query"] as? String)?.contains("reviewThreads(first: $first)") == true)
+            let variables = try #require(requestJSON["variables"] as? [String: Any])
+            #expect(variables["owner"] as? String == "octocat")
+            #expect(variables["name"] as? String == "Hello-World")
+            #expect(variables["number"] as? Int == 42)
+            #expect(variables["first"] as? Int == 100)
+        }
+
+        @Test func resolvesReviewThread() async throws {
+            let session = MockURLProtocol.session()
+            let captured = TestLockedBox<[String: Any]?>(nil)
+            MockURLProtocol.handler = { request in
+                captured.withLock {
+                    $0 = try? JSONSerialization.jsonObject(
+                        with: requestBodyData(request)) as? [String: Any]
+                }
+                let body = Data(#"""
+                    {"data":{"resolveReviewThread":{"thread":{"id":"PRRT_kw1","isResolved":true}}}}
+                    """#.utf8)
+                let response = HTTPURLResponse(
+                    url: request.url!, statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"])!
+                return (response, body)
+            }
+            let client = GraphQLClient(
+                configuration: Configuration(),
+                session: session)
+            let response: ResolveReviewThreadResponse = try await client.query(
+                PullRequestMutations.resolveReviewThread,
+                variables: ["threadId": .string("PRRT_kw1")])
+
+            #expect(response.resolveReviewThread.thread.id == "PRRT_kw1")
+            #expect(response.resolveReviewThread.thread.isResolved == true)
+
+            let requestJSON = try #require(captured.withLock { $0 })
+            #expect((requestJSON["query"] as? String)?.contains("resolveReviewThread") == true)
+            let variables = try #require(requestJSON["variables"] as? [String: Any])
+            #expect(variables["threadId"] as? String == "PRRT_kw1")
+        }
+
+        @Test func unresolvesReviewThread() async throws {
+            let session = MockURLProtocol.session()
+            let captured = TestLockedBox<[String: Any]?>(nil)
+            MockURLProtocol.handler = { request in
+                captured.withLock {
+                    $0 = try? JSONSerialization.jsonObject(
+                        with: requestBodyData(request)) as? [String: Any]
+                }
+                let body = Data(#"""
+                    {"data":{"unresolveReviewThread":{"thread":{"id":"PRRT_kw1","isResolved":false}}}}
+                    """#.utf8)
+                let response = HTTPURLResponse(
+                    url: request.url!, statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"])!
+                return (response, body)
+            }
+            let client = GraphQLClient(
+                configuration: Configuration(),
+                session: session)
+            let response: UnresolveReviewThreadResponse = try await client.query(
+                PullRequestMutations.unresolveReviewThread,
+                variables: ["threadId": .string("PRRT_kw1")])
+
+            #expect(response.unresolveReviewThread.thread.id == "PRRT_kw1")
+            #expect(response.unresolveReviewThread.thread.isResolved == false)
+
+            let requestJSON = try #require(captured.withLock { $0 })
+            #expect((requestJSON["query"] as? String)?.contains("unresolveReviewThread") == true)
+            let variables = try #require(requestJSON["variables"] as? [String: Any])
+            #expect(variables["threadId"] as? String == "PRRT_kw1")
+        }
     }
 }
 
 private struct ConditionalPayload: Decodable, Sendable {
     let id: Int
     let name: String
+}
+
+private func requestBodyData(_ request: URLRequest) -> Data {
+    if let body = request.httpBody {
+        return body
+    }
+    guard let stream = request.httpBodyStream else {
+        return Data()
+    }
+    stream.open()
+    defer { stream.close() }
+
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while stream.hasBytesAvailable {
+        let count = stream.read(&buffer, maxLength: buffer.count)
+        if count <= 0 { break }
+        data.append(buffer, count: count)
+    }
+    return data
 }

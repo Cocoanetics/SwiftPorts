@@ -229,6 +229,28 @@ public enum PullRequestQueries {
           }
         }
         """
+
+    /// Review-thread lookup for resolving a thread by one of its REST
+    /// review-comment database IDs. GitHub exposes thread resolution
+    /// only through GraphQL.
+    public static let reviewThreads = """
+        query($owner: String!, $name: String!, $number: Int!, $first: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              reviewThreads(first: $first) {
+                nodes {
+                  id
+                  isResolved
+                  isOutdated
+                  comments(first: 100) {
+                    nodes { databaseId }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
 }
 
 public struct PullRequestChecksResponse: Codable, Sendable {
@@ -238,6 +260,16 @@ public struct PullRequestChecksResponse: Codable, Sendable {
     }
     public struct PRWrapper: Codable, Sendable {
         public let commits: GQLNodeList<GQLStatusCheckCommitWrap>
+    }
+}
+
+public struct PullRequestReviewThreadsResponse: Codable, Sendable {
+    public let repository: Container?
+    public struct Container: Codable, Sendable {
+        public let pullRequest: PRWrapper?
+    }
+    public struct PRWrapper: Codable, Sendable {
+        public let reviewThreads: PullRequestReviewThreadConnection
     }
 }
 
@@ -260,6 +292,21 @@ public struct PullRequestViewResponse: Codable, Sendable {
 public struct PullRequestConnection: Codable, Sendable {
     public let totalCount: Int
     public let nodes: [GraphQLPullRequest]
+}
+
+public struct PullRequestReviewThreadConnection: Codable, Sendable {
+    public let nodes: [PullRequestReviewThread]
+}
+
+public struct PullRequestReviewThread: Codable, Sendable, Identifiable {
+    public let id: String
+    public let isResolved: Bool
+    public let isOutdated: Bool
+    public let comments: GQLNodeList<PullRequestReviewThreadComment>
+}
+
+public struct PullRequestReviewThreadComment: Codable, Sendable {
+    public let databaseId: Int?
 }
 
 // MARK: GraphQLPullRequest
