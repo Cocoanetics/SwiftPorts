@@ -24,15 +24,33 @@ import Testing
           "merge_status": "can_be_merged", "detailed_merge_status": "mergeable",
           "sha": "deadbeef", "merge_commit_sha": null, "squash_commit_sha": null,
           "discussion_locked": false, "should_remove_source_branch": null,
-          "force_remove_source_branch": false, "squash": false, "has_conflicts": false
+          "force_remove_source_branch": false, "squash": false, "has_conflicts": false,
+          "pipeline": {
+            "id": 9876, "iid": 12, "project_id": 7,
+            "sha": "deadbeef", "ref": "feature/hello",
+            "status": "success", "source": "push",
+            "web_url": "https://example.com/g/r/-/pipelines/9876"
+          },
+          "head_pipeline": {
+            "id": 9877, "iid": 13, "project_id": 7,
+            "sha": "deadbeef", "ref": "refs/merge-requests/11/head",
+            "status": "running", "source": "merge_request_event",
+            "web_url": "https://example.com/g/r/-/pipelines/9877"
+          }
         }
         """.data(using: .utf8)!
         let mr = try JSONDecoder.gitLab().decode(MergeRequest.self, from: json)
         #expect(mr.iid == 11)
         #expect(mr.state == .opened)
+        #expect(mr.detailedMergeStatus == .mergeable)
+        #expect(mr.detailedMergeStatus?.isMergeable == true)
+        #expect(mr.detailedMergeStatus?.isTransient == false)
         #expect(mr.sourceBranch == "feature/hello")
         #expect(mr.targetBranch == "main")
         #expect(mr.author?.username == "alice")
+        #expect(mr.pipeline?.status == .success)
+        #expect(mr.headPipeline?.id == 9877)
+        #expect(mr.headPipeline?.status == .running)
     }
 
     @Test func decodesUnknownStateGracefully() throws {
@@ -46,6 +64,34 @@ import Testing
         """.data(using: .utf8)!
         let mr = try JSONDecoder.gitLab().decode(MergeRequest.self, from: json)
         #expect(mr.state == .unknown("weird_future_state"))
+    }
+
+    @Test func decodesUnknownDetailedMergeStatusGracefully() throws {
+        let json = """
+        {
+          "id": 1, "iid": 1, "project_id": 1,
+          "title": "x", "state": "opened",
+          "target_branch": "main", "source_branch": "f",
+          "labels": [], "web_url": "https://x/y/-/merge_requests/1",
+          "detailed_merge_status": "future_status"
+        }
+        """.data(using: .utf8)!
+        let mr = try JSONDecoder.gitLab().decode(MergeRequest.self, from: json)
+        #expect(mr.detailedMergeStatus == .unknown("future_status"))
+        #expect(mr.detailedMergeStatus?.rawValue == "future_status")
+    }
+
+    @Test func detailedMergeStatusClassifiesMergeability() {
+        #expect(DetailedMergeStatus.mergeable.isMergeable)
+        #expect(!DetailedMergeStatus.mergeable.isTransient)
+        #expect(DetailedMergeStatus.checking.isTransient)
+        #expect(DetailedMergeStatus.preparing.isTransient)
+        #expect(DetailedMergeStatus.unchecked.isTransient)
+        #expect(DetailedMergeStatus.approvalsSyncing.isTransient)
+        #expect(DetailedMergeStatus.ciStillRunning.isTransient)
+        #expect(!DetailedMergeStatus.conflict.isMergeable)
+        #expect(!DetailedMergeStatus.conflict.isTransient)
+        #expect(!DetailedMergeStatus.ciMustPass.isTransient)
     }
 }
 

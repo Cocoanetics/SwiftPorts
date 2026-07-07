@@ -121,9 +121,90 @@ struct HTTPMockedNetworkTests {
             Issue.record("expected modified")
         }
     }
+
+    @Test func sendsMergeRequestCreateRequest() async throws {
+        let session = MockURLProtocol.session()
+        let seenMethod = TestLockedBox<String?>(nil)
+        let seenURL = TestLockedBox<String?>(nil)
+        let seenBody = TestLockedBox<Data?>(nil)
+
+        MockURLProtocol.handler = { request in
+            seenMethod.withLock { $0 = request.httpMethod }
+            seenURL.withLock { $0 = request.url?.absoluteString }
+            seenBody.withLock { $0 = requestBodyData(request) }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 201,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"])!
+            let body = Data("""
+            {
+              "id": 10, "iid": 2, "project_id": 7,
+              "title": "Add foo", "description": "Long body",
+              "state": "opened",
+              "target_branch": "main", "source_branch": "feat/foo",
+              "labels": ["bug"], "web_url": "https://gitlab.example.com/group/repo/-/merge_requests/2",
+              "detailed_merge_status": "checking"
+            }
+            """.utf8)
+            return (response, body)
+        }
+
+        let client = APIClient(
+            configuration: Configuration(host: "gitlab.example.com", token: "token"),
+            session: session)
+        let request = MergeRequestCreateRequest(
+            title: "Add foo",
+            sourceBranch: "feat/foo",
+            targetBranch: "main",
+            description: "Long body",
+            labels: "bug",
+            removeSourceBranch: true)
+        let merge: MergeRequest = try await client.send(
+            method: .post,
+            path: "projects/group%2Frepo/merge_requests",
+            body: request)
+
+        #expect(merge.iid == 2)
+        #expect(merge.detailedMergeStatus == .checking)
+        #expect(seenMethod.withLock { $0 } == "POST")
+        #expect(seenURL.withLock { $0 }?.contains("projects/group%2Frepo/merge_requests") == true)
+
+        let bodyData = try #require(seenBody.withLock { $0 })
+        let object = try JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+        #expect(object["title"] as? String == "Add foo")
+        #expect(object["source_branch"] as? String == "feat/foo")
+        #expect(object["target_branch"] as? String == "main")
+        #expect(object["description"] as? String == "Long body")
+        #expect(object["labels"] as? String == "bug")
+        #expect(object["remove_source_branch"] as? Bool == true)
+    }
 }
 
 private struct ConditionalPayload: Decodable, Sendable {
     let id: Int
     let name: String
+}
+
+private func requestBodyData(_ request: URLRequest) -> Data {
+    if let body = request.httpBody { return body }
+    guard let stream = request.httpBodyStream else { return Data() }
+
+    stream.open()
+    defer { stream.close() }
+
+    let bufferSize = 4096
+    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+    defer { buffer.deallocate() }
+
+    var data = Data()
+    while stream.hasBytesAvailable {
+        let count = stream.read(buffer, maxLength: bufferSize)
+        if count > 0 {
+            data.append(buffer, count: count)
+        } else {
+            break
+        }
+    }
+    return data
 }
