@@ -203,6 +203,96 @@ struct HTTPMockedNetworkTests {
                 Issue.record("expected modified")
             }
         }
+
+        @Test func createsPullReviewCommentReaction() async throws {
+            let session = MockURLProtocol.session()
+            let seenMethod = TestLockedBox<String?>(nil)
+            let seenPath = TestLockedBox<String?>(nil)
+            let seenContentType = TestLockedBox<String?>(nil)
+            let seenAccept = TestLockedBox<String?>(nil)
+            let seenVersion = TestLockedBox<String?>(nil)
+            let seenBody = TestLockedBox<[String: String]?>(nil)
+
+            MockURLProtocol.handler = { request in
+                seenMethod.withLock { $0 = request.httpMethod }
+                seenPath.withLock { $0 = request.url?.path }
+                seenContentType.withLock {
+                    $0 = request.value(forHTTPHeaderField: "Content-Type")
+                }
+                seenAccept.withLock {
+                    $0 = request.value(forHTTPHeaderField: "Accept")
+                }
+                seenVersion.withLock {
+                    $0 = request.value(forHTTPHeaderField: "X-GitHub-Api-Version")
+                }
+                let raw = (try? Self.requestBodyData(from: request)) ?? Data()
+                let object = raw.isEmpty ? nil : (try? JSONSerialization.jsonObject(with: raw) as? [String: String])
+                seenBody.withLock { $0 = object }
+
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 201,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"])!
+                let data = Data(#"""
+                    {
+                      "id": 987,
+                      "user": null,
+                      "content": "+1",
+                      "created_at": "2024-01-15T10:30:00Z"
+                    }
+                    """#.utf8)
+                return (response, data)
+            }
+
+            let client = APIClient(
+                configuration: Configuration(),
+                session: session
+            )
+            let reaction: Reaction = try await client.send(
+                method: .post,
+                path: "repos/octocat/Hello-World/pulls/comments/123/reactions",
+                body: AddReactionRequest(content: .plus1))
+
+            #expect(seenMethod.withLock { $0 } == "POST")
+            #expect(seenPath.withLock { $0 } == "/repos/octocat/Hello-World/pulls/comments/123/reactions")
+            #expect(seenContentType.withLock { $0 } == "application/json; charset=utf-8")
+            #expect(seenAccept.withLock { $0 } == "application/vnd.github+json")
+            #expect(seenVersion.withLock { $0 } == "2022-11-28")
+            if let capturedBody = seenBody.withLock({ $0 }) {
+                #expect(capturedBody == ["content": "+1"])
+            }
+            #expect(reaction.id == 987)
+            #expect(reaction.user == nil)
+            #expect(reaction.content == "+1")
+            #expect(reaction.createdAt == ISO8601DateFormatter().date(from: "2024-01-15T10:30:00Z"))
+        }
+
+        private static func requestBodyData(from request: URLRequest) throws -> Data {
+            if let body = request.httpBody {
+                return body
+            }
+            guard let stream = request.httpBodyStream else {
+                return Data()
+            }
+            stream.open()
+            defer { stream.close() }
+
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 1024)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count < 0 {
+                    throw stream.streamError ?? NSError(
+                        domain: "MockURLProtocol",
+                        code: 2,
+                        userInfo: [NSLocalizedDescriptionKey: "failed to read request body"])
+                }
+                if count == 0 { break }
+                data.append(buffer, count: count)
+            }
+            return data
+        }
     }
 
     @Suite struct GraphQLClientTests {

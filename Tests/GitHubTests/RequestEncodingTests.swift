@@ -68,4 +68,25 @@ import Testing
         #expect(object["body"] as? String == "👍")
         #expect(object.keys.count == 1)
     }
+
+    @Test func addReactionBodyUsesWireContent() throws {
+        let cases: [(ReactionContent, String)] = [
+            (.plus1, "+1"),
+            (.minus1, "-1"),
+            (.laugh, "laugh"),
+            (.confused, "confused"),
+            (.heart, "heart"),
+            (.hooray, "hooray"),
+            (.rocket, "rocket"),
+            (.eyes, "eyes"),
+        ]
+
+        for (content, rawValue) in cases {
+            let request = AddReactionRequest(content: content)
+            let data = try JSONEncoder.gitHub().encode(request)
+            let object = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+            #expect(object["content"] as? String == rawValue)
+            #expect(object.keys.count == 1)
+        }
+    }
 }
