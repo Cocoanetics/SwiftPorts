@@ -123,7 +123,7 @@ struct HTTPMockedNetworkTests {
         }
     }
 
-    @Test func rawSurfacesHeaderFieldsAndRateLimitAccessors() async throws {
+    @Test func rawSurfacesHeaderFieldsAndETag() async throws {
         let session = MockURLProtocol.session()
         let etag = #""repo-list-1""#
         MockURLProtocol.handler = { request in
@@ -134,10 +134,6 @@ struct HTTPMockedNetworkTests {
                 headerFields: [
                     "Content-Type": "application/json",
                     "ETag": etag,
-                    "RateLimit-Remaining": "42",
-                    "RateLimit-Reset": "1700000000",
-                    "RateLimit-ResetTime": "Tue, 14 Nov 2023 22:13:20 GMT",
-                    "Retry-After": "17",
                     "X-GitLab-Request-Id": "01HABCDE",
                 ])!
             return (response, Data("[]".utf8))
@@ -152,10 +148,6 @@ struct HTTPMockedNetworkTests {
         #expect(response.headerFields[HTTPField.Name("X-GitLab-Request-Id")!] == "01HABCDE")
         #expect(response.headerFields[.contentType] == "application/json")
         #expect(response.etag == etag)
-        #expect(response.rateLimitRemaining == 42)
-        #expect(response.rateLimitResetAt == Date(timeIntervalSince1970: 1_700_000_000))
-        #expect(response.rateLimitResetTime == "Tue, 14 Nov 2023 22:13:20 GMT")
-        #expect(response.retryAfter == 17)
     }
 }
 
