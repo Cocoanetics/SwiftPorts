@@ -203,6 +203,58 @@ struct HTTPMockedNetworkTests {
                 Issue.record("expected modified")
             }
         }
+
+        @Test func decodesCombinedCommitStatus() async throws {
+            let session = MockURLProtocol.session()
+            let seenPath = TestLockedBox<String?>(nil)
+            MockURLProtocol.handler = { request in
+                seenPath.withLock { $0 = request.url?.path }
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/vnd.github+json"])!
+                return (response, Data(combinedStatusJSON.utf8))
+            }
+            let client = APIClient(
+                configuration: Configuration(),
+                session: session
+            )
+            let status: CombinedStatus = try await client.get(
+                "repos/octocat/Hello-World/commits/main/status")
+            #expect(seenPath.withLock { $0 } == "/repos/octocat/Hello-World/commits/main/status")
+            #expect(status.state == "failure")
+            #expect(status.sha == "a1b2c3d4")
+            #expect(status.totalCount == 1)
+            #expect(status.repository.fullName == "octocat/Hello-World")
+            #expect(status.statuses.first?.context == "continuous-integration/jenkins")
+            #expect(status.statuses.first?.targetUrl?.host == "ci.example.com")
+        }
+
+        @Test func decodesCommitStatusList() async throws {
+            let session = MockURLProtocol.session()
+            let seenPath = TestLockedBox<String?>(nil)
+            MockURLProtocol.handler = { request in
+                seenPath.withLock { $0 = request.url?.path }
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/vnd.github+json"])!
+                return (response, Data("[\(commitStatusJSON)]".utf8))
+            }
+            let client = APIClient(
+                configuration: Configuration(),
+                session: session
+            )
+            let statuses: [CommitStatus] = try await client.get(
+                "repos/octocat/Hello-World/commits/a1b2c3d4/statuses")
+            #expect(seenPath.withLock { $0 } == "/repos/octocat/Hello-World/commits/a1b2c3d4/statuses")
+            #expect(statuses.count == 1)
+            #expect(statuses[0].state == "failure")
+            #expect(statuses[0].description == "Build failed")
+            #expect(statuses[0].creator?.login == "octocat")
+        }
     }
 
     @Suite struct GraphQLClientTests {
@@ -272,3 +324,60 @@ private struct ConditionalPayload: Decodable, Sendable {
     let id: Int
     let name: String
 }
+
+private let githubUserJSON = #"""
+{
+  "login": "octocat",
+  "id": 1,
+  "node_id": "MDQ6VXNlcjE=",
+  "avatar_url": "https://github.com/images/error/octocat_happy.gif",
+  "html_url": "https://github.com/octocat",
+  "type": "User",
+  "site_admin": false
+}
+"""#
+
+private let minimalRepositoryJSON = #"""
+{
+  "id": 1296269,
+  "node_id": "MDEwOlJlcG9zaXRvcnkxMjk2MjY5",
+  "name": "Hello-World",
+  "full_name": "octocat/Hello-World",
+  "owner": \#(githubUserJSON),
+  "private": false,
+  "html_url": "https://github.com/octocat/Hello-World",
+  "description": "This your first repo!",
+  "fork": false,
+  "url": "https://api.github.com/repos/octocat/Hello-World"
+}
+"""#
+
+private let commitStatusJSON = #"""
+{
+  "url": "https://api.github.com/repos/octocat/Hello-World/statuses/1",
+  "avatar_url": "https://github.com/images/error/hubot_happy.gif",
+  "id": 1,
+  "node_id": "MDY6U3RhdHVzMQ==",
+  "state": "failure",
+  "description": "Build failed",
+  "target_url": "https://ci.example.com/1000/output",
+  "context": "continuous-integration/jenkins",
+  "created_at": "2024-01-01T00:00:00Z",
+  "updated_at": "2024-01-01T00:00:30Z",
+  "creator": \#(githubUserJSON)
+}
+"""#
+
+private let combinedStatusJSON = #"""
+{
+  "state": "failure",
+  "statuses": [
+    \#(commitStatusJSON)
+  ],
+  "sha": "a1b2c3d4",
+  "total_count": 1,
+  "repository": \#(minimalRepositoryJSON),
+  "commit_url": "https://api.github.com/repos/octocat/Hello-World/commits/a1b2c3d4",
+  "url": "https://api.github.com/repos/octocat/Hello-World/commits/a1b2c3d4/status"
+}
+"""#
