@@ -201,6 +201,14 @@ public actor APIClient {
         let total = response.headerFields[.gitlabTotal].flatMap(Int.init)
         let perPage = response.headerFields[.gitlabPerPage].flatMap(Int.init)
         let contentType = response.headerFields[.contentType]
+        let rateLimitRemaining = response.headerFields[.gitlabRateLimitRemaining]
+            .flatMap(Int.init)
+        let rateLimitResetAt = response.headerFields[.gitlabRateLimitReset]
+            .flatMap(TimeInterval.init)
+            .map { Date(timeIntervalSince1970: $0) }
+        let rateLimitResetTime = response.headerFields[.gitlabRateLimitResetTime]
+        let retryAfter = response.headerFields[.gitlabRetryAfter]
+            .flatMap(TimeInterval.init)
 
         logger.debug("HTTP \(response.status.code) (\(data.count) bytes)")
 
@@ -213,6 +221,10 @@ public actor APIClient {
             total: total,
             perPage: perPage,
             contentType: contentType,
+            rateLimitRemaining: rateLimitRemaining,
+            rateLimitResetAt: rateLimitResetAt,
+            rateLimitResetTime: rateLimitResetTime,
+            retryAfter: retryAfter,
             headerFields: response.headerFields)
 
         try checkStatus(apiResponse)
@@ -265,4 +277,8 @@ extension HTTPField.Name {
     static let gitlabTotalPages = HTTPField.Name("X-Total-Pages")!
     static let gitlabTotal = HTTPField.Name("X-Total")!
     static let gitlabPerPage = HTTPField.Name("X-Per-Page")!
+    static let gitlabRateLimitRemaining = HTTPField.Name("RateLimit-Remaining")!
+    static let gitlabRateLimitReset = HTTPField.Name("RateLimit-Reset")!
+    static let gitlabRateLimitResetTime = HTTPField.Name("RateLimit-ResetTime")!
+    static let gitlabRetryAfter = HTTPField.Name("Retry-After")!
 }

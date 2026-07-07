@@ -13,6 +13,10 @@ public struct APIResponse: Sendable {
     public let perPage: Int?
     public let contentType: String?
     public let headerFields: HTTPFields
+    public let rateLimitRemaining: Int?
+    public let rateLimitResetAt: Date?
+    public let rateLimitResetTime: String?
+    public let retryAfter: TimeInterval?
 
     public var etag: String? { headerFields[.eTag] }
 
@@ -25,6 +29,10 @@ public struct APIResponse: Sendable {
         total: Int?,
         perPage: Int?,
         contentType: String?,
+        rateLimitRemaining: Int? = nil,
+        rateLimitResetAt: Date? = nil,
+        rateLimitResetTime: String? = nil,
+        retryAfter: TimeInterval? = nil,
         headerFields: HTTPFields = [:]
     ) {
         self.status = status
@@ -36,5 +44,9 @@ public struct APIResponse: Sendable {
         self.perPage = perPage
         self.contentType = contentType
         self.headerFields = headerFields
+        self.rateLimitRemaining = rateLimitRemaining
+        self.rateLimitResetAt = rateLimitResetAt
+        self.rateLimitResetTime = rateLimitResetTime
+        self.retryAfter = retryAfter
     }
 }
