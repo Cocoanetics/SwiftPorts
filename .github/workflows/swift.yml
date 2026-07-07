@@ -43,6 +43,21 @@ jobs:
           done
       - name: Verify Swift version
         run: swift --version
+      - name: Stage libswiftCompatibilitySpan for test-bundle dlopen
+        # Xcode 26 keeps libswiftCompatibilitySpan.dylib in the toolchain but does
+        # not stage it next to SwiftPM products, so on a macos-latest runner whose
+        # OS is older than the SDK the test bundle intermittently fails to dlopen it
+        # (@rpath/libswiftCompatibilitySpan.dylib — passes on newer-OS runners where
+        # Span is native). Point DYLD at the toolchain copy so `swift test` can load
+        # the bundle regardless of which runner OS we land on.
+        run: |
+          DIR=$(dirname "$(find "$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" -name libswiftCompatibilitySpan.dylib 2>/dev/null | head -1)")
+          if [ -n "$DIR" ]; then
+            echo "libswiftCompatibilitySpan.dylib dir: $DIR"
+            echo "DYLD_FALLBACK_LIBRARY_PATH=$DIR:/usr/local/lib:/usr/lib" >> "$GITHUB_ENV"
+          else
+            echo "warning: libswiftCompatibilitySpan.dylib not found under the toolchain"
+          fi
       - name: Build (macOS)
         run: swift build --build-tests -v
       - name: Test (macOS)
