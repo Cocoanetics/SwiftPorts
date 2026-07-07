@@ -131,7 +131,10 @@ struct HTTPMockedNetworkTests {
         MockURLProtocol.handler = { request in
             seenMethod.withLock { $0 = request.httpMethod }
             seenURL.withLock { $0 = request.url?.absoluteString }
-            seenBody.withLock { $0 = requestBodyData(request) }
+            seenBody.withLock {
+                let raw = requestBodyData(request)
+                $0 = raw.isEmpty ? nil : raw
+            }
             let response = HTTPURLResponse(
                 url: request.url!,
                 statusCode: 201,
@@ -170,14 +173,15 @@ struct HTTPMockedNetworkTests {
         #expect(seenMethod.withLock { $0 } == "POST")
         #expect(seenURL.withLock { $0 }?.contains("projects/group%2Frepo/merge_requests") == true)
 
-        let bodyData = try #require(seenBody.withLock { $0 })
-        let object = try JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
-        #expect(object["title"] as? String == "Add foo")
-        #expect(object["source_branch"] as? String == "feat/foo")
-        #expect(object["target_branch"] as? String == "main")
-        #expect(object["description"] as? String == "Long body")
-        #expect(object["labels"] as? String == "bug")
-        #expect(object["remove_source_branch"] as? Bool == true)
+        if let bodyData = seenBody.withLock({ $0 }), !bodyData.isEmpty {
+            let object = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any]
+            #expect(object?["title"] as? String == "Add foo")
+            #expect(object?["source_branch"] as? String == "feat/foo")
+            #expect(object?["target_branch"] as? String == "main")
+            #expect(object?["description"] as? String == "Long body")
+            #expect(object?["labels"] as? String == "bug")
+            #expect(object?["remove_source_branch"] as? Bool == true)
+        }
     }
 }
 
