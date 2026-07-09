@@ -13,19 +13,26 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+# Cancel superseded runs on the same branch. The Windows and Android jobs are
+# expensive enough that stacking stale CI runs wastes runner capacity.
+concurrency:
+  group: swift-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
 
   build-macos:
     runs-on: macos-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
-      # macos-latest currently ships Xcode 16 / Swift 6.1; we need 6.2
-      # because swift-configuration uses tools-version 6.2.
-      - name: Select Xcode 26.0
+      # Use the newest stable Xcode on the hosted image. SwiftPorts needs at
+      # least Swift 6.2 for package manifests, and newer Xcodes avoid spelling a
+      # stale exact version once the runner image advances.
+      - name: Select newest Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "26.0"
+          xcode-version: latest-stable
       - name: Install C dependencies (Homebrew)
         # bzip2 / zstd are needed by Bzip2Kit / ZstdKit and by
         # libarchive's bz2 / zstd filters. xz is no longer needed on
@@ -48,15 +55,17 @@ jobs:
         # not stage it next to SwiftPM products, so on a macos-latest runner whose
         # OS is older than the SDK the test bundle intermittently fails to dlopen it
         # (@rpath/libswiftCompatibilitySpan.dylib — passes on newer-OS runners where
-        # Span is native). Point DYLD at the toolchain copy so `swift test` can load
-        # the bundle regardless of which runner OS we land on.
+        # Span is native). Point DYLD at the macOS toolchain copy; the toolchain also
+        # contains same-named iOS/watchOS/visionOS dylibs that dyld rejects for macOS.
         run: |
-          DIR=$(dirname "$(find "$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" -name libswiftCompatibilitySpan.dylib 2>/dev/null | head -1)")
-          if [ -n "$DIR" ]; then
-            echo "libswiftCompatibilitySpan.dylib dir: $DIR"
+          TOOLCHAIN_LIB="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib"
+          SPAN="$(find "$TOOLCHAIN_LIB" -path '*/macosx/libswiftCompatibilitySpan.dylib' 2>/dev/null | head -1)"
+          if [ -n "$SPAN" ]; then
+            DIR="$(dirname "$SPAN")"
+            echo "macOS libswiftCompatibilitySpan.dylib dir: $DIR"
             echo "DYLD_FALLBACK_LIBRARY_PATH=$DIR:/usr/local/lib:/usr/lib" >> "$GITHUB_ENV"
           else
-            echo "warning: libswiftCompatibilitySpan.dylib not found under the toolchain"
+            echo "warning: macOS libswiftCompatibilitySpan.dylib not found under the toolchain"
           fi
       - name: Build (macOS)
         run: swift build --build-tests -v
@@ -86,15 +95,22 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
-      - name: Select Xcode 26.0
+      - name: Select newest Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "26.0"
-      - name: Install iOS Simulator runtime
-        # macos-latest ships Xcode 26 but not the matching iOS 26 simulator
-        # runtime, so `OS=latest` resolves to an uninstalled runtime and
-        # xcodebuild fails with "iOS 26.0 is not installed". Download it first.
-        run: xcodebuild -downloadPlatform iOS
+          xcode-version: latest-stable
+      - name: Install iOS platform
+        # The hosted image can lag the selected Xcode's iOS runtime. The
+        # download occasionally flakes, so retry before failing the job.
+        run: |
+          set -o pipefail
+          for i in 1 2 3; do
+            echo "::group::xcodebuild -downloadPlatform iOS (attempt $i)"
+            if xcodebuild -downloadPlatform iOS; then echo "::endgroup::"; exit 0; fi
+            echo "::endgroup::"
+            echo "attempt $i failed; retrying in 20s"; sleep 20
+          done
+          echo "::error::Could not download the iOS platform after 3 attempts"; exit 1
       - name: Test (iOS Simulator)
         run: |
           set -euo pipefail
@@ -115,11 +131,12 @@ jobs:
     # Linux: full build + test, parity with Apple platforms.
     # libgit2 1.9.x needs OpenSSL + zlib + ca-certificates for HTTPS
     # clones; pkg-config wires libgit2's CMake config up correctly.
-    # Container pinned to 6.2 — swift-configuration uses tools-version 6.2.
+    # Use the current Swift 6.3 toolchain; the package's minimum tools-version
+    # remains 6.2, but CI should track the newer stable Linux compiler.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     container:
-      image: swift:6.2-jammy
+      image: swift:6.3-jammy
     steps:
       - uses: actions/checkout@v6
       - name: Install C dependencies
