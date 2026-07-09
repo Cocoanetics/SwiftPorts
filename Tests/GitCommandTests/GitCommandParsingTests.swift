@@ -105,6 +105,37 @@ struct GitCommandParsingTests {
         #expect(cmd.showCurrent == true)
     }
 
+    @Test("worktree add: path defaults branch")
+    func worktreeAddPathOnly() throws {
+        let cmd = try parse(["worktree", "add", "../feature"], as: WorktreeAdd.self)
+        #expect(cmd.path == "../feature")
+        #expect(cmd.branch == nil)
+        #expect(cmd.force == false)
+    }
+
+    @Test("worktree add: force + branch")
+    func worktreeAddForceBranch() throws {
+        let cmd = try parse(
+            ["worktree", "add", "--force", "../wt", "feature/wt"],
+            as: WorktreeAdd.self)
+        #expect(cmd.path == "../wt")
+        #expect(cmd.branch == "feature/wt")
+        #expect(cmd.force == true)
+    }
+
+    @Test("worktree list: porcelain")
+    func worktreeListPorcelain() throws {
+        let cmd = try parse(["worktree", "list", "--porcelain"], as: WorktreeList.self)
+        #expect(cmd.porcelain == true)
+    }
+
+    @Test("worktree remove: force")
+    func worktreeRemoveForce() throws {
+        let cmd = try parse(["worktree", "remove", "-f", "../wt"], as: WorktreeRemove.self)
+        #expect(cmd.worktree == "../wt")
+        #expect(cmd.force == true)
+    }
+
     @Test("version: parses to VersionCommand")
     func version() throws {
         _ = try parse(["version"], as: VersionCommand.self)
