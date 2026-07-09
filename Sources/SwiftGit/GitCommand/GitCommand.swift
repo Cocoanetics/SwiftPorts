@@ -52,6 +52,7 @@ public struct GitCommand: AsyncParsableCommand {
             LsTree.self,
             CatFile.self,
             Archive.self,
+            WorktreeCommand.self,
         ]
     )
 

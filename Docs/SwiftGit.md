@@ -59,6 +59,7 @@ let client = GitClient(
 | `objectMetadata(of:)` / `catFileBlob(_:)` | `git cat-file -t/-s` and `-p` (blobs) |
 | `reflog(refName:)` → `[ReflogEntry]` | `git reflog [<ref>]` |
 | `apply(diff:location:)` | `git apply [--cached, --index]` |
+| `worktreeList()` → `[GitWorktreeInfo]` | `git worktree list` |
 
 ### Writes
 
@@ -84,6 +85,7 @@ let client = GitClient(
 | `tagCreate(name:target:force:)` / `tagCreateAnnotated(...)` / `tagDelete(name:)` | `git tag` family |
 | `move(from:to:)` / `remove(paths:keepWorktree:force:)` | `git mv` / `git rm` |
 | `stashSave(message:author:flags:)` / `stashApply / stashPop / stashDrop / stashList / stashClear / stashShow / stashBranch` | `git stash` family |
+| `worktreeAdd(path:branch:force:)` / `worktreeRemove(name:force:)` | `git worktree add/remove` |
 
 ### Auth
 
@@ -212,4 +214,4 @@ extension GitCommand: ParsableBashCommand {
 - `git log --graph` — ASCII rendering is fiddly, libgit2 has no helper. Skipped.
 - `git diff --color` / `--word-diff` — libgit2 has no colorizer / word-tokenizer. Skipped.
 - `--ahead-behind` annotations on status / branch listing — would need `git_graph_ahead_behind` per ref. Possible follow-up.
-- `git rebase --interactive`, `git submodule`, `git worktree`, `git bisect`, `git filter-branch`, `git reflog` — out of scope.
+- `git rebase --interactive`, `git submodule`, `git worktree lock/move/prune/repair/unlock`, `git bisect`, `git filter-branch` — out of scope.

@@ -105,6 +105,47 @@ struct GitCommandParsingTests {
         #expect(cmd.showCurrent == true)
     }
 
+    @Test("worktree add: path defaults branch")
+    func worktreeAddPathOnly() throws {
+        let cmd = try parse(["worktree", "add", "../feature"], as: WorktreeAdd.self)
+        #expect(cmd.path == "../feature")
+        #expect(cmd.commitish == nil)
+        #expect(cmd.newBranch == nil)
+        #expect(cmd.force == false)
+    }
+
+    @Test("worktree add: force + commit-ish")
+    func worktreeAddForceCommitish() throws {
+        let cmd = try parse(
+            ["worktree", "add", "--force", "../wt", "feature/wt"],
+            as: WorktreeAdd.self)
+        #expect(cmd.path == "../wt")
+        #expect(cmd.commitish == "feature/wt")
+        #expect(cmd.newBranch == nil)
+        #expect(cmd.force == true)
+    }
+
+    @Test("worktree add: -b creates branch")
+    func worktreeAddNewBranch() throws {
+        let cmd = try parse(["worktree", "add", "-b", "feature/wt", "../wt"], as: WorktreeAdd.self)
+        #expect(cmd.path == "../wt")
+        #expect(cmd.commitish == nil)
+        #expect(cmd.newBranch == "feature/wt")
+    }
+
+    @Test("worktree list: porcelain")
+    func worktreeListPorcelain() throws {
+        let cmd = try parse(["worktree", "list", "--porcelain"], as: WorktreeList.self)
+        #expect(cmd.porcelain == true)
+    }
+
+    @Test("worktree remove: force")
+    func worktreeRemoveForce() throws {
+        let cmd = try parse(["worktree", "remove", "-f", "../wt"], as: WorktreeRemove.self)
+        #expect(cmd.worktree == "../wt")
+        #expect(cmd.force == true)
+    }
+
     @Test("version: parses to VersionCommand")
     func version() throws {
         _ = try parse(["version"], as: VersionCommand.self)
