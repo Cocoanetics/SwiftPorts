@@ -19,12 +19,28 @@ public actor APIClient {
 
     public init(
         configuration: Configuration = .live(),
-        session: URLSession = .shared,
+        logger: Logger = Loggers.api
+    ) {
+        self.init(
+            configuration: configuration,
+            session: Self.makeDefaultSession(),
+            logger: logger)
+    }
+
+    public init(
+        configuration: Configuration = .live(),
+        session: URLSession,
         logger: Logger = Loggers.api
     ) {
         self.configuration = configuration
         self.session = session
         self.logger = logger
+    }
+
+    private static func makeDefaultSession() -> URLSession {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 30
+        return URLSession(configuration: configuration)
     }
 
     // MARK: REST
