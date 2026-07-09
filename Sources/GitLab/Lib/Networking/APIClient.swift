@@ -40,7 +40,6 @@ public actor APIClient {
     private static func makeDefaultSession() -> URLSession {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 30
-        configuration.timeoutIntervalForResource = 30
         return URLSession(configuration: configuration)
     }
 
