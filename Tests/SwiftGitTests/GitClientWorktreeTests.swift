@@ -10,6 +10,18 @@ struct GitClientWorktreeTests {
             .appendingPathComponent("\(prefix)-\(UUID().uuidString)")
     }
 
+    private func canonicalPath(_ url: URL) -> String {
+        var path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        while path.count > 1 && path.hasSuffix("/") {
+            path.removeLast()
+        }
+        return path
+    }
+
+    private func canonicalPathIfPresent(_ url: URL?) -> String? {
+        url.map(canonicalPath)
+    }
+
     private func makeRepo() async throws -> URL {
         let dir = tmpDir("GitClientWorktree")
         let client = SwiftGit.GitClient(workingDirectory: dir)
@@ -83,9 +95,9 @@ struct GitClientWorktreeTests {
         let entries = try await linkedClient.worktreeList()
         #expect(entries.count == 2)
         #expect(entries.first?.isMain == true)
-        #expect(entries.first?.path.standardizedFileURL == dir.standardizedFileURL)
+        #expect(canonicalPathIfPresent(entries.first?.path) == canonicalPath(dir))
         #expect(entries.first?.branch == "main")
-        #expect(entries.dropFirst().first?.path.standardizedFileURL == linked.standardizedFileURL)
+        #expect(canonicalPathIfPresent(entries.dropFirst().first?.path) == canonicalPath(linked))
         #expect(entries.dropFirst().first?.branch == "feature/list-from-linked")
     }
 }

@@ -109,18 +109,28 @@ struct GitCommandParsingTests {
     func worktreeAddPathOnly() throws {
         let cmd = try parse(["worktree", "add", "../feature"], as: WorktreeAdd.self)
         #expect(cmd.path == "../feature")
-        #expect(cmd.branch == nil)
+        #expect(cmd.commitish == nil)
+        #expect(cmd.newBranch == nil)
         #expect(cmd.force == false)
     }
 
-    @Test("worktree add: force + branch")
-    func worktreeAddForceBranch() throws {
+    @Test("worktree add: force + commit-ish")
+    func worktreeAddForceCommitish() throws {
         let cmd = try parse(
             ["worktree", "add", "--force", "../wt", "feature/wt"],
             as: WorktreeAdd.self)
         #expect(cmd.path == "../wt")
-        #expect(cmd.branch == "feature/wt")
+        #expect(cmd.commitish == "feature/wt")
+        #expect(cmd.newBranch == nil)
         #expect(cmd.force == true)
+    }
+
+    @Test("worktree add: -b creates branch")
+    func worktreeAddNewBranch() throws {
+        let cmd = try parse(["worktree", "add", "-b", "feature/wt", "../wt"], as: WorktreeAdd.self)
+        #expect(cmd.path == "../wt")
+        #expect(cmd.commitish == nil)
+        #expect(cmd.newBranch == "feature/wt")
     }
 
     @Test("worktree list: porcelain")
