@@ -24,6 +24,47 @@ history, and one test runner.
 | `GitCommand`   | `git`  | The `git` subcommand tree — `init {--bare,-b <branch>} / clone / fetch / pull {--rebase} / checkout {-b/-B/--/<ref> --} / switch {-c/-C} / restore {--staged, --source} / push / add / reset {--soft,--mixed,--hard,-- <paths>} / status {-s,--porcelain,-b, ahead/behind} / commit / merge {--ff,--no-ff,--ff-only} / rebase {<upstream>,--continue,--skip,--abort,--onto} / cherry-pick {<commit>,--continue,--skip,--abort} / diff / log {--oneline,--format,--stat,-p,-<n>,<a>..<b>,-- <paths>} / show / blame / apply {--cached, --index} / reflog / describe {--tags,--dirty,--abbrev <n>} / ls-tree {-r, --name-only} / cat-file {-t,-s,-e,-p} / rev-parse {--short,--abbrev-ref,--git-dir,--show-toplevel,--is-inside-work-tree} / ls-files / mv / rm {--cached} / clean {-f, -n} / config {--get,--set,--list,--unset,--global,--system,--local} / stash {push,list,apply,pop,drop,clear,show,branch} / tag {-a -m, -d, -l, -n, -f} / remote {-v, add, get-url, set-url, remove, rename} / branch {-d, -D, -m, -M, --show-current} / version`. Output and exit-code semantics mirror real git for every supported case. SwiftBash can register `GitCommand` as the `git` builtin to shadow system git. See [Docs/SwiftGit.md](Docs/SwiftGit.md) for the full module surface. |
 | `SQLiteKit`    | `sqlite3` | `sqlite3` shell port over the **vendored** SQLite amalgamation (`stephencelis/CSQLite`, pinned `3.50.4` — engine consumed as a package, no blob in-repo). The `SQLiteKit` SDK is a thin `SQLiteDatabase` wrapper (open / `evaluate` / `execute` / `tableNames` / `schemaSQL` / introspection) plus a `ResultFormatter` rendering result sets in `list` / `csv` / `line` / `column` / `json` / `tabs` / `ascii` / `html` / `markdown` / `table` / `box` / `quote` / `insert` modes (the column-family modes honor `.width` with sqlite3's 60-column wrap, continuation rows, and right-justify; reals render full-precision `%!.20g` in round-trip modes via the `CSQLiteShim` C wrapper). The `sqlite3` CLI runs SQL from a trailing argument, stdin, or an interactive REPL with `sqlite> ` / `   ...> ` prompts (`-csv` emits LF vs `.mode csv` CRLF; flags `-header` / `-separator` / `-nullvalue` / `-readonly` / `-init` / `-cmd` / `-interactive` / `-safe`), and dispatches dot-commands `.tables .schema .fullschema .databases .indexes .mode .headers .separator .nullvalue .width .limit .read .open .dump .import .output .once .backup .restore .show .help .quit`. Database / `.read` / `.open` / `-init` paths go through ShellKit's `resolve` + `authorize` sandbox gate; `-safe` additionally refuses filesystem/shell dot-commands. Exit codes mirror real sqlite3 (0 ok, 1 error). See issue #43. |
 
+## Fidelity — the rule that overrides everything else
+
+Every port here is a **faithful reimplementation of one specific reference
+tool**. It must match that reference's *observable behavior* — commands, flags,
+output, exit codes, and (for the SDKs) API endpoints, payloads, field names,
+states, pagination, and error handling — and it must **not add anything the
+reference doesn't have**: no extra models, endpoints, flags, validation, enum
+cases, or convenience helpers beyond the original.
+
+Over-implementation is a **defect, not a bonus** — it makes the port diverge
+from upstream, harder to validate against it, and harder to keep in sync. When
+you add or review a change, check every new type / method / flag / endpoint
+against the reference source (below); **if it exceeds what the reference does,
+cut it.** A genuinely useful convenience layer belongs in the **consuming app**
+(e.g. MissionControl), built on top of the faithful port — never inside the
+port itself.
+
+Adapt *idiom* to Swift (Codable, ArgumentParser, Swift Testing) but never
+*scope*. Matching Swift conventions is not license to add features.
+
+## Reference implementations
+
+Each port mirrors one upstream tool; when behavior is unclear the upstream
+source is the authority — **read it, don't guess.**
+
+| Port | Original | Upstream source |
+|------|----------|-----------------|
+| `GitHub` / `gh`      | GitHub CLI (`gh`)   | <https://github.com/cli/cli> · Go |
+| `GitLab` / `glab`    | GitLab CLI (`glab`) | <https://gitlab.com/gitlab-org/cli> · Go |
+| `git` / `GitCommand` | Git                 | <https://github.com/git/git> · C — output/exit-code parity |
+| `rg` / `RipgrepKit`  | ripgrep             | <https://github.com/BurntSushi/ripgrep> · Rust |
+| `fd` / `FdKit`       | fd                  | <https://github.com/sharkdp/fd> · Rust |
+| `glam` / `GlamKit`   | glamour             | <https://github.com/charmbracelet/glamour> · Go |
+| `zip` / `unzip`      | Info-ZIP            | <https://infozip.sourceforge.net> · C |
+| `sqlite3` / `SQLiteKit` | SQLite shell     | <https://sqlite.org> · C |
+
+On the maintainer's always-on dev machine the two forge CLIs are cloned locally
+for fast `grep`/`rg` against the original Go: `gh` → `~/Developer/Others/cli`,
+`glab` → `~/Developer/Others/gitlab/cli`. Ground endpoints, payloads, field
+names, and states in that source **before** adding anything.
+
 ## Build, test, run
 
 ```bash
