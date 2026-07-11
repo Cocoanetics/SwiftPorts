@@ -56,14 +56,13 @@ public struct GitCommand: AsyncParsableCommand {
         ]
     )
 
-    /// Rewrite a bare `--color` (the exact token, no `=<when>`) into
-    /// `--color=always` for the `diff` / `status` subcommands — the two
-    /// that bind a `--color` option. Real git documents `--color[=<when>]`
-    /// where omitting `<when>` means `always`, and only attaches the value
-    /// with `=` — so `git diff --color <ref>` keeps `<ref>` as a revision
-    /// and never swallows it as the color value. swift-argument-parser's
-    /// `@Option` can't express an optional, attached-only value, so we
-    /// normalise the bare form here, before parsing.
+    /// Normalize real-git argv shorthands before ArgumentParser sees them.
+    ///
+    /// - Bare `--color` becomes `--color=always` for `diff` / `status`.
+    ///   Real git documents `--color[=<when>]` where omitting `<when>`
+    ///   means `always`, and only attaches the value with `=`.
+    /// - `-U<n>` becomes `-U <n>` for `diff`.
+    /// - `-<n>` becomes `-n <n>` for `log`.
     ///
     /// Tokens after a standalone `--` are pathspecs and pass through
     /// untouched, so `git diff -- --color` still filters a file literally
@@ -75,10 +74,7 @@ public struct GitCommand: AsyncParsableCommand {
     /// leave the two faces disagreeing (same rationale as gh's bare-`--json`
     /// rewrite).
     public static func preprocess(_ args: [String]) -> [String] {
-        // Only `diff` / `status` define `--color`; leave every other
-        // subcommand's argv exactly as given.
-        guard let subcommand = args.first,
-              subcommand == "diff" || subcommand == "status" else {
+        guard let subcommand = args.first else {
             return args
         }
         var out: [String] = []
@@ -86,8 +82,19 @@ public struct GitCommand: AsyncParsableCommand {
         var afterDoubleDash = false
         for arg in args {
             if arg == "--" { afterDoubleDash = true }
-            if !afterDoubleDash, arg == "--color" {
+            if !afterDoubleDash, (subcommand == "diff" || subcommand == "status"),
+               arg == "--color" {
                 out.append("--color=always")
+            } else if !afterDoubleDash, subcommand == "diff",
+                      arg.count > 2, arg.hasPrefix("-U"),
+                      arg.dropFirst(2).allSatisfy(\.isNumber) {
+                out.append("-U")
+                out.append(String(arg.dropFirst(2)))
+            } else if !afterDoubleDash, subcommand == "log",
+                      arg.count > 1, arg.hasPrefix("-"),
+                      arg.dropFirst().allSatisfy(\.isNumber) {
+                out.append("-n")
+                out.append(String(arg.dropFirst()))
             } else {
                 out.append(arg)
             }

@@ -32,6 +32,31 @@ struct GitCommandParsingTests {
         #expect(cmd.directory == "/tmp/r")
     }
 
+    @Test("clone: shallow single branch")
+    func cloneShallowSingleBranch() throws {
+        let cmd = try parse(
+            ["clone", "--depth", "1", "--single-branch", "--branch", "main",
+             "https://github.com/o/r.git"], as: Clone.self)
+        #expect(cmd.depth == 1)
+        #expect(cmd.singleBranch == true)
+        #expect(cmd.branch == "main")
+    }
+
+    @Test("clone: -b branch")
+    func cloneBranchShort() throws {
+        let cmd = try parse(
+            ["clone", "-b", "release", "https://github.com/o/r.git"], as: Clone.self)
+        #expect(cmd.branch == "release")
+    }
+
+    @Test("clone: rejects non-positive depth")
+    func cloneDepthPositive() {
+        #expect(throws: (any Error).self) {
+            _ = try GitCommand.parseAsRoot(
+                ["clone", "--depth", "0", "https://github.com/o/r.git"])
+        }
+    }
+
     @Test("fetch: defaults to origin")
     func fetchDefaultRemote() throws {
         let cmd = try parse(["fetch", "main"], as: Fetch.self)
@@ -44,6 +69,24 @@ struct GitCommandParsingTests {
         let cmd = try parse(["fetch", "--remote", "upstream", "main"], as: Fetch.self)
         #expect(cmd.remote == "upstream")
         #expect(cmd.refspec == "main")
+    }
+
+    @Test("fetch: depth and unshallow flags")
+    func fetchDepthAndUnshallow() throws {
+        let depth = try parse(["fetch", "--depth", "2", "main"], as: Fetch.self)
+        #expect(depth.depth == 2)
+        #expect(depth.unshallow == false)
+
+        let unshallow = try parse(["fetch", "--unshallow", "main"], as: Fetch.self)
+        #expect(unshallow.unshallow == true)
+    }
+
+    @Test("fetch: rejects depth with unshallow")
+    func fetchDepthUnshallowExclusive() {
+        #expect(throws: (any Error).self) {
+            _ = try GitCommand.parseAsRoot(
+                ["fetch", "--depth", "2", "--unshallow", "main"])
+        }
     }
 
     @Test("checkout: ref")
@@ -362,6 +405,18 @@ struct GitCommandParsingTests {
     func preprocessOtherSubcommands() {
         #expect(GitCommand.preprocess(["log", "--color"]) == ["log", "--color"])
         #expect(GitCommand.preprocess(["commit", "-m", "x"]) == ["commit", "-m", "x"])
+    }
+
+    @Test("preprocess: attached diff and log shorthand options")
+    func preprocessAttachedOptions() {
+        #expect(GitCommand.preprocess(["diff", "-U3"]) == ["diff", "-U", "3"])
+        #expect(GitCommand.preprocess(["log", "-2"]) == ["log", "-n", "2"])
+    }
+
+    @Test("preprocess: attached options after -- stay pathspecs")
+    func preprocessAttachedOptionsAfterDoubleDash() {
+        #expect(GitCommand.preprocess(["diff", "--", "-U3"]) == ["diff", "--", "-U3"])
+        #expect(GitCommand.preprocess(["log", "--", "-2"]) == ["log", "--", "-2"])
     }
 
     @Test("diff: bare --color parses to .always, ref kept as a revision")
@@ -695,17 +750,26 @@ struct GitCommandParsingTests {
         #expect(cmd.maxCount == 3)
     }
 
-    @Test("log: bare -1 captured as passthrough (Entry.swift would rewrite)")
+    @Test("log: bare -1 captured as passthrough")
     func logDashOneLandsInRest() throws {
-        // When `git log -1` is invoked as a standalone binary, the
-        // Entry preprocessor rewrites `-1` → `-n 1` before parsing.
-        // When it's invoked as a SwiftBash builtin (parseAsRoot is
-        // called directly), `-1` is captured into `rest` for `run()`
-        // to re-interpret. Verify the latter shape so the run-time
-        // pull-out logic in Log.run has something to find.
+        // Without shared preprocessing, `-1` is captured into `rest`
+        // for `run()` to re-interpret.
         let cmd = try parse(["log", "--oneline", "-1"], as: Log.self)
         #expect(cmd.oneline == true)
         #expect(cmd.rest == ["-1"])
+    }
+
+    @Test("log: preprocessed -<n> after revision is pulled from rest")
+    func logPreprocessedDashNAfterRevision() throws {
+        let cmd = try parse(GitCommand.preprocess(["log", "HEAD", "-1"]), as: Log.self)
+        #expect(cmd.rest == ["HEAD", "-n", "1"])
+
+        let result = Log.pullPassthrough(
+            rest: cmd.rest,
+            oneline: cmd.oneline, stat: cmd.stat, patch: cmd.patch,
+            format: cmd.format, maxCount: cmd.maxCount)
+        #expect(result.maxCount == 1)
+        #expect(result.positionals == ["HEAD"])
     }
 
     @Test("log: --format passes through")
@@ -751,6 +815,16 @@ struct GitCommandParsingTests {
         #expect(result.oneline == true)
         #expect(result.maxCount == 1)
         #expect(result.positionals.isEmpty)
+    }
+
+    @Test("log: pullPassthrough — -n value pulled before --")
+    func logPullPassthroughNValueBeforeDoubleDash() throws {
+        let result = Log.pullPassthrough(
+            rest: ["HEAD", "-n", "2"],
+            oneline: false, stat: false, patch: false,
+            format: nil, maxCount: nil)
+        #expect(result.maxCount == 2)
+        #expect(result.positionals == ["HEAD"])
     }
 
     @Test("log: pullPassthrough — -<n> after -- stays as path")

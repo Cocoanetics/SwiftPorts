@@ -180,6 +180,47 @@ struct GitClientMergeTests {
         #expect(body.contains(">>>>>>> "))
     }
 
+    @Test("mergeContinue commits staged conflict resolution")
+    func mergeContinue() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MergeTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try runGit(["init", "-b", "main"], in: dir)
+        try runGit(["config", "user.email", "t@e.com"], in: dir)
+        try runGit(["config", "user.name", "T"], in: dir)
+        try Data("1\n2\n3\n".utf8).write(to: dir.appendingPathComponent("a.txt"))
+        try runGit(["add", "."], in: dir)
+        try runGit(["commit", "-m", "init"], in: dir)
+        try runGit(["checkout", "-b", "feature"], in: dir)
+        try Data("1\n2\nFEAT\n".utf8).write(to: dir.appendingPathComponent("a.txt"))
+        try runGit(["commit", "-am", "feat"], in: dir)
+        try runGit(["checkout", "main"], in: dir)
+        try Data("1\n2\nMAIN\n".utf8).write(to: dir.appendingPathComponent("a.txt"))
+        try runGit(["commit", "-am", "main"], in: dir)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let client = GitClient(workingDirectory: dir)
+        guard case .conflicts = try await client.merge(
+            ref: "feature",
+            author: GitSignature(name: "T", email: "t@e.com"))
+        else {
+            Issue.record("expected conflict")
+            return
+        }
+
+        try Data("1\n2\nresolved\n".utf8).write(to: dir.appendingPathComponent("a.txt"))
+        try runGit(["add", "a.txt"], in: dir)
+
+        let details = try await client.mergeContinue(
+            author: GitSignature(name: "T", email: "t@e.com"))
+        #expect(details.sha.count == 40)
+        #expect(details.filesChanged == 1)
+
+        let parents = try runGit(["rev-list", "--parents", "-n", "1", "HEAD"], in: dir)
+            .split(separator: " ")
+        #expect(parents.count == 3)
+    }
+
     @Test("unknown ref throws Libgit2Error")
     func unknownRef() async throws {
         let dir = try makeLinearRepo()

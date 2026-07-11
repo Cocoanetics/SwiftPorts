@@ -17,4 +17,21 @@ extension GitClient {
             try $0.lsTree(treeish: treeish, recursive: recursive)
         }
     }
+
+    /// Recursively load blobs from `treeish` in `git ls-tree -r` order.
+    public func treeBlobs(
+        of treeish: String,
+        prefix: String = ""
+    ) async throws -> [TreeBlob] {
+        try await withRepository {
+            try $0.treeBlobs(of: treeish, prefix: prefix)
+        }
+    }
+
+    /// Commit timestamp for `treeish`, or nil for raw trees.
+    public func commitTime(of treeish: String) async throws -> Date? {
+        try await withRepository {
+            try $0.commitTime(of: treeish)
+        }
+    }
 }
