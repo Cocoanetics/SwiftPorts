@@ -750,17 +750,26 @@ struct GitCommandParsingTests {
         #expect(cmd.maxCount == 3)
     }
 
-    @Test("log: bare -1 captured as passthrough (Entry.swift would rewrite)")
+    @Test("log: bare -1 captured as passthrough")
     func logDashOneLandsInRest() throws {
-        // When `git log -1` is invoked as a standalone binary, the
-        // Entry preprocessor rewrites `-1` → `-n 1` before parsing.
-        // When it's invoked as a SwiftBash builtin (parseAsRoot is
-        // called directly), `-1` is captured into `rest` for `run()`
-        // to re-interpret. Verify the latter shape so the run-time
-        // pull-out logic in Log.run has something to find.
+        // Without shared preprocessing, `-1` is captured into `rest`
+        // for `run()` to re-interpret.
         let cmd = try parse(["log", "--oneline", "-1"], as: Log.self)
         #expect(cmd.oneline == true)
         #expect(cmd.rest == ["-1"])
+    }
+
+    @Test("log: preprocessed -<n> after revision is pulled from rest")
+    func logPreprocessedDashNAfterRevision() throws {
+        let cmd = try parse(GitCommand.preprocess(["log", "HEAD", "-1"]), as: Log.self)
+        #expect(cmd.rest == ["HEAD", "-n", "1"])
+
+        let result = Log.pullPassthrough(
+            rest: cmd.rest,
+            oneline: cmd.oneline, stat: cmd.stat, patch: cmd.patch,
+            format: cmd.format, maxCount: cmd.maxCount)
+        #expect(result.maxCount == 1)
+        #expect(result.positionals == ["HEAD"])
     }
 
     @Test("log: --format passes through")
@@ -806,6 +815,16 @@ struct GitCommandParsingTests {
         #expect(result.oneline == true)
         #expect(result.maxCount == 1)
         #expect(result.positionals.isEmpty)
+    }
+
+    @Test("log: pullPassthrough — -n value pulled before --")
+    func logPullPassthroughNValueBeforeDoubleDash() throws {
+        let result = Log.pullPassthrough(
+            rest: ["HEAD", "-n", "2"],
+            oneline: false, stat: false, patch: false,
+            format: nil, maxCount: nil)
+        #expect(result.maxCount == 2)
+        #expect(result.positionals == ["HEAD"])
     }
 
     @Test("log: pullPassthrough — -<n> after -- stays as path")

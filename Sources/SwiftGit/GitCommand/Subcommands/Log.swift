@@ -135,11 +135,11 @@ struct Log: AsyncParsableCommand {
     /// `--oneline` stuck in `rest`. Walk `rest` and pull our known
     /// flags back out before splitting refs/paths.
     ///
-    /// Entry.swift's argv preprocessor converts real-git's `-<n>`
-    /// shorthand into `-n <n>` before ArgumentParser sees it. That
-    /// path doesn't fire when `git` runs as a SwiftBash builtin (the
-    /// bridge calls `parseAsRoot` directly), so the shorthand is
-    /// recognised here as well.
+    /// GitCommand's argv preprocessor converts real-git's `-<n>`
+    /// shorthand into `-n <n>` before ArgumentParser sees it. When that
+    /// shorthand appears after a revision, ArgumentParser leaves the
+    /// normalized pair in `rest`, so pull both `-n <n>` and the raw
+    /// `-<n>` form here.
     ///
     /// Real git stops interpreting flags at `--`; everything after is
     /// a pathspec. Mirror that so `git log -- -1` keeps `-1` as a path
@@ -173,6 +173,12 @@ struct Log: AsyncParsableCommand {
                 if tok == "--format", i + 1 < rest.count {
                     result.format = rest[i + 1]
                     i += 2; continue
+                }
+                if tok == "-n", i + 1 < rest.count,
+                   let count = Int(rest[i + 1]) {
+                    result.maxCount = count
+                    i += 2
+                    continue
                 }
                 if tok.count > 1, tok.hasPrefix("-"),
                    tok.dropFirst().allSatisfy(\.isNumber),
