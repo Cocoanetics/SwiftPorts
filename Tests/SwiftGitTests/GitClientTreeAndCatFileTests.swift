@@ -84,6 +84,42 @@ struct GitClientTreeAndCatFileTests {
         #expect(blobPaths == ["sub/a.txt", "sub/b.txt"])
     }
 
+    @Test("treeBlobs returns recursive blob contents with prefix")
+    func treeBlobs() async throws {
+        let dir = try makeRepo()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        try Data("a\n".utf8).write(to: dir.appendingPathComponent("a.txt"))
+        try Data("b\n".utf8).write(to: dir.appendingPathComponent("sub/b.txt"))
+        try runGit(["add", "."], in: dir)
+        try runGit(["commit", "-m", "init"], in: dir)
+
+        let blobs = try await SwiftGit.GitClient(workingDirectory: dir)
+            .treeBlobs(of: "HEAD", prefix: "snap/")
+        let byPath = Dictionary(uniqueKeysWithValues: blobs.map { ($0.path, $0) })
+        #expect(byPath["snap/a.txt"].map { String(decoding: $0.bytes, as: UTF8.self) } == "a\n")
+        #expect(byPath["snap/sub/b.txt"].map { String(decoding: $0.bytes, as: UTF8.self) } == "b\n")
+    }
+
+    @Test("commitTime returns nil for raw tree objects")
+    func commitTime() async throws {
+        let dir = try makeRepo()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data("a\n".utf8).write(to: dir.appendingPathComponent("a.txt"))
+        try runGit(["add", "."], in: dir)
+        try runGit(["commit", "-m", "init"], in: dir)
+
+        let client = SwiftGit.GitClient(workingDirectory: dir)
+        let commitTime = try await client.commitTime(of: "HEAD")
+        #expect(commitTime != nil)
+
+        let tree = try runGit(["rev-parse", "HEAD^{tree}"], in: dir)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let treeTime = try await client.commitTime(of: tree)
+        #expect(treeTime == nil)
+    }
+
     @Test("cat-file: blob round-trips its bytes")
     func catFileBlob() async throws {
         let dir = try makeRepo()

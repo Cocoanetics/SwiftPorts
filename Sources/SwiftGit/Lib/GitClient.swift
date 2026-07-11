@@ -57,6 +57,21 @@ public struct GitClient: ForgeKit.GitClient {
     // MARK: Write
 
     public func clone(url: URL, directory: URL?) async throws {
+        try await clone(
+            url: url,
+            directory: directory,
+            depth: nil,
+            singleBranch: false,
+            branch: nil)
+    }
+
+    public func clone(
+        url: URL,
+        directory: URL?,
+        depth: Int?,
+        singleBranch: Bool = false,
+        branch: String? = nil
+    ) async throws {
         // Gate the clone source URL (file or network) and the
         // destination directory before handing them to libgit2.
         // libgit2's internal HTTP/SSH and packfile FS ops are below
@@ -71,15 +86,31 @@ public struct GitClient: ForgeKit.GitClient {
         try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
             _ = try Repository.clone(
                 from: url, to: destURL,
+                depth: depth,
+                singleBranch: singleBranch,
+                branch: branch,
                 credentials: credentials, progress: progress)
         }
     }
 
     public func fetch(remote: String, refspec: String) async throws {
+        try await fetch(remote: remote, refspec: refspec, depth: nil)
+    }
+
+    public func fetch(remote: String, refspec: String, depth: Int?) async throws {
         let progress = shellProgressSink()
         try await withRepository {
-            try $0.fetch(remote: remote, refspec: refspec,
+            try $0.fetch(remote: remote, refspec: refspec, depth: depth,
                          credentials: credentials, progress: progress)
+        }
+    }
+
+    public func unshallow(remote: String, refspec: String) async throws {
+        let progress = shellProgressSink()
+        try await withRepository {
+            try $0.unshallow(
+                remote: remote, refspec: refspec,
+                credentials: credentials, progress: progress)
         }
     }
 

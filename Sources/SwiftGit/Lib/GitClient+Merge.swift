@@ -26,6 +26,21 @@ extension GitClient {
         }
     }
 
+    /// Resume a paused merge after conflicts were resolved and staged.
+    @discardableResult
+    public func mergeContinue(
+        message: String? = nil,
+        author: GitSignature? = nil
+    ) async throws -> Libgit2CommitDetails {
+        let env = shellEnvironment()
+        return try await withRepository {
+            try $0.mergeContinue(
+                message: message,
+                author: author.core,
+                env: env)
+        }
+    }
+
     /// Fetch then merge — `git pull` semantics.
     ///
     /// `branch` defaults to the current branch's name. After the fetch,

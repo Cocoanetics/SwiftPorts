@@ -14,6 +14,24 @@ struct Clone: AsyncParsableCommand {
     @Argument(help: "Directory to clone into. Defaults to the URL's basename.")
     var directory: String?
 
+    @Option(name: .customLong("depth"),
+            help: "Create a shallow clone with a history truncated to N commits.")
+    var depth: Int?
+
+    @Flag(name: .customLong("single-branch"),
+          help: "Clone only the selected branch's history.")
+    var singleBranch: Bool = false
+
+    @Option(name: [.customShort("b"), .customLong("branch")],
+            help: "Branch to check out instead of the remote HEAD.")
+    var branch: String?
+
+    func validate() throws {
+        if let depth, depth <= 0 {
+            throw ValidationError("--depth must be a positive integer")
+        }
+    }
+
     func run() async throws {
         guard let parsed = URL(string: url) else {
             throw CLIError.stderr("fatal: '\(url)' is not a valid URL", exitCode: 128)
@@ -27,7 +45,12 @@ struct Clone: AsyncParsableCommand {
         let stderr = Shell.current.stderr
         stderr.write(Data("Cloning into '\(displayName)'...\n".utf8))
 
-        try await CommandContext.gitClient().clone(url: parsed, directory: dest)
+        try await CommandContext.gitClient().clone(
+            url: parsed,
+            directory: dest,
+            depth: depth,
+            singleBranch: singleBranch || depth != nil,
+            branch: branch)
 
         // Local file:// clones don't emit transfer progress (libgit2's
         // local transport skips it), so we close out with `done.\n` —

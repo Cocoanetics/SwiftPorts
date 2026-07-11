@@ -13,10 +13,31 @@ struct Fetch: AsyncParsableCommand {
     @Argument(help: "Refspec to fetch (e.g. `main` or `+refs/heads/*:refs/remotes/origin/*`).")
     var refspec: String
 
+    @Option(name: .customLong("depth"),
+            help: "Limit fetching to the last N commits per tip.")
+    var depth: Int?
+
+    @Flag(name: .customLong("unshallow"),
+          help: "Convert a shallow repository to a complete one.")
+    var unshallow: Bool = false
+
+    func validate() throws {
+        if let depth, depth <= 0 {
+            throw ValidationError("--depth must be a positive integer")
+        }
+        if depth != nil && unshallow {
+            throw ValidationError("--depth and --unshallow cannot be used together")
+        }
+    }
+
     func run() async throws {
-        try await CommandContext.gitClient().fetch(remote: remote, refspec: refspec)
-        // Silent on success — matches `git fetch -q`. We don't wire the
-        // libgit2 progress callbacks, so the per-ref `From <url>\n   <oldsha>..<newsha>`
-        // lines real git prints aren't available here.
+        if unshallow {
+            try await CommandContext.gitClient().unshallow(remote: remote, refspec: refspec)
+        } else {
+            try await CommandContext.gitClient().fetch(
+                remote: remote, refspec: refspec, depth: depth)
+        }
+        // Progress and per-ref summaries are written by GitClient's
+        // libgit2 callbacks through the active shell stderr.
     }
 }

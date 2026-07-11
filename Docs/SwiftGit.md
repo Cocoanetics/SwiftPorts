@@ -56,6 +56,7 @@ let client = GitClient(
 | `commitDetailed(...)` | `git commit` with full diff stats + author/committer split |
 | `describe(committish:tags:abbrev:dirty:)` | `git describe [--tags] [--dirty] [--abbrev <n>]` |
 | `lsTree(treeish:recursive:)` → `[TreeEntry]` | `git ls-tree [-r] <treeish>` |
+| `treeBlobs(of:prefix:)` / `commitTime(of:)` | recursive tree blob walk / commit timestamp backing `git archive` |
 | `objectMetadata(of:)` / `catFileBlob(_:)` | `git cat-file -t/-s` and `-p` (blobs) |
 | `reflog(refName:)` → `[ReflogEntry]` | `git reflog [<ref>]` |
 | `apply(diff:location:)` | `git apply [--cached, --index]` |
@@ -66,13 +67,13 @@ let client = GitClient(
 | Method | Maps to |
 |---|---|
 | `initRepository(bare:initialBranch:reinit:)` | `git init [--bare] [-b <branch>]` |
-| `clone(url:directory:)` | `git clone <url> [<dir>]` |
-| `fetch(remote:refspec:)` | `git fetch <remote> <refspec>` |
+| `clone(url:directory:depth:singleBranch:branch:)` | `git clone [--depth N] [--single-branch] [--branch <name>] <url> [<dir>]` |
+| `fetch(remote:refspec:depth:)` / `unshallow(remote:refspec:)` | `git fetch [--depth N\|--unshallow] <remote> <refspec>` |
 | `pull(...)` / `pullRebase(...)` | `git pull` / `git pull --rebase` |
 | `push(remote:refspec:setUpstream:)` | `git push [-u] <remote> <refspec>` |
 | `add(paths:)` | `git add -A` (empty paths) / `git add -- <paths>` |
 | `commit(message:author:allowEmpty:)` | `git commit` |
-| `merge(ref:fastForward:message:author:)` | `git merge` (--ff / --no-ff / --ff-only) |
+| `merge(ref:fastForward:message:author:)` / `mergeContinue(...)` | `git merge` (--ff / --no-ff / --ff-only) / `git merge --continue` |
 | `rebase(upstream:onto:author:)` | `git rebase <upstream> [--onto <onto>]` |
 | `rebaseContinue / rebaseSkip / rebaseAbort` | `git rebase --continue / --skip / --abort` |
 | `cherryPick(_:author:)` / `cherryPickContinue / cherryPickAbort / cherryPickSkip` | `git cherry-pick` family |
@@ -129,7 +130,7 @@ semantics mirror real git for every supported case (verified via
 side-by-side `diff` against `/usr/bin/git`).
 
 ```
-git clone / fetch / pull [--rebase] / push
+git clone [--depth N] [--single-branch] [--branch <name>] / fetch [--depth N|--unshallow] / pull [--rebase] / push
 git checkout {-b/-B/--/<ref> --}
 git switch [-c/-C] / restore [--staged] [--source]
 git add [-A] [-f] / commit [-m] [--allow-empty] [--author "Name <email>"]
@@ -162,11 +163,13 @@ git version
 
 ### Argv preprocessing
 
-`Entry.swift` rewrites two real-git shorthands before
-ArgumentParser sees them:
+`GitCommand.preprocess(_:)` rewrites real-git shorthands before
+ArgumentParser sees them. The standalone executable and embedded
+ShellKit command registry both call the same hook:
 
 - `-U<n>` → `-U <n>` (diff context lines)
 - `-<n>` → `-n <n>` (log count limit, `git log` only)
+- bare `--color` → `--color=always` (`git diff` / `git status`)
 
 ArgumentParser's `customShort` doesn't natively support attached
 short-option-with-value forms for typed options.
