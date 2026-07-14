@@ -97,11 +97,16 @@ public struct GitClient: ForgeKit.GitClient {
         try await fetch(remote: remote, refspec: refspec, depth: nil)
     }
 
-    public func fetch(remote: String, refspec: String, depth: Int?) async throws {
+    public func fetch(
+        remote: String,
+        refspec: String,
+        depth: Int?,
+        prune: Bool = false
+    ) async throws {
         let progress = shellProgressSink()
         try await withRepository {
             try $0.fetch(remote: remote, refspec: refspec, depth: depth,
-                         credentials: credentials, progress: progress)
+                         prune: prune, credentials: credentials, progress: progress)
         }
     }
 

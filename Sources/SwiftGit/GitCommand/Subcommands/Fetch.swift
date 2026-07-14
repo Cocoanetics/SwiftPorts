@@ -21,6 +21,10 @@ struct Fetch: AsyncParsableCommand {
           help: "Convert a shallow repository to a complete one.")
     var unshallow: Bool = false
 
+    @Flag(name: [.customShort("p"), .long],
+          help: "Prune remote-tracking branches no longer on the remote.")
+    var prune: Bool = false
+
     func validate() throws {
         if let depth, depth <= 0 {
             throw ValidationError("--depth must be a positive integer")
@@ -35,7 +39,7 @@ struct Fetch: AsyncParsableCommand {
             try await CommandContext.gitClient().unshallow(remote: remote, refspec: refspec)
         } else {
             try await CommandContext.gitClient().fetch(
-                remote: remote, refspec: refspec, depth: depth)
+                remote: remote, refspec: refspec, depth: depth, prune: prune)
         }
         // Progress and per-ref summaries are written by GitClient's
         // libgit2 callbacks through the active shell stderr.

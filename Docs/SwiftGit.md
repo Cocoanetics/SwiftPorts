@@ -68,7 +68,7 @@ let client = GitClient(
 |---|---|
 | `initRepository(bare:initialBranch:reinit:)` | `git init [--bare] [-b <branch>]` |
 | `clone(url:directory:depth:singleBranch:branch:)` | `git clone [--depth N] [--single-branch] [--branch <name>] <url> [<dir>]` |
-| `fetch(remote:refspec:depth:)` / `unshallow(remote:refspec:)` | `git fetch [--depth N\|--unshallow] <remote> <refspec>` |
+| `fetch(remote:refspec:depth:prune:)` / `unshallow(remote:refspec:)` | `git fetch [--depth N\|--unshallow] [--prune] <remote> <refspec>` |
 | `pull(...)` / `pullRebase(...)` | `git pull` / `git pull --rebase` |
 | `push(remote:refspec:setUpstream:)` | `git push [-u] <remote> <refspec>` |
 | `add(paths:)` | `git add -A` (empty paths) / `git add -- <paths>` |
