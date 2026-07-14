@@ -22,8 +22,9 @@ struct Fetch: AsyncParsableCommand {
     var unshallow: Bool = false
 
     @Flag(name: [.customShort("p"), .long],
+          inversion: .prefixedNo,
           help: "Prune remote-tracking branches no longer on the remote.")
-    var prune: Bool = false
+    var prune: Bool?
 
     func validate() throws {
         if let depth, depth <= 0 {
@@ -36,7 +37,8 @@ struct Fetch: AsyncParsableCommand {
 
     func run() async throws {
         if unshallow {
-            try await CommandContext.gitClient().unshallow(remote: remote, refspec: refspec)
+            try await CommandContext.gitClient().unshallow(
+                remote: remote, refspec: refspec, prune: prune)
         } else {
             try await CommandContext.gitClient().fetch(
                 remote: remote, refspec: refspec, depth: depth, prune: prune)

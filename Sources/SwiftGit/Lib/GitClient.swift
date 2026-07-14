@@ -1,6 +1,7 @@
 import Foundation
 import ForgeKit
 import ShellKit
+import CGitKit
 @_exported import GitKit
 
 /// In-process libgit2-backed implementation of
@@ -101,21 +102,35 @@ public struct GitClient: ForgeKit.GitClient {
         remote: String,
         refspec: String,
         depth: Int?,
-        prune: Bool = false
+        prune: Bool? = nil
     ) async throws {
         let progress = shellProgressSink()
-        try await withRepository {
-            try $0.fetch(remote: remote, refspec: refspec, depth: depth,
-                         prune: prune, credentials: credentials, progress: progress)
+        try await withRepository { repository in
+            let shouldPrune = try resolvedFetchPrune(
+                prune, remote: remote, repository: repository)
+            try repository.fetch(remote: remote, refspec: refspec, depth: depth,
+                                 prune: shouldPrune,
+                                 credentials: credentials, progress: progress)
         }
     }
 
-    public func unshallow(remote: String, refspec: String) async throws {
+    public func unshallow(
+        remote: String,
+        refspec: String,
+        prune: Bool? = nil
+    ) async throws {
         let progress = shellProgressSink()
-        try await withRepository {
-            try $0.unshallow(
+        try await withRepository { repository in
+            let shouldPrune = try resolvedFetchPrune(
+                prune, remote: remote, repository: repository)
+            try repository.unshallow(
                 remote: remote, refspec: refspec,
                 credentials: credentials, progress: progress)
+            if shouldPrune {
+                try repository.fetch(
+                    remote: remote, refspec: refspec, prune: true,
+                    credentials: credentials, progress: progress)
+            }
         }
     }
 
@@ -209,6 +224,31 @@ public struct GitClient: ForgeKit.GitClient {
         let last = url.deletingPathExtension().lastPathComponent
         let folder = last.isEmpty ? "repo" : last
         return workingDirectory.appendingPathComponent(folder)
+    }
+
+    /// Resolve `git fetch`'s tri-state pruning setting: an explicit option
+    /// wins, followed by the per-remote setting, the global fetch setting,
+    /// and finally Git's default of disabled pruning.
+    private func resolvedFetchPrune(
+        _ explicit: Bool?,
+        remote: String,
+        repository: Repository
+    ) throws -> Bool {
+        if let explicit { return explicit }
+
+        let keys = ["remote.\(remote).prune", "fetch.prune"]
+        for key in keys {
+            guard let value = try repository.configGet(key) else { continue }
+            var parsed: CInt = 0
+            let result = value.withCString { git_config_parse_bool(&parsed, $0) }
+            guard result == 0 else {
+                throw Libgit2Error(
+                    code: Int32(result), klass: 0,
+                    message: "bad boolean config value '\(value)' for '\(key)'")
+            }
+            return parsed != 0
+        }
+        return false
     }
 }
 

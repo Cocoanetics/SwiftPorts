@@ -62,7 +62,7 @@ struct GitCommandParsingTests {
         let cmd = try parse(["fetch", "main"], as: Fetch.self)
         #expect(cmd.remote == "origin")
         #expect(cmd.refspec == "main")
-        #expect(cmd.prune == false)
+        #expect(cmd.prune == nil)
     }
 
     @Test("fetch: --remote overrides default")
@@ -89,6 +89,17 @@ struct GitCommandParsingTests {
 
         let short = try parse(["fetch", "-p", "main"], as: Fetch.self)
         #expect(short.prune == true)
+
+        let disabled = try parse(["fetch", "--no-prune", "main"], as: Fetch.self)
+        #expect(disabled.prune == false)
+    }
+
+    @Test("fetch: unshallow preserves prune option")
+    func fetchUnshallowPrune() throws {
+        let cmd = try parse(
+            ["fetch", "--unshallow", "--prune", "main"], as: Fetch.self)
+        #expect(cmd.unshallow == true)
+        #expect(cmd.prune == true)
     }
 
     @Test("fetch: rejects depth with unshallow")
