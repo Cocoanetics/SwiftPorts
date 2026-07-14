@@ -130,5 +130,60 @@ struct GitClientTests {
         let upstream = try await client.upstreamBranch(of: "main")
         #expect(upstream == nil)
     }
+
+    @Test("fetch prunes stale remote-tracking branches only when requested")
+    func fetchPrune() async throws {
+        let source = try makeFixtureRepo()
+        let clone = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitClientFetchPrune-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: source) }
+        defer { try? FileManager.default.removeItem(at: clone) }
+
+        try runGit(["branch", "feature"], in: source)
+        try await GitClient(workingDirectory: clone.deletingLastPathComponent())
+            .clone(url: source, directory: clone)
+        try runGit(["branch", "-D", "feature"], in: source)
+        try runGit(["config", "fetch.prune", "true"], in: clone)
+        try runGit(["config", "remote.origin.prune", "false"], in: clone)
+
+        let client = GitClient(workingDirectory: clone)
+        let refspec = "+refs/heads/*:refs/remotes/origin/*"
+        try await client.fetch(remote: "origin", refspec: refspec, depth: nil)
+
+        var refs = try runGit(
+            ["for-each-ref", "--format=%(refname)", "refs/remotes"], in: clone)
+        #expect(refs.contains("refs/remotes/origin/feature"))
+
+        try await client.fetch(
+            remote: "origin", refspec: refspec, depth: nil, prune: true)
+
+        refs = try runGit(
+            ["for-each-ref", "--format=%(refname)", "refs/remotes"], in: clone)
+        #expect(!refs.contains("refs/remotes/origin/feature"))
+    }
+
+    @Test("fetch honors configured pruning when no option is specified")
+    func fetchConfiguredPrune() async throws {
+        let source = try makeFixtureRepo()
+        let clone = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitClientConfiguredPrune-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: source) }
+        defer { try? FileManager.default.removeItem(at: clone) }
+
+        try runGit(["branch", "feature"], in: source)
+        try await GitClient(workingDirectory: clone.deletingLastPathComponent())
+            .clone(url: source, directory: clone)
+        try runGit(["branch", "-D", "feature"], in: source)
+        try runGit(["config", "fetch.prune", "false"], in: clone)
+        try runGit(["config", "remote.origin.prune", "true"], in: clone)
+
+        let client = GitClient(workingDirectory: clone)
+        let refspec = "+refs/heads/*:refs/remotes/origin/*"
+        try await client.fetch(remote: "origin", refspec: refspec, depth: nil)
+
+        let refs = try runGit(
+            ["for-each-ref", "--format=%(refname)", "refs/remotes"], in: clone)
+        #expect(!refs.contains("refs/remotes/origin/feature"))
+    }
 }
 #endif
