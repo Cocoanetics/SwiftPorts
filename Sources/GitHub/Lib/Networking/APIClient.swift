@@ -298,8 +298,10 @@ public actor APIClient {
         if r.status == 304 { return }
         if r.status == 404 { throw APIError.notFound(url: r.url) }
         if r.status == 401 { throw APIError.unauthenticated(url: r.url) }
-        if let rateLimited = Self.rateLimitError(for: r) { throw rateLimited }
         let message = parseMessage(from: r.body) ?? ""
+        if let rateLimited = Self.rateLimitError(for: r, message: message) {
+            throw rateLimited
+        }
         throw APIError.http(status: r.status, message: message, url: r.url)
     }
 
@@ -311,7 +313,10 @@ public actor APIClient {
     /// (secondary). Presence of the header decides, exactly as upstream;
     /// `retryAfter` then parses it as the delay-seconds form GitHub
     /// sends, staying nil for anything else.
-    private static func rateLimitError(for r: APIResponse) -> APIError? {
+    private static func rateLimitError(
+        for r: APIResponse,
+        message: String
+    ) -> APIError? {
         let retryAfter = r.headerFields[.retryAfter]
         let isRateLimit: Bool
         switch r.status {
@@ -323,8 +328,25 @@ public actor APIClient {
         return .rateLimited(
             resetAt: r.rateLimitResetAt,
             remaining: r.rateLimitRemaining,
-            retryAfter: retryAfter.flatMap(TimeInterval.init),
+            retryAfter: Self.delaySeconds(retryAfter),
+            message: message,
             url: r.url)
+    }
+
+    /// Parse `Retry-After` as RFC 9110 `delay-seconds` — digits only,
+    /// which is the form GitHub sends. Headers are untrusted (a
+    /// proxy or a GHES host can send anything), so the strict integer
+    /// parse matters: it rejects `NaN`, `inf`, fractions, and values
+    /// that overflow, none of which could survive into a stored
+    /// duration. The RFC's HTTP-date form yields nil — upstream never
+    /// parses it either, and classification already keyed on the
+    /// header's presence rather than its contents.
+    private static func delaySeconds(_ header: String?) -> Int? {
+        guard let header,
+              let seconds = Int(header.trimmingCharacters(in: .whitespaces)),
+              seconds >= 0
+        else { return nil }
+        return seconds
     }
 
     private func parseMessage(from body: Data) -> String? {

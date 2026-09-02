@@ -71,10 +71,11 @@ struct HTTPMockedNetworkTests {
             do {
                 let _: Repository = try await client.get("repos/x/y")
                 Issue.record("expected throw")
-            } catch let APIError.rateLimited(resetAt, remaining, retryAfter, _) {
+            } catch let APIError.rateLimited(resetAt, remaining, retryAfter, message, _) {
                 #expect(remaining == 0)
                 #expect(resetAt != nil)
                 #expect(retryAfter == nil)
+                #expect(message == "API rate limit exceeded")
             } catch {
                 Issue.record("unexpected error: \(error)")
             }
@@ -101,10 +102,11 @@ struct HTTPMockedNetworkTests {
             do {
                 let _: Repository = try await client.get("repos/x/y")
                 Issue.record("expected throw")
-            } catch let APIError.rateLimited(resetAt, remaining, retryAfter, _) {
+            } catch let APIError.rateLimited(resetAt, remaining, retryAfter, message, _) {
                 #expect(retryAfter == 60)
                 #expect(remaining == nil)
                 #expect(resetAt == nil)
+                #expect(message == "You have exceeded a secondary rate limit")
             } catch {
                 Issue.record("unexpected error: \(error)")
             }
@@ -133,9 +135,55 @@ struct HTTPMockedNetworkTests {
             do {
                 let _: Repository = try await client.get("repos/x/y")
                 Issue.record("expected throw")
-            } catch let APIError.rateLimited(_, remaining, retryAfter, _) {
+            } catch let APIError.rateLimited(_, remaining, retryAfter, message, _) {
                 #expect(remaining == 4999)
                 #expect(retryAfter == 120)
+                // A secondary limit isn't raised by authenticating, so
+                // the description must not offer that as the remedy.
+                let description = APIError.rateLimited(
+                    resetAt: nil, remaining: remaining, retryAfter: retryAfter,
+                    message: message, url: URL(string: "https://x")!
+                ).localizedDescription
+                #expect(description.contains("Retry after 120s."))
+                #expect(!description.contains("GH_TOKEN"))
+                #expect(description.contains("You have exceeded a secondary rate limit"))
+            } catch {
+                Issue.record("unexpected error: \(error)")
+            }
+        }
+
+        /// `Retry-After` is attacker-influenced (any proxy or GHES host
+        /// can set it). Values `Double` would happily accept — `NaN`,
+        /// `inf`, fractions, overflow — must not reach the payload,
+        /// where formatting them as an integer would trap. The response
+        /// still classifies as a rate limit: presence of the header
+        /// decides, as upstream.
+        @Test(arguments: ["NaN", "inf", "-1", "1.5", "99999999999999999999", "Wed, 21 Oct 2015 07:28:00 GMT"])
+        func rejectsUnparseableRetryAfterWithoutTrapping(header: String) async throws {
+            let session = MockURLProtocol.session()
+            MockURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 429,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Retry-After": header])!
+                return (response, Data(#"{"message":"You have exceeded a secondary rate limit"}"#.utf8))
+            }
+            let client = APIClient(
+                configuration: Configuration(),
+                session: session
+            )
+            do {
+                let _: Repository = try await client.get("repos/x/y")
+                Issue.record("expected throw")
+            } catch let error as APIError {
+                guard case .rateLimited(_, _, let retryAfter, _, _) = error else {
+                    Issue.record("expected .rateLimited, got \(error)")
+                    return
+                }
+                #expect(retryAfter == nil)
+                // Formatting is the trap site — exercise it.
+                #expect(!error.localizedDescription.isEmpty)
             } catch {
                 Issue.record("unexpected error: \(error)")
             }
