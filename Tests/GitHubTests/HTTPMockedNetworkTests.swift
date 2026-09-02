@@ -71,9 +71,98 @@ struct HTTPMockedNetworkTests {
             do {
                 let _: Repository = try await client.get("repos/x/y")
                 Issue.record("expected throw")
-            } catch let APIError.rateLimited(resetAt, remaining, _) {
+            } catch let APIError.rateLimited(resetAt, remaining, retryAfter, _) {
                 #expect(remaining == 0)
                 #expect(resetAt != nil)
+                #expect(retryAfter == nil)
+            } catch {
+                Issue.record("unexpected error: \(error)")
+            }
+        }
+
+        /// GitHub returns 429 for both primary and secondary limits
+        /// ("If you exceed your primary rate limit, you will receive a
+        /// 403 or 429 response"), so upstream treats a 429 as a rate
+        /// limit unconditionally — no rate-limit headers required.
+        @Test func mapsRateLimitedOn429WithoutRateLimitHeaders() async throws {
+            let session = MockURLProtocol.session()
+            MockURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 429,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Retry-After": "60"])!
+                return (response, Data(#"{"message":"You have exceeded a secondary rate limit"}"#.utf8))
+            }
+            let client = APIClient(
+                configuration: Configuration(),
+                session: session
+            )
+            do {
+                let _: Repository = try await client.get("repos/x/y")
+                Issue.record("expected throw")
+            } catch let APIError.rateLimited(resetAt, remaining, retryAfter, _) {
+                #expect(retryAfter == 60)
+                #expect(remaining == nil)
+                #expect(resetAt == nil)
+            } catch {
+                Issue.record("unexpected error: \(error)")
+            }
+        }
+
+        /// Secondary limits arrive as 403 + `Retry-After` with a
+        /// non-zero `X-RateLimit-Remaining` — the primary budget isn't
+        /// exhausted, so the remaining==0 test alone misses them.
+        @Test func mapsSecondaryRateLimitOn403WithRetryAfter() async throws {
+            let session = MockURLProtocol.session()
+            MockURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 403,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: [
+                        "X-RateLimit-Remaining": "4999",
+                        "Retry-After": "120",
+                    ])!
+                return (response, Data(#"{"message":"You have exceeded a secondary rate limit"}"#.utf8))
+            }
+            let client = APIClient(
+                configuration: Configuration(),
+                session: session
+            )
+            do {
+                let _: Repository = try await client.get("repos/x/y")
+                Issue.record("expected throw")
+            } catch let APIError.rateLimited(_, remaining, retryAfter, _) {
+                #expect(remaining == 4999)
+                #expect(retryAfter == 120)
+            } catch {
+                Issue.record("unexpected error: \(error)")
+            }
+        }
+
+        /// A plain 403 with neither marker is an authorization failure,
+        /// not a rate limit — it must stay `.http`.
+        @Test func keeps403WithoutRateLimitMarkersAsHTTP() async throws {
+            let session = MockURLProtocol.session()
+            MockURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 403,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["X-RateLimit-Remaining": "4999"])!
+                return (response, Data(#"{"message":"Resource not accessible by integration"}"#.utf8))
+            }
+            let client = APIClient(
+                configuration: Configuration(),
+                session: session
+            )
+            do {
+                let _: Repository = try await client.get("repos/x/y")
+                Issue.record("expected throw")
+            } catch let APIError.http(status, message, _) {
+                #expect(status == 403)
+                #expect(message == "Resource not accessible by integration")
             } catch {
                 Issue.record("unexpected error: \(error)")
             }

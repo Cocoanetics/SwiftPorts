@@ -298,15 +298,33 @@ public actor APIClient {
         if r.status == 304 { return }
         if r.status == 404 { throw APIError.notFound(url: r.url) }
         if r.status == 401 { throw APIError.unauthenticated(url: r.url) }
-        if r.status == 403,
-           let remaining = r.rateLimitRemaining, remaining == 0 {
-            throw APIError.rateLimited(
-                resetAt: r.rateLimitResetAt,
-                remaining: remaining,
-                url: r.url)
-        }
+        if let rateLimited = Self.rateLimitError(for: r) { throw rateLimited }
         let message = parseMessage(from: r.body) ?? ""
         throw APIError.http(status: r.status, message: message, url: r.url)
+    }
+
+    /// Classify a response as a rate limit, mirroring upstream's
+    /// `isRateLimitError` (`pkg/cmd/skills/search/search.go`): a 429 is
+    /// always one — GitHub returns it for both primary and secondary
+    /// limits — and a 403 is one when it carries
+    /// `X-RateLimit-Remaining: 0` (primary) or a `Retry-After`
+    /// (secondary). Presence of the header decides, exactly as upstream;
+    /// `retryAfter` then parses it as the delay-seconds form GitHub
+    /// sends, staying nil for anything else.
+    private static func rateLimitError(for r: APIResponse) -> APIError? {
+        let retryAfter = r.headerFields[.retryAfter]
+        let isRateLimit: Bool
+        switch r.status {
+        case 429: isRateLimit = true
+        case 403: isRateLimit = r.rateLimitRemaining == 0 || retryAfter != nil
+        default: isRateLimit = false
+        }
+        guard isRateLimit else { return nil }
+        return .rateLimited(
+            resetAt: r.rateLimitResetAt,
+            remaining: r.rateLimitRemaining,
+            retryAfter: retryAfter.flatMap(TimeInterval.init),
+            url: r.url)
     }
 
     private func parseMessage(from body: Data) -> String? {
