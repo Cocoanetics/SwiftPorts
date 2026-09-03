@@ -89,8 +89,14 @@ gh version
   convention, contrast with GitLab's `X-Next-Page`).
 - Rate-limit headers (`X-RateLimit-Remaining`, `X-RateLimit-Reset`)
   are surfaced to callers; `gh api` shows them when verbose.
-- 401 → `APIError.unauthenticated`, 404 → `.notFound`,
-  403 + remaining=0 → `.rateLimited(resetAt:)`.
+- 401 → `APIError.unauthenticated`, 404 → `.notFound`.
+- Rate limits → `.rateLimited(resetAt:remaining:retryAfter:message:url:)`,
+  classified like upstream's `isRateLimitError`: any 429 (GitHub uses it
+  for both primary and secondary limits), 403 + remaining=0 (primary),
+  or 403 + `Retry-After` (secondary). `retryAfter` carries the wait
+  GitHub asked for so callers can honour it instead of guessing, parsed
+  strictly as RFC 9110 `delay-seconds`; `message` keeps the server's
+  text, which is what tells a secondary limit from a primary one.
 
 ## Embedded tools (no shellout)
 
