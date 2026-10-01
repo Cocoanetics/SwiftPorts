@@ -22,7 +22,36 @@ extension APIError: LocalizedError {
         case .notFound(let url):
             return "Not found: \(url.absoluteString)"
         case .decoding(let underlying, let url):
-            return "Decode error from \(url.absoluteString): \(underlying.localizedDescription)"
+            return "Decode error from \(url.absoluteString): \(Self.describe(underlying))"
         }
+    }
+
+    private static func describe(_ error: Error) -> String {
+        guard let error = error as? DecodingError else {
+            return error.localizedDescription
+        }
+
+        switch error {
+        case .keyNotFound(let key, let context):
+            return "\(context.debugDescription) "
+                + "(missing key \"\(key.stringValue)\"; "
+                + "codingPath: \(format(context.codingPath)))"
+        case .valueNotFound(let type, let context):
+            return "\(context.debugDescription) "
+                + "(missing \(type); codingPath: \(format(context.codingPath)))"
+        case .typeMismatch(let type, let context):
+            return "\(context.debugDescription) "
+                + "(expected \(type); codingPath: \(format(context.codingPath)))"
+        case .dataCorrupted(let context):
+            return "\(context.debugDescription) "
+                + "(codingPath: \(format(context.codingPath)))"
+        @unknown default:
+            return error.localizedDescription
+        }
+    }
+
+    private static func format(_ codingPath: [any CodingKey]) -> String {
+        guard !codingPath.isEmpty else { return "<root>" }
+        return codingPath.map(\.stringValue).joined(separator: ".")
     }
 }
