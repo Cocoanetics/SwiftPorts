@@ -55,6 +55,35 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
 
 @Suite(.serialized)
 struct HTTPMockedNetworkTests {
+    @Test func decodingErrorIdentifiesMissingKeyAndCodingPath() async throws {
+        let session = MockURLProtocol.session()
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"])!
+            return (response, Data(#"[{"id":1}]"#.utf8))
+        }
+        let client = APIClient(
+            configuration: Configuration(),
+            session: session)
+
+        do {
+            let _: [RequiredPayload] = try await client.get("broken")
+            Issue.record("expected decoding error")
+        } catch let error as APIError {
+            #expect(error.localizedDescription.contains(
+                #"missing key "requiredValue""#))
+            #expect(error.localizedDescription.contains(
+                "codingPath: Index 0"))
+            #expect(error.localizedDescription.contains(
+                "https://gitlab.com/api/v4/broken"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
     @Test func mergeRequestDiffVersionsAllowOmittedMetadata() async throws {
         let session = MockURLProtocol.session()
         let seenURL = TestLockedBox<String?>(nil)
@@ -339,6 +368,11 @@ struct HTTPMockedNetworkTests {
 private struct ConditionalPayload: Decodable, Sendable {
     let id: Int
     let name: String
+}
+
+private struct RequiredPayload: Decodable, Sendable {
+    let id: Int
+    let requiredValue: String
 }
 
 private func requestBodyData(_ request: URLRequest) -> Data {
