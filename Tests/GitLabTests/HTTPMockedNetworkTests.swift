@@ -55,6 +55,40 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
 
 @Suite(.serialized)
 struct HTTPMockedNetworkTests {
+    @Test func mergeRequestDiffVersionsAllowOmittedMetadata() async throws {
+        let session = MockURLProtocol.session()
+        let seenURL = TestLockedBox<String?>(nil)
+        MockURLProtocol.handler = { request in
+            seenURL.withLock { $0 = request.url?.absoluteString }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"])!
+            return (response, Data("""
+            [{
+              "id": 110,
+              "head_commit_sha": "head",
+              "base_commit_sha": "base",
+              "start_commit_sha": "start"
+            }]
+            """.utf8))
+        }
+        let client = APIClient(
+            configuration: Configuration(),
+            session: session)
+        let repo = RepositoryReference(pathSegments: ["group", "sub", "repo"])
+
+        let versions = try await client.mergeRequestDiffVersions(
+            project: repo,
+            mergeRequestIID: 407)
+
+        #expect(versions.first?.id == 110)
+        #expect(versions.first?.state == nil)
+        #expect(seenURL.withLock { $0 }?.contains(
+            "projects/group%2Fsub%2Frepo/merge_requests/407/versions") == true)
+    }
+
     @Test func conditionalGetReturnsNotModified() async throws {
         let session = MockURLProtocol.session()
         let oldEtag = #""etag-1""#
