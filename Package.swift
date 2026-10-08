@@ -367,14 +367,12 @@ let package = Package(
                  from: "6.0.0"),
         // libarchive-backed multi-format archive library (tar, zip, 7z,
         // cpio, xar, ISO9660, …) with gzip/bzip2/xz/zstd filters — backs
-        // the tar/zip CLI ports. Pinned to the latest commit of upstream's
-        // default (`swift`) branch — it carries the platform-narrowed
-        // gating from marcprux/swift-archive#2, which no tagged release
-        // contains yet. GitKit's `Archive` trait pins the SAME revision
-        // (the dependency graph must agree on one version of the package);
-        // move both to a `from:` pin when upstream tags the gating.
+        // the tar/zip CLI ports. 3.8.9 is the first upstream tag carrying
+        // the platform-narrowed gating from marcprux/swift-archive#2.
+        // GitKit's `Archive` trait requires the same `from: "3.8.9"` (the
+        // dependency graph must agree on one version of the package).
         .package(url: "https://github.com/marcprux/swift-archive",
-                 revision: "60f478d10ae730c4faed643d3fcc746c07a7e7e5",
+                 from: "3.8.9",
                  traits: [.defaults,
                           "GzipSupport",
                           "Bzip2Support",
@@ -386,14 +384,13 @@ let package = Package(
         // (`Repository` + operations) SwiftGit's GitClient composes. GitKit
         // versions independently of libgit2 (2.x vendors libgit2 v1.9.4).
         // The `Archive` trait turns on `Repository.archive` (libarchive via
-        // the revision-pinned swift-archive above), backing our `git
-        // archive` subcommand. Referenced by BRANCH, not version: enabling
-        // the trait activates GitKit's revision-pinned dep, and SwiftPM only
-        // permits that from a branch/revision reference (a stable-version
-        // package may not activate an unstable-version dependency — the
-        // `from: "2.0.0"` form works only with the trait off).
+        // the swift-archive above), backing our `git archive` subcommand.
+        // GitKit 2.1.0 is the first release that requires swift-archive by
+        // version, which is what lets us enable the trait from a version
+        // requirement here (a stable-version package may not activate an
+        // unstable-version dependency).
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 branch: "main",
+                 from: "2.1.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
@@ -402,14 +399,18 @@ let package = Package(
         // ParsableCommand bridge). SwiftPorts CLIs read/write through
         // `Shell.current` so they participate in any host's pipeline
         // (SwiftBash, swift-js, SwiftScript, …) without a fork.
-        // Pinned to `main` until ShellKit ships a tagged release.
-        // ShellKit `main` carries zero ArgumentParser dependency — the
+        // ShellKit carries zero ArgumentParser dependency — the
         // ParsableCommand bridge lives in the separate `ShellCommandKit`
         // product — which keeps ArgumentParser off every SDK library's
-        // module graph (see Docs/Android.md). Pinned to `main` until
-        // ShellKit ships a tagged release.
+        // module graph (see Docs/Android.md).
+        //
+        // Versioned so SwiftPorts itself can be required by version (SwiftPM
+        // refuses a version requirement on a package whose dependencies are
+        // branch-pinned). `upToNextMinor` because ShellKit is 0.x and a minor
+        // bump may change API; the family moves minors together
+        // (Cocoanetics/SwiftBash#89).
         .package(url: "https://github.com/Cocoanetics/ShellKit",
-                 branch: "main"),
+                 .upToNextMinor(from: "0.1.0")),
 
         // swift-markdown supplies the CommonMark + GFM AST used by
         // GlamKit. We picked it directly rather than going through
@@ -423,12 +424,11 @@ let package = Package(
         // SQLiteKit — the SQLite SDK (vendored amalgamation + sqlite-vec +
         // FTS5), extracted from this repo into its own package so it can be
         // versioned independently and consumed with a minimal closure. Backs
-        // the `sqlite3` shell port. Pinned to `main` until SQLiteKit ships a
-        // tagged release. Our `FTS5` / `SQLiteVec` traits forward to
+        // the `sqlite3` shell port. Our `FTS5` / `SQLiteVec` traits forward to
         // SQLiteKit's same-named traits; off unless the consumer opts in (see
-        // the `traits:` block above).
+        // the `traits:` block above). 0.x: `upToNextMinor`, as for ShellKit.
         .package(url: "https://github.com/Cocoanetics/SQLiteKit",
-                 branch: "main",
+                 .upToNextMinor(from: "0.1.0"),
                  traits: [
                      .trait(name: "FTS5", condition: .when(traits: ["FTS5"])),
                      .trait(name: "SQLiteVec", condition: .when(traits: ["SQLiteVec"])),
