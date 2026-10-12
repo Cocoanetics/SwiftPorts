@@ -36,18 +36,55 @@ public struct SSHConfig: Sendable {
         let url = Shell.resolve(expandedPath)
         try await Shell.authorize(url)
 
-        guard FileManager.default.fileExists(atPath: url.path) else {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let contents = try? String(contentsOf: url, encoding: .utf8) else {
             return SSHConfig(lines: [], sourceDescription: path)
         }
-        let contents = try String(contentsOf: url, encoding: .utf8)
         return parse(contents, source: path)
     }
 
     /// Loads the selected config file after command-line `-p`/`-l`/`-i`/`-o`
     /// directives. Since resolution is first-value-wins, prepending these lines
     /// gives command-line settings the same precedence they have in `ssh(1)`.
-    public static func load(path: String, commandLineOptions: [String]) async throws -> SSHConfig {
-        let file = try await load(path: path)
+    /// `requireFile` distinguishes an explicit `-F` (fatal if it cannot be
+    /// opened) from the optional default `~/.ssh/config`.
+    public static func load(
+        path: String,
+        commandLineOptions: [String],
+        requireFile: Bool = false
+    ) async throws -> SSHConfig {
+        let file: SSHConfig
+        if requireFile {
+            let expandedPath = SSHPath.expandingTilde(path)
+            let url = Shell.resolve(expandedPath)
+            try await Shell.authorize(url)
+
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                throw SSHError.cannotOpenUserConfigFile(
+                    path: path,
+                    reason: "No such file or directory")
+            }
+            guard FileManager.default.isReadableFile(atPath: url.path) else {
+                throw SSHError.cannotOpenUserConfigFile(
+                    path: path,
+                    reason: "Permission denied")
+            }
+            do {
+                file = parse(
+                    try String(contentsOf: url, encoding: .utf8),
+                    source: path)
+            } catch {
+                let nsError = error as NSError
+                let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError
+                throw SSHError.cannotOpenUserConfigFile(
+                    path: path,
+                    reason: underlying?.localizedFailureReason
+                        ?? nsError.localizedFailureReason
+                        ?? nsError.localizedDescription)
+            }
+        } else {
+            file = try await load(path: path)
+        }
         let commandLines = commandLineOptions.map { Substring($0) }
         return SSHConfig(
             lines: commandLines + file.lines,

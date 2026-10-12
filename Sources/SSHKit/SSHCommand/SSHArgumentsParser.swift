@@ -23,8 +23,7 @@ enum SSHArgumentsParser {
         var identityFiles: [String] = []
         var configOptions: [String] = []
         var configFile = "~/.ssh/config"
-        var requestTTY = SSHRequestTTY.automatic
-        var verbosity = 0
+        var configFileWasSpecified = false
         var directives: [String] = []
 
         while index < argv.count {
@@ -65,11 +64,9 @@ enum SSHArgumentsParser {
                     let option = cluster[clusterIndex]
                     switch option {
                     case "T":
-                        requestTTY = .no
-                    case "t":
-                        requestTTY = requestTTY == .yes ? .force : .yes
-                    case "v":
-                        verbosity = min(verbosity + 1, 3)
+                        // Exec channels never allocate a PTY, so this is already
+                        // the command's effective behavior.
+                        break
                     case "p", "l", "i", "o", "F":
                         let value: String
                         if clusterIndex + 1 < cluster.count {
@@ -109,6 +106,7 @@ enum SSHArgumentsParser {
                             }
                         case "F":
                             configFile = value
+                            configFileWasSpecified = true
                         default:
                             break
                         }
@@ -151,8 +149,7 @@ enum SSHArgumentsParser {
             identityFiles: identityFiles,
             configOptions: configOptions,
             configFile: configFile,
-            requestTTY: requestTTY,
-            verbosity: verbosity,
+            configFileWasSpecified: configFileWasSpecified,
             host: destinationHost,
             command: command,
             configurationDirectives: directives)

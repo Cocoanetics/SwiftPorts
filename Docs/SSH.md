@@ -47,6 +47,13 @@ Tests/SSHTests/              argv and OpenSSH usage/exit-code tests
 convention), `SSHCommand`/`ssh`, and `GitKitSSH` (see
 [below](#gitkitssh-issue-113)) ship today.
 
+`SSHCommand` implements non-interactive `ssh host command` with
+`-p`/`-l`/`-i`/`-o`/`-F`/`-T`. An explicit `-F` file must open, while the
+default `~/.ssh/config` remains optional like OpenSSH. PTY allocation (`-t`)
+and OpenSSH-style verbose diagnostics (`-v`) are not silently ignored: both
+currently take the illegal-option/usage exit-255 path until their behavior is
+implemented in the interactive Phase 3 work (#115).
+
 ## SDK API surface
 
 ```swift

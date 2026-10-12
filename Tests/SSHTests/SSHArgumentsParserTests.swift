@@ -9,7 +9,7 @@ struct SSHArgumentsParserTests {
         let parsed = try SSHArgumentsParser.parse([
             "-p", "2222", "-l", "alice", "-i", "first key",
             "-isecond", "-o", "StrictHostKeyChecking=yes",
-            "-F", "custom_config", "-T", "-tt", "-vvv",
+            "-F", "custom_config", "-T",
             "example.com", "printf", "-%s", "hello",
         ])
 
@@ -18,8 +18,7 @@ struct SSHArgumentsParserTests {
         #expect(parsed.identityFiles == ["first key", "second"])
         #expect(parsed.configOptions == ["StrictHostKeyChecking=yes"])
         #expect(parsed.configFile == "custom_config")
-        #expect(parsed.requestTTY == .force)
-        #expect(parsed.verbosity == 3)
+        #expect(parsed.configFileWasSpecified)
         #expect(parsed.host == "example.com")
         #expect(parsed.command == ["printf", "-%s", "hello"])
     }
@@ -48,17 +47,15 @@ struct SSHArgumentsParserTests {
     @Test("options may follow the destination until the command starts")
     func optionsAfterDestination() throws {
         let parsed = try SSHArgumentsParser.parse([
-            "example.com", "-p2222", "-v", "echo", "-n", "hello",
+            "example.com", "-p2222", "echo", "-n", "hello",
         ])
         #expect(parsed.port == 2222)
-        #expect(parsed.verbosity == 1)
         #expect(parsed.command == ["echo", "-n", "hello"])
     }
 
     @Test("double dash terminates option parsing")
     func optionTerminator() throws {
         let parsed = try SSHArgumentsParser.parse(["--", "example.com", "-v"])
-        #expect(parsed.verbosity == 0)
         #expect(parsed.command == ["-v"])
     }
 
@@ -76,6 +73,12 @@ struct SSHArgumentsParserTests {
     func optionErrors() {
         #expect(throws: SSHArgumentError.illegalOption("z")) {
             _ = try SSHArgumentsParser.parse(["-z", "example.com", "true"])
+        }
+        #expect(throws: SSHArgumentError.illegalOption("t")) {
+            _ = try SSHArgumentsParser.parse(["-t", "example.com", "true"])
+        }
+        #expect(throws: SSHArgumentError.illegalOption("v")) {
+            _ = try SSHArgumentsParser.parse(["-v", "example.com", "true"])
         }
         #expect(throws: SSHArgumentError.missingArgument("p")) {
             _ = try SSHArgumentsParser.parse(["-p"])

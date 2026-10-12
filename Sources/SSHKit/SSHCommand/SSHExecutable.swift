@@ -37,14 +37,15 @@ public enum SSHExecutable {
         var client: SSHClient?
         do {
             let config: SSHConfig
-            if arguments.configFile == "none" {
+            if arguments.configFile.caseInsensitiveCompare("none") == .orderedSame {
                 config = SSHConfig.parse(
                     arguments.configurationDirectives.joined(separator: "\n"),
                     source: "command-line")
             } else {
                 config = try await SSHConfig.load(
                     path: arguments.configFile,
-                    commandLineOptions: arguments.configurationDirectives)
+                    commandLineOptions: arguments.configurationDirectives,
+                    requireFile: arguments.configFileWasSpecified)
             }
             let hostConfig = try config.resolve(host: arguments.host)
             let identities = try await IdentityLoader.loadAvailable(paths: hostConfig.identityFiles)

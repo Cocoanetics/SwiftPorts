@@ -4,8 +4,7 @@ struct SSHArguments: Equatable {
     var identityFiles: [String]
     var configOptions: [String]
     var configFile: String
-    var requestTTY: SSHRequestTTY
-    var verbosity: Int
+    var configFileWasSpecified: Bool
     var host: String
     var command: [String]
     var configurationDirectives: [String]

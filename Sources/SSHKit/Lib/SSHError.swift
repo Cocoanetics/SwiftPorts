@@ -28,6 +28,10 @@ public enum SSHError: Error, CustomStringConvertible, Sendable {
     /// `readconf.c` line 2680: `fatal("%s: terminating, %d bad configuration options", ...)`.
     case badConfigurationOptions(path: String, count: Int)
 
+    /// An explicit `-F` config file could not be opened. The default per-user
+    /// config remains optional, matching `process_config_files()` in `ssh.c`.
+    case cannotOpenUserConfigFile(path: String, reason: String)
+
     public var description: String {
         switch self {
         case .hostKeyVerificationFailed(let lines):
@@ -42,6 +46,8 @@ public enum SSHError: Error, CustomStringConvertible, Sendable {
             return "\(path): line \(line): \(reason)"
         case .badConfigurationOptions(let path, let count):
             return "\(path): terminating, \(count) bad configuration options"
+        case .cannotOpenUserConfigFile(let path, let reason):
+            return "Can't open user config file \(path.prefix(100)): \(reason.prefix(100))"
         }
     }
 }

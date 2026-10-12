@@ -1,4 +1,5 @@
 #if !os(Android)
+import Foundation
 import ShellKit
 import Testing
 @testable import SSHCommand
@@ -35,6 +36,26 @@ struct SSHExecutableTests {
 
         #expect(exit == 255)
         #expect(await stderr.readAllString() == "Bad port 'nope'\n")
+    }
+
+    @Test("an explicitly selected missing config is fatal")
+    func missingExplicitConfig() async {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-ssh-config-\(UUID().uuidString)").path
+        let stdout = OutputSink()
+        let stderr = OutputSink()
+        let exit = await SSHExecutable.run(
+            argv: ["-F", missing, "example.com", "true"],
+            stdin: .empty,
+            stdout: stdout,
+            stderr: stderr)
+        stdout.finish()
+        stderr.finish()
+
+        #expect(exit == 255)
+        #expect(
+            await stderr.readAllString()
+                == "Can't open user config file \(missing.prefix(100)): No such file or directory\n")
     }
 }
 #endif
