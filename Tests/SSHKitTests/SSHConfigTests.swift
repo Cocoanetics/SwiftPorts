@@ -87,4 +87,18 @@ struct SSHConfigTests {
         #expect(resolved.hostName == "example.com")
         #expect(resolved.strictHostKeyChecking == .ask)
     }
+
+    /// Swift treats `\r\n` as a single `Character`, distinct from `"\n"` alone — splitting on a
+    /// literal `"\n"` silently fails to split CRLF-terminated text at all, merging every line (and
+    /// every `Host` block) into one. Windows checks out text fixtures with CRLF line endings.
+    @Test func parsingToleratesCRLFLineEndings() throws {
+        let crlfContents = try SSHKitFixtures.contents("ssh_config_sample")
+            .replacingOccurrences(of: "\n", with: "\r\n")
+        let config = SSHConfig.parse(crlfContents, source: "crlf")
+        let resolved = try config.resolve(host: "example.com")
+
+        #expect(resolved.hostName == "203.0.113.10")
+        #expect(resolved.port == 2222)
+        #expect(resolved.user == "alice")
+    }
 }

@@ -20,8 +20,13 @@ public struct SSHConfig: Sendable {
     }
 
     /// Parses in-memory config text (for tests/fixtures). `source` is used only in diagnostics.
+    ///
+    /// Splits on `Character.isNewline` (not a literal `"\n"`) so `\r\n`-terminated files parse
+    /// identically to `\n`-terminated ones: Swift treats `\r\n` as a single `Character`, distinct
+    /// from `"\n"` alone, so splitting on a literal `"\n"` silently fails to split CRLF content at
+    /// all (seen on Windows CI, where checked-out fixtures get CRLF line endings).
     public static func parse(_ contents: String, source: String = "<config>") -> SSHConfig {
-        SSHConfig(lines: contents.split(separator: "\n", omittingEmptySubsequences: false), sourceDescription: source)
+        SSHConfig(lines: contents.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline), sourceDescription: source)
     }
 
     /// Loads `path` (tilde-expanded). A missing file resolves to an empty config, matching

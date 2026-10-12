@@ -21,10 +21,16 @@ public struct KnownHostsStore: Sendable {
     /// matching `load_hostkeys()`'s tolerance of bad lines in `hostfile.c`. `@cert-authority` /
     /// `@revoked` marker lines are out of scope for this port's subset and are skipped rather
     /// than mis-trusting or mis-revoking a key.
+    ///
+    /// Splits on `Character.isNewline` (not a literal `"\n"`) so `\r\n`-terminated files parse
+    /// identically to `\n`-terminated ones: Swift treats `\r\n` as a single `Character`, distinct
+    /// from `"\n"` alone, so splitting on a literal `"\n"` silently fails to split CRLF content at
+    /// all (seen on Windows CI, where checked-out fixtures get CRLF line endings) — every line then
+    /// merges into one, and only the first entry's host field is ever recovered.
     public static func parse(_ contents: String, source: String) -> KnownHostsStore {
         var entries: [KnownHostsEntry] = []
 
-        for (index, rawLine) in contents.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+        for (index, rawLine) in contents.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).enumerated() {
             let lineNumber = index + 1
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty, trimmed.first != "#", trimmed.first != "@" else {

@@ -59,6 +59,21 @@ struct KnownHostsStoreTests {
         #expect(store.matchingEntries(forHost: "EXAMPLE.COM").isEmpty)
     }
 
+    /// Swift treats `\r\n` as a single `Character`, distinct from `"\n"` alone — splitting on a
+    /// literal `"\n"` silently fails to split CRLF-terminated text at all, merging every line into
+    /// one. Windows checks out text fixtures with CRLF line endings, which is exactly how this
+    /// broke on `build-windows` CI: `other.example.com`/`10.0.0.1` stopped matching because the
+    /// whole file collapsed into a single entry.
+    @Test func parsingToleratesCRLFLineEndings() throws {
+        let crlfContents = try SSHKitFixtures.contents("known_hosts_plain")
+            .replacingOccurrences(of: "\n", with: "\r\n")
+        let store = KnownHostsStore.parse(crlfContents, source: "crlf")
+
+        #expect(store.matchingEntries(forHost: "example.com").count == 1)
+        #expect(store.matchingEntries(forHost: "other.example.com").count == 1)
+        #expect(store.matchingEntries(forHost: "10.0.0.1").count == 1)
+    }
+
     @Test func malformedLinesAreSkipped() {
         let store = KnownHostsStore.parse("not-enough-fields\n\n# comment\n@revoked marker ssh-ed25519 AAAA\n", source: "bad")
         #expect(store.entries.isEmpty)
