@@ -44,15 +44,16 @@ let androidDroppedTargets: Set<String> = [
     "ZipTests", "UnzipTests", "TarTests", "GzipTests", "Bzip2Tests",
     "XzTests", "ZstdTests", "Lz4Tests", "JqTests", "GlamTests",
     "GitCommandTests", "RgTests", "FdTests",
-    // GitHubTests is the only Android-scope test target that links a C++
-    // SwiftPM target (swift-crypto's BoringSSL, via GitHub). Linking C++
-    // into the xctest executable makes swiftc go through clang's C++ link
-    // driver, which injects host C++ defaults (-lstdc++ + a host
-    // /usr/lib/x86_64-linux-gnu search path) and breaks Bionic libc
-    // resolution for the whole bundle. Dropping it keeps the test bundle
-    // C++-free so the other SDK suites link + run on the emulator.
-    // (GitHubTests still runs on the four full-build platforms.)
-    "GitHubTests",
+    // GitHubTests and SSHKitTests both link a C++ SwiftPM target (swift-
+    // crypto's BoringSSL, via GitHub / SSHKit's shared `Crypto` product).
+    // Linking C++ into the xctest executable makes swiftc go through
+    // clang's C++ link driver, which injects host C++ defaults (-lstdc++
+    // + a host /usr/lib/x86_64-linux-gnu search path) and breaks Bionic
+    // libc resolution for the whole bundle. Dropping them keeps the test
+    // bundle C++-free so the other SDK suites link + run on the emulator.
+    // (Both still run on the four full-build platforms; `SSHKit` itself —
+    // the library, not its tests — stays on Android, same as `GitHub`.)
+    "GitHubTests", "SSHKitTests",
 ]
 
 func androidFiltered(products list: [Product]) -> [Product] {
@@ -332,6 +333,12 @@ let package = Package(
         .library(name: "FdKit", targets: ["FdKit"]),
         .library(name: "FdCommand", targets: ["FdCommand"]),
         .executable(name: "fd", targets: ["fd"]),
+
+        // SSHKit — in-process, OpenSSH-compatible SSH client engine on
+        // mainline apple/swift-nio-ssh (issue #112). Library only for
+        // now: `SSHCommand`/`ssh` and the GitKit transport land in
+        // follow-up issues (#113/#114).
+        .library(name: "SSHKit", targets: ["SSHKit"]),
     ]),
     // Package traits — opt-in, build-time toggles. Off by default (none are
     // listed in any `.default(enabledTraits:)`).
@@ -361,6 +368,19 @@ let package = Package(
                  traits: [.defaults, "YAML", "CommandLineArguments"]),
         .package(url: "https://github.com/apple/swift-crypto",
                  from: "3.0.0"),
+
+        // Engine for SSHKit: mainline SwiftNIO SSH (Citadel and its
+        // swift-nio-ssh fork are reference-only, per issue #112 — no
+        // dependency, no fork). Pre-1.0, so pinned the way ShellKit /
+        // SQLiteKit are: `.upToNextMinor`. swift-nio itself is declared
+        // directly too — SwiftPM requires every `.product(package:)`
+        // reference to name a package this manifest depends on directly,
+        // even when (as here) it's also a transitive dependency of
+        // swift-nio-ssh.
+        .package(url: "https://github.com/apple/swift-nio",
+                 from: "2.81.0"),
+        .package(url: "https://github.com/apple/swift-nio-ssh",
+                 .upToNextMinor(from: "0.15.0")),
 
         // Community
         .package(url: "https://github.com/jpsim/Yams",
@@ -1184,6 +1204,36 @@ let package = Package(
             dependencies: [
                 .target(name: "FdCommand", condition: .when(platforms: commandTestPlatforms)),
                 "FdKit", "RipgrepKit",
+            ]
+        ),
+
+        // MARK: SSHKit (issue #112)
+        // In-process SSH client engine on mainline apple/swift-nio-ssh.
+        // Pure library for now — no ArgumentParser dependency, so the
+        // library itself isn't in `androidDroppedTargets` (same as
+        // `GitHub`, which shares this same `Crypto` dependency). But
+        // `SSHKitTests` links that `Crypto` product's BoringSSL C++
+        // target into its xctest bundle, which pollutes the Android
+        // cross-link exactly like `GitHubTests` — so it's listed there.
+        // NIO/NIOSSH are otherwise a first-ever dependency family for
+        // this repo; their Android/Windows buildability beyond that is
+        // unverified (see Docs/SSH.md).
+        .target(
+            name: "SSHKit",
+            dependencies: [
+                .product(name: "ShellKit", package: "ShellKit"),
+                .product(name: "NIOSSH", package: "swift-nio-ssh"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "Crypto", package: "swift-crypto"),
+            ],
+            path: "Sources/SSHKit/Lib"
+        ),
+        .testTarget(
+            name: "SSHKitTests",
+            dependencies: ["SSHKit"],
+            resources: [
+                .copy("Fixtures"),
             ]
         ),
 

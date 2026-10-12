@@ -1,0 +1,23 @@
+# sample ssh_config fixture for SSHConfigTests
+
+Host example.com
+    HostName 203.0.113.10
+    Port 2222
+    User alice
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+
+Host *.example.com
+    User bob
+    IdentityFile ~/.ssh/id_ecdsa
+    ForwardAgent yes
+
+Host bare-host
+    HostName inner.example.net
+
+Host negated-*
+    HostName should-not-apply
+
+Host !excluded.example.com *.example.com
+    Port 9999

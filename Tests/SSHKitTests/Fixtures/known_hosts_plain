@@ -1,0 +1,2 @@
+example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAJhwwbTZ3UbMyH4iJwjxY7B6vOeAkNtAbaTlr/pVdLJ sshkit-fixture
+other.example.com,10.0.0.1 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBBYl6x5x2RQxUc8VziOsgheju3WJSAslRcDklsy5tSPJ5tHjHm5qnfGiYmIscTph5bMmZbkh10UAodZ2PdzGGdw= sshkit-fixture
