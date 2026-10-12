@@ -1,15 +1,18 @@
+import _CryptoExtras
 import Crypto
 import Foundation
 import NIOSSH
 
-/// Parses the `openssh-key-v1` private-key container (`PROTOCOL.key`). Only unencrypted ed25519
-/// and ECDSA (P-256/384/521) keys are supported, matching both `NIOSSHPrivateKey`'s backing-key
-/// set (no RSA — confirmed against `swift-nio-ssh` at the pinned commit, see Docs/SSH.md) and this
-/// port's Phase-1 scope (no passphrase decryption).
+/// Parses the `openssh-key-v1` private-key container (`PROTOCOL.key`). Only ed25519 and ECDSA
+/// (P-256/384/521) keys are supported, matching `NIOSSHPrivateKey`'s backing-key set (no RSA —
+/// confirmed against `swift-nio-ssh` at the pinned commit, see Docs/SSH.md). Encrypted containers
+/// are supported for `kdfname "bcrypt"` with cipher `aes256-ctr` or `aes256-gcm@openssh.com` —
+/// `ssh-keygen`'s own new-format default and its AEAD alternative (issue #115); every other
+/// cipher/KDF combination is out of scope.
 enum OpenSSHPrivateKeyFile {
     private static let magic: [UInt8] = Array("openssh-key-v1\0".utf8)
 
-    static func parse(_ pemText: String, path: String) throws -> NIOSSHPrivateKey {
+    static func parse(_ pemText: String, path: String, passphrase: String) throws -> NIOSSHPrivateKey {
         guard let base64Body = Self.extractBase64Body(from: pemText) else {
             throw SSHError.unsupportedKeyFormat(path: path, reason: "not an OPENSSH PRIVATE KEY file")
         }
@@ -24,25 +27,133 @@ enum OpenSSHPrivateKeyFile {
 
         let cipherName = try reader.readUTF8String()
         let kdfName = try reader.readUTF8String()
-        _ = try reader.readString()  // kdfoptions
-        guard cipherName == "none", kdfName == "none" else {
-            throw SSHError.unsupportedKeyFormat(path: path, reason: "encrypted private keys are not supported")
-        }
+        let kdfOptions = try reader.readString()
 
         guard try reader.readUInt32() == 1 else {
             throw SSHError.unsupportedKeyFormat(path: path, reason: "multi-key files are not supported")
         }
         _ = try reader.readString()  // public key (redundant — recomputed from the private section)
 
-        var privateReader = SSHWireReader(try reader.readString())
+        // Read the "encrypted, padded list of private keys" field's length manually (rather than
+        // as a wire string via `readString()`) so a trailing AEAD tag — appended after it, outside
+        // its own declared length — can still be read from the same cursor (`sshkey.c`'s
+        // `private2_decrypt`: `encrypted_len` uint32, then that many ciphertext bytes, then
+        // `cipher_authlen(cipher)` tag bytes).
+        let encryptedLength = Int(try reader.readUInt32())
+        let ciphertext = try reader.readBytes(encryptedLength)
+
+        let privateBytes: [UInt8]
+        if cipherName == "none" {
+            guard kdfName == "none" else {
+                throw SSHError.unsupportedKeyFormat(path: path, reason: "unsupported kdf \(kdfName) for cipher none")
+            }
+            privateBytes = ciphertext
+        } else {
+            privateBytes = try Self.decrypt(
+                ciphertext: ciphertext,
+                reader: &reader,
+                cipherName: cipherName,
+                kdfName: kdfName,
+                kdfOptions: kdfOptions,
+                passphrase: passphrase,
+                path: path)
+        }
+
+        var privateReader = SSHWireReader(privateBytes)
         let checkint1 = try privateReader.readUInt32()
         let checkint2 = try privateReader.readUInt32()
         guard checkint1 == checkint2 else {
-            throw SSHError.unsupportedKeyFormat(path: path, reason: "corrupt private key (checkint mismatch)")
+            // For an encrypted key, a checkint mismatch means the decrypted bytes are garbage —
+            // i.e. the wrong passphrase (`PROTOCOL.key` §3: the whole point of the duplicated
+            // checkint is a quick decryption-succeeded check). For `cipher none` there is no
+            // passphrase to blame; the file itself is corrupt.
+            if cipherName == "none" {
+                throw SSHError.unsupportedKeyFormat(path: path, reason: "corrupt private key (checkint mismatch)")
+            }
+            throw SSHIdentityDecryptionError.wrongPassphrase(path: path)
         }
 
         let keyType = try privateReader.readUTF8String()
         return try Self.privateKey(ofType: keyType, from: &privateReader, path: path)
+    }
+
+    /// Derives the cipher key + IV via `BCryptPBKDF` and decrypts the private-key ciphertext,
+    /// mirroring `private2_decrypt()` in `sshkey.c`.
+    private static func decrypt(
+        ciphertext: [UInt8],
+        reader: inout SSHWireReader,
+        cipherName: String,
+        kdfName: String,
+        kdfOptions: [UInt8],
+        passphrase: String,
+        path: String
+    ) throws -> [UInt8] {
+        guard kdfName == "bcrypt" else {
+            throw SSHError.unsupportedKeyFormat(path: path, reason: "unsupported kdf \(kdfName) (only bcrypt is implemented)")
+        }
+        guard let parameters = Self.cipherParameters(cipherName) else {
+            throw SSHError.unsupportedKeyFormat(
+                path: path,
+                reason: "unsupported cipher \(cipherName) (only aes256-ctr and aes256-gcm@openssh.com are implemented)")
+        }
+        guard !passphrase.isEmpty else {
+            throw SSHIdentityDecryptionError.declined(path: path)
+        }
+
+        var kdfReader = SSHWireReader(kdfOptions)
+        let salt = try kdfReader.readString()
+        let rounds = try kdfReader.readUInt32()
+
+        let keyMaterial: [UInt8]
+        do {
+            keyMaterial = try BCryptPBKDF.derive(
+                passphrase: Array(passphrase.utf8),
+                salt: salt,
+                rounds: Int(rounds),
+                keyLength: parameters.keyLength + parameters.ivLength)
+        } catch {
+            throw SSHError.unsupportedKeyFormat(path: path, reason: "invalid bcrypt KDF options")
+        }
+        let key = Array(keyMaterial.prefix(parameters.keyLength))
+        let iv = Array(keyMaterial.suffix(parameters.ivLength))
+        let authTag = parameters.authLength > 0 ? try reader.readBytes(parameters.authLength) : []
+
+        do {
+            if parameters.authLength > 0 {
+                // aes256-gcm@openssh.com: no additional authenticated data, matching
+                // `private2_decrypt`'s `cipher_crypt(..., aadlen: 0, authlen)`.
+                let sealedBox = try AES.GCM.SealedBox(
+                    nonce: AES.GCM.Nonce(data: iv),
+                    ciphertext: Data(ciphertext),
+                    tag: Data(authTag))
+                return Array(try AES.GCM.open(sealedBox, using: SymmetricKey(data: key)))
+            } else {
+                // aes256-ctr: a plain keystream XOR, no integrity check of its own — the checkint
+                // comparison in `parse(_:path:passphrase:)` is what catches a wrong passphrase.
+                let plaintext = try AES._CTR.decrypt(
+                    Data(ciphertext),
+                    using: SymmetricKey(data: key),
+                    nonce: AES._CTR.Nonce(nonceBytes: iv))
+                return Array(plaintext)
+            }
+        } catch {
+            // A GCM tag mismatch throws here. `sshkey.c`'s equivalent (`SSH_ERR_MAC_INVALID`) is
+            // remapped to `SSH_ERR_KEY_WRONG_PASSPHRASE` the same way.
+            throw SSHIdentityDecryptionError.wrongPassphrase(path: path)
+        }
+    }
+
+    /// `(key_len, iv_len, auth_len)` from `cipher.c`'s `ciphers[]` table — `iv_len` defaults to
+    /// `block_size` (16) when the table's own field is 0.
+    private static func cipherParameters(_ name: String) -> (keyLength: Int, ivLength: Int, authLength: Int)? {
+        switch name {
+        case "aes256-ctr":
+            return (keyLength: 32, ivLength: 16, authLength: 0)
+        case "aes256-gcm@openssh.com":
+            return (keyLength: 32, ivLength: 12, authLength: 16)
+        default:
+            return nil
+        }
     }
 
     /// Per-key-type private blob layout, "encoded using the same rules as used for SSH agent"
