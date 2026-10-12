@@ -3,8 +3,11 @@
 In-process, OpenSSH-compatible SSH client on mainline
 [apple/swift-nio-ssh](https://github.com/apple/swift-nio-ssh). Issue
 [#111](https://github.com/Cocoanetics/SwiftPorts/issues/111)'s Phase 1:
-`SSHKit` (library only). `SSHCommand`/`ssh` and the GitKit SSH transport
-land in follow-up issues (#114, #113).
+`SSHKit` (library only). Phase 2
+([#113](https://github.com/Cocoanetics/SwiftPorts/issues/113)): `GitKitSSH`,
+an in-process SSH transport for GitKit built on `SSHKit` — see
+[GitKitSSH](#gitkitssh-issue-113) below. `SSHCommand`/`ssh` lands in a
+follow-up issue (#114).
 
 ## Module layout
 
@@ -37,8 +40,9 @@ Tests/SSHKitTests/
   Support/                  InProcessSSHServer (portable), ThrowawaySSHD (macOS/Linux)
 ```
 
-Only `SSHKit` (target name matches the umbrella folder, per AGENTS.md's
-naming convention) ships today — no `SSHCommand`/`ssh` executable yet.
+`SSHKit` (target name matches the umbrella folder, per AGENTS.md's naming
+convention) and `GitKitSSH` (see [below](#gitkitssh-issue-113)) ship
+today — no `SSHCommand`/`ssh` executable yet.
 
 ## SDK API surface
 
@@ -74,6 +78,12 @@ Public-key authentication completes lazily: an exhausted-identities
 failure surfaces the first time `exec(_:)` is called, as
 `SSHError.permissionDenied`.
 
+Connect cancellation closes the underlying channel, and channel teardown
+settles both the host-key-completion and authentication-exhaustion
+promises on every path. Dropping a connected `SSHClient` without an
+explicit `close()` also initiates that teardown. This prevents NIO's
+debug promise-leak trap when a connection attempt is abandoned midway.
+
 ### Scope (issue #112)
 
 - `ssh_config(5)`: `Host`, `HostName`, `Port`, `User`, `IdentityFile`,
@@ -97,6 +107,180 @@ failure surfaces the first time `exec(_:)` is called, as
   stdin — it fails closed without printing a prompt, because
   `confirm()` itself returns "no" silently in that case
   (`sshconnect.c` line 610-611).
+
+## GitKitSSH (issue #113)
+
+Flat library, `Sources/GitKitSSH/`, implementing GitKit 2.2.0's
+`GitSSHTransportProvider`/`GitSSHChannel` hook
+([`Sources/GitKit/SSHTransport.swift`](https://github.com/Cocoanetics/GitKit/blob/main/Sources/GitKit/SSHTransport.swift))
+over `SSHKit`'s exec channel, so GitKit's `ssh://`/scp-style fetches and
+pushes run in-process instead of shelling out to `/usr/bin/ssh` via
+libgit2's `ssh_exec`.
+
+```
+Sources/GitKitSSH/
+  GitKitSSH.swift                     install() / uninstall() — opt-in registration
+  GitKitSSHTransportProvider.swift    GitSSHTransportProvider over SSHKit
+  GitKitSSHChannel.swift              GitSSHChannel bridging SSHExecChannel's async streams
+  GitKitSSHBridge.swift                TaskExecutor + semaphore blocking bridge
+  GitKitSSHStderrCollector.swift       drains one channel's stderr concurrently with stdout
+  GitKitSSHRemoteCommandError.swift    carries a failed remote command's stderr/exit status
+
+Tests/GitKitSSHTests/
+  GitKitSSHEndToEndTests.swift         clone / fetch / push + auth / host-key / missing-repo failures
+  GitKitSSHTransportProviderQuotingTests.swift   shellQuote unit tests (quote/bang/space/injection)
+  Support/ThrowawaySSHD.swift          duplicated from Tests/SSHKitTests/Support (macOS/Linux)
+```
+
+### Host/port/user resolution
+
+`GitKitSSHTransportProvider.openChannel(host:port:user:command:)` receives
+whatever the git URL itself specified (`ssh://[user@]host[:port]/path` or
+scp-style `user@host:path` — parsed by GitKit, not this port). It layers
+`ssh_config(5)` under that the same way `ssh(1)` does: `SSHConfig.resolve(host:)`
+supplies `HostName`/`Port`/`User`/`IdentityFile`/`UserKnownHostsFile`/
+`StrictHostKeyChecking` for the host, and the URL's own `port`/`user` (when
+present) win over the config's. The remote command sent over the exec
+channel is `<command> '<path>'` — `git-upload-pack '/repo.git'`,
+`git-receive-pack '/repo.git'`, or `git-upload-archive '/repo.git'` —
+exactly as `GitSSHTransportProvider.openChannel`'s doc comment specifies.
+`path` is shell-quoted by `GitKitSSHTransportProvider.shellQuote(_:)`,
+matching git's own `sq_quote_buf` (`quote.c`): wrap in single quotes, turn
+each embedded `'` into `'\''` and each `!` into `'\!'` (the latter defends
+a remote login shell that is csh/tcsh, where `!` triggers history
+expansion even inside single quotes) — a path straight from a parsed
+remote URL is otherwise attacker-controlled input reaching a remote shell
+command line.
+
+### Threading bridge
+
+GitKit's `GitSSHChannel` contract is synchronous and is called directly by
+libgit2's C callbacks, on whichever thread is driving the git operation
+(`Repository.fetch`/`clone`/`push` are themselves synchronous, throwing
+calls — not `async`). `GitSSHChannel.read`/`write`/`close` must block that
+thread until they can make progress; they must never `await` a Swift
+concurrency task directly, since that would hop off the calling thread,
+which libgit2 does not expect.
+
+`GitKitSSHBridge.runBlocking(_:)` is the bridge: on runtimes that support
+SE-0417 (`Task(executorPreference:)`), it starts a task with a preference
+for `GitKitSSHBridgeExecutor`'s dedicated, non-cooperative-pool OS thread,
+then blocks the *calling* thread on a `DispatchSemaphore` until that task's
+async work — an `SSHExecChannel` read/write, or `SSHClient.connect`/`exec`
+during `openChannel` — finishes. The task-executor preference matters
+beyond initial scheduling: it follows the task through SSHKit's
+nonisolated async APIs, which otherwise move to the global cooperative
+executor under SE-0338.
+
+Earlier builds started a plain unstructured `Task` here instead, which
+Swift schedules onto its cooperative thread pool. `SwiftGit`'s
+`GitClient` drives libgit2 from `async` code
+(`Libgit2Sandboxing.runIsolated`), so the thread calling into
+`runBlocking` can itself already be a cooperative-pool thread — blocking
+it on a semaphore while the spawned `Task` waited for a pool thread of
+its own to free up deadlocked outright once the pool was exhausted (a
+single-core CI/agent sandbox, or several concurrent `GitKitSSH`
+operations in one process, per issue #113's stated MissionControl
+adoption plan).
+
+The close path uses NIO futures synchronously, never on an EventLoop
+thread. Event-loop-group shutdown delivers its callback on a private
+`SSHClient` dispatch queue rather than the global queue, so teardown also
+completes while every cooperative-pool worker is occupied. The
+`cloneCompletesUnderSaturatedCooperativePool` end-to-end test saturates
+that real pool while a separate OS thread performs a full SSH clone,
+including disconnect and event-loop shutdown.
+
+`TaskExecutor` is unavailable before macOS 15 / iOS 18 / tvOS 18 /
+watchOS 11. On those older Apple runtimes, `runBlocking` falls back to
+the dedicated-thread global actor used by the original implementation.
+That keeps actor-isolated bridge scheduling off the pool, but SE-0338
+nonisolated SSHKit calls can still require a cooperative-pool worker;
+the full pool-starvation guarantee therefore applies only where SE-0417
+is available (and on non-Apple runtimes where the API is unconditionally
+available).
+
+The dedicated thread names itself (`Thread.current.name = ...`) from
+*inside* its own entry closure, rather than via `thread.name = ...` on the
+`Thread` object before calling `start()`. On Linux, `Thread`'s `name`
+setter only reaches the live pthread when the thread calling it is the
+one being named (`pthread_setname_np`'s single-thread-targeting form) —
+setting it on a `Thread` that hasn't started yet is silently dropped
+there, so `Thread.current.name` (and `pthread_getname_np`) keeps
+reporting whatever name the process inherited instead. Darwin doesn't
+have this gap. Caught by `GitKitSSHBridgeThreadingTests.
+runBlockingUsesDedicatedThread` failing only in `build-linux` CI, not
+`build-macos` — reproduced and confirmed fixed against the
+`swift:6.2-jammy` container CI itself uses, not just inferred from
+reading the divergence.
+
+`GitKitSSHChannel` buffers leftover bytes between `read(into:)` calls
+(`SSHExecChannel.stdout` delivers arbitrarily-sized chunks that rarely
+line up with libgit2's requested buffer size) and is `@unchecked
+Sendable`: libgit2 guarantees serialized, single-threaded access to one
+channel for its whole lifetime (ls-refs probe through the final
+upload-pack/receive-pack exchange, per GitKit's
+`SSHSubtransportContext`), so the unsynchronized mutable iterator/buffer
+state is safe in practice despite not being statically checked.
+
+### Registration is opt-in
+
+`GitKitSSH.install(sshConfigPath:)` / `GitKitSSH.uninstall()` wrap
+GitKit's `GitSSHTransport.register(_:)`/`unregister()` directly — same
+one-at-a-time, process-global synchronization contract. Neither
+`SwiftGit` nor `GitCommand` calls `install()`: only SwiftPorts' `git`
+executable (`Sources/SwiftGit/git/Entry.swift`) does, at startup, before
+any command runs. A host that doesn't link `GitKitSSH` (or that never
+calls `install()`) keeps libgit2's `ssh_exec` fallback unchanged — which
+is also why `GitKitSSH` had to stay out of `SwiftGit`'s own target
+dependencies.
+
+Within the `git` executable itself, calling `install()` is further gated
+behind an env var, **default off**:
+`SWIFTPORTS_GIT_INPROCESS_SSH=1`. `GitKitSSH` only loads unencrypted
+ed25519/ECDSA identities (no ssh-agent, no RSA, no encrypted keys — see
+the Phase 0 findings below) and has no interactive prompt for
+`StrictHostKeyChecking ask`'s first-connect confirmation (no TTY
+plumbing — see the Scope section above). Registering it unconditionally
+would silently break interactive clones/fetches/pushes that rely on any
+of those (an exhausted-identities failure instead of a working
+ssh-agent/RSA key, or a hard failure instead of OpenSSH's "are you sure
+you want to continue connecting" prompt for a brand-new host). So
+interactive use of this `git` executable keeps libgit2's `ssh_exec`
+fallback — and everything that comes with shelling out to the system
+`ssh(1)` — until Phase 3 (#115) adds agent/RSA/encrypted-key support and
+an interactive prompt to `GitKitSSH` itself. A non-interactive host that
+already fully controls its own `known_hosts` and identities
+(MissionControl, CI) sets the env var, or — equivalently, and the only
+option for a host that embeds `GitKitSSH` as a library rather than
+spawning this `git` executable — calls `GitKitSSH.install()` itself.
+
+### Error wording
+
+`openChannel`/`read`/`write` propagate `SSHError` values unwrapped.
+GitKit's subtransport bridge catches them and calls `String(describing:
+error)`, which resolves to `SSHError.description` for every case here —
+so a host-key mismatch or an exhausted-identities failure surfaces to a
+GitKit caller as a `Libgit2Error` whose message is OpenSSH's own wording
+("Host key verification failed.", "`user@host`: Permission denied
+(publickey)."), not a GitKitSSH-specific message.
+`GitKitSSHEndToEndTests` asserts both verbatim against a real throwaway
+`sshd`.
+
+`GitKitSSHChannel` also surfaces failures from the remote command itself
+(`git-upload-pack`/`git-receive-pack` exiting non-zero — e.g. the
+repository path doesn't exist on the remote), not just transport-level
+failures. `GitKitSSHStderrCollector` drains the exec channel's stderr
+into a buffer concurrently with `read(into:)` consuming stdout (a
+background `Task` over `SSHExecChannel.stderr`, guarded by a lock since
+it runs alongside the synchronous `read`/`write` calls). When `stdout`
+hits true EOF, `GitKitSSHChannel` checks `SSHExecChannel.exitStatus`
+(already resolved by then — the exit-status event always arrives before
+`SSHExecChannelHandler.channelInactive` finishes both streams); a
+non-zero status throws `GitKitSSHRemoteCommandError`, carrying whatever
+stderr text was collected (or just the exit status, if the remote wrote
+none). Without this, libgit2 would only ever see a generic EOF/protocol
+failure instead of the remote's own diagnostic.
 
 ## Phase 0 findings (verified against source at the pinned commits)
 
@@ -274,3 +458,11 @@ Settled by this PR's own CI, across several rounds:
   single `authorized_keys` entry (`Support/ThrowawaySSHD.swift`) — the
   strongest available proof of wire compatibility with real OpenSSH.
   Skips (doesn't fail) if no system `sshd`/`ssh-keygen` is present.
+- **GitKitSSH, end-to-end** (macOS/Linux only, `GitKitSSHTests`): the
+  same throwaway-`sshd` oracle, but driving real `Repository.clone`/
+  `fetch`/`push` calls through `GitKitSSHTransportProvider` registered as
+  GitKit's actual SSH transport — proving bytes flow correctly in both
+  directions over the blocking bridge, not just that `SSHKit`'s own exec
+  channel works. Also covers an unauthorized identity and a mismatched
+  `known_hosts` entry, asserting the `Libgit2Error` each produces carries
+  OpenSSH's exact wording.

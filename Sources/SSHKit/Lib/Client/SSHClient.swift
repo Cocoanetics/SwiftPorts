@@ -1,3 +1,4 @@
+import Foundation
 import NIOCore
 import NIOPosix
 import NIOSSH
@@ -13,12 +14,17 @@ import NIOSSH
 /// first time `exec(_:)` is called, mirroring `ssh(1)`'s `Permission denied (publickey).` /
 /// exit 255 (`sshconnect2.c` line 543).
 public final class SSHClient: @unchecked Sendable {
+    private static let shutdownQueue = DispatchQueue(label: "SSHKit.SSHClient.shutdown")
+
     private let channel: Channel
     private let eventLoopGroup: EventLoopGroup
     private let hostKeyVerifier: SSHHostKeyVerifier
     private let authDelegate: SSHPublicKeyAuthenticationDelegate
     private let username: String
     private let host: String
+    private let lifecycleLock = NSLock()
+    private var closeStarted = false
+    private var synchronousShutdownError: Error?
 
     private init(
         channel: Channel,
@@ -36,6 +42,17 @@ public final class SSHClient: @unchecked Sendable {
         self.host = host
     }
 
+    deinit {
+        // A caller may abandon a connected client without calling `close()`. Closing here makes
+        // the channel's teardown callback settle every connect-time promise before the event-loop
+        // group goes away; the callback form never blocks this (possibly event-loop) thread.
+        guard self.beginClose() else { return }
+        self.channel.close(promise: nil)
+        self.channel.closeFuture.whenComplete { [eventLoopGroup] _ in
+            eventLoopGroup.shutdownGracefully(queue: SSHClient.shutdownQueue) { _ in }
+        }
+    }
+
     public static func connect(
         host: String,
         port: Int,
@@ -46,9 +63,10 @@ public final class SSHClient: @unchecked Sendable {
         strictHostKeyChecking: SSHStrictHostKeyChecking = .ask
     ) async throws -> SSHClient {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let completionPromise = group.next().makePromise(of: Void.self)
+        let exhaustedPromise = group.next().makePromise(of: Void.self)
 
         do {
-            let completionPromise = group.next().makePromise(of: Void.self)
             let hostKeyVerifier = SSHHostKeyVerifier(
                 host: host,
                 port: port,
@@ -60,7 +78,7 @@ public final class SSHClient: @unchecked Sendable {
             let authDelegate = SSHPublicKeyAuthenticationDelegate(
                 username: username,
                 identities: identities,
-                exhaustedPromise: group.next().makePromise(of: Void.self)
+                exhaustedPromise: exhaustedPromise
             )
 
             let bootstrap = ClientBootstrap(group: group)
@@ -75,7 +93,17 @@ public final class SSHClient: @unchecked Sendable {
                     }
                 }
 
-            let channel = try await bootstrap.connect(host: host, port: port).get()
+            let connectFuture = bootstrap.connect(host: host, port: port)
+            let channel = try await withTaskCancellationHandler {
+                try await connectFuture.get()
+            } onCancel: {
+                // `EventLoopFuture.get()` does not cancel its underlying operation. If the task
+                // is abandoned while TCP connect is in flight, close a channel that arrives later
+                // so neither its handlers nor their promises can leak.
+                connectFuture.whenSuccess { channel in
+                    channel.close(promise: nil)
+                }
+            }
 
             // swift-nio-ssh 0.15.0 never closes the connection on its own once identities are
             // exhausted (see the note on `SSHPublicKeyAuthenticationDelegate`) — close it ourselves
@@ -89,12 +117,20 @@ public final class SSHClient: @unchecked Sendable {
             // hang forever instead of surfacing the connection's actual failure.
             channel.closeFuture.whenComplete { _ in
                 completionPromise.fail(SSHClientChannelError.connectionClosedBeforeHostKeyVerification)
+                exhaustedPromise.fail(SSHClientChannelError.connectionClosed)
             }
 
             do {
-                try await completionPromise.futureResult.get()
+                try await withTaskCancellationHandler {
+                    try await completionPromise.futureResult.get()
+                } onCancel: {
+                    channel.close(promise: nil)
+                }
             } catch {
                 try? await channel.close().get()
+                if Task.isCancelled {
+                    throw CancellationError()
+                }
                 throw error
             }
 
@@ -111,7 +147,12 @@ public final class SSHClient: @unchecked Sendable {
                 host: host
             )
         } catch {
-            try? await group.shutdownGracefully()
+            completionPromise.fail(error)
+            exhaustedPromise.fail(error)
+            try? await self.shutdown(group)
+            if Task.isCancelled {
+                throw CancellationError()
+            }
             throw error
         }
     }
@@ -160,6 +201,11 @@ public final class SSHClient: @unchecked Sendable {
             throw self.faithfulError(for: error)
         }
 
+        // A successfully opened session proves authentication completed. Settle the exhaustion
+        // signal with a failure so its `whenSuccess` teardown hooks stay dormant and the promise
+        // cannot remain pending until deallocation.
+        self.authDelegate.exhaustedPromise.fail(SSHClientChannelError.authenticationCompleted)
+
         try await childChannel.triggerUserOutboundEvent(SSHChannelRequestEvent.ExecRequest(command: command, wantReply: false)).get()
 
         return SSHExecChannel(channel: childChannel, stdout: stdout, stderr: stderr, exitStatusPromise: exitStatusPromise)
@@ -167,13 +213,65 @@ public final class SSHClient: @unchecked Sendable {
 
     /// Closes the connection.
     public func close() async throws {
+        guard self.beginClose() else { return }
         do {
             try await self.channel.close().get()
         } catch ChannelError.alreadyClosed {
             // Already torn down — e.g. by the auth-exhaustion workaround on `connect`/`exec`, or by
             // the peer. Not an error a caller should see; fall through to shut down the group.
         }
-        try await self.eventLoopGroup.shutdownGracefully()
+        try await Self.shutdown(self.eventLoopGroup)
+    }
+
+    /// Synchronous teardown for GitKit's synchronous libgit2 transport callback. NIO expressly
+    /// permits blocking future waits away from an EventLoop; keeping both waits here avoids a
+    /// Swift-concurrency continuation during the bridge's final close.
+    @_spi(GitKitSSH)
+    public func closeSynchronously() throws {
+        precondition(!self.channel.eventLoop.inEventLoop, "SSHClient.closeSynchronously() must not run on an EventLoop")
+        guard self.beginClose() else { return }
+        do {
+            try self.channel.close().wait()
+        } catch ChannelError.alreadyClosed {
+            // The peer or authentication-exhaustion workaround already closed it.
+        }
+        let shutdownComplete = DispatchSemaphore(value: 0)
+        self.eventLoopGroup.shutdownGracefully(queue: Self.shutdownQueue) { error in
+            self.lifecycleLock.lock()
+            self.synchronousShutdownError = error
+            self.lifecycleLock.unlock()
+            shutdownComplete.signal()
+        }
+        shutdownComplete.wait()
+        self.lifecycleLock.lock()
+        let shutdownError = self.synchronousShutdownError
+        self.lifecycleLock.unlock()
+        if let shutdownError {
+            throw shutdownError
+        }
+    }
+
+    private func beginClose() -> Bool {
+        self.lifecycleLock.lock()
+        defer { self.lifecycleLock.unlock() }
+        guard !self.closeStarted else { return false }
+        self.closeStarted = true
+        return true
+    }
+
+    /// NIO's convenience async shutdown overload delivers through the global dispatch queue,
+    /// which may itself be occupied by cooperative-pool workers. Use an independent serial queue
+    /// so both ordinary async teardown and GitKitSSH's saturated-pool path can make progress.
+    private static func shutdown(_ group: EventLoopGroup) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            group.shutdownGracefully(queue: Self.shutdownQueue) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
     }
 
     /// Translates a generic NIOSSH connection-teardown error into the OpenSSH-exact error for
