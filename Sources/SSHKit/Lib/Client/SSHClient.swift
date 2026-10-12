@@ -167,7 +167,12 @@ public final class SSHClient: @unchecked Sendable {
 
     /// Closes the connection.
     public func close() async throws {
-        try await self.channel.close().get()
+        do {
+            try await self.channel.close().get()
+        } catch ChannelError.alreadyClosed {
+            // Already torn down — e.g. by the auth-exhaustion workaround on `connect`/`exec`, or by
+            // the peer. Not an error a caller should see; fall through to shut down the group.
+        }
         try await self.eventLoopGroup.shutdownGracefully()
     }
 

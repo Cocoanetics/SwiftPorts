@@ -171,6 +171,12 @@ struct SSHClientTests {
         await #expect(throws: SSHError.self) {
             _ = try await client.exec("echo hello")
         }
+
+        // The auth-exhaustion workaround already closed `channel` internally (see the note on
+        // `SSHPublicKeyAuthenticationDelegate`) — `close()` must still succeed (and actually shut
+        // down the event loop group) instead of throwing `ChannelError.alreadyClosed` and leaking
+        // the connection's dedicated thread.
+        try await client.close()
     }
 
     /// A nondefault-port known-hosts entry recorded under the bare hostname (no `[host]:port`
