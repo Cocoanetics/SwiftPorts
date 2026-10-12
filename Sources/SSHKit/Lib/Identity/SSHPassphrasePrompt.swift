@@ -47,7 +47,11 @@ public enum SSHPassphrasePrompt {
 
         var buffer = [UInt8](repeating: 0, count: 1024)
         let line = buffer.withUnsafeMutableBytes { raw -> String? in
-            guard fgets(raw.baseAddress?.assumingMemoryBound(to: CChar.self), Int32(raw.count), tty) != nil else {
+            // `raw.baseAddress` is never `nil` here — `buffer` is a fixed non-empty allocation —
+            // but some platforms (Android's Bionic `libc`) import `fgets`'s first parameter as
+            // non-optional, so the pointer must be force-unwrapped rather than passed through
+            // `?.` chaining.
+            guard fgets(raw.baseAddress!.assumingMemoryBound(to: CChar.self), Int32(raw.count), tty) != nil else {
                 return nil
             }
             let length = raw.prefix(while: { $0 != 0 }).count
