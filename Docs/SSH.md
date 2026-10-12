@@ -156,15 +156,43 @@ thread until they can make progress; they must never `await` a Swift
 concurrency task directly, since that would hop off the calling thread,
 which libgit2 does not expect.
 
-`GitKitSSHBridge.runBlocking(_:)` is the bridge: it starts an unstructured
-`Task` (which runs on Swift's cooperative thread pool) and blocks the
-*calling* thread on a `DispatchSemaphore` until that task's async work —
-an `SSHExecChannel` read/write, or `SSHClient.connect`/`exec` during
-`openChannel` — finishes. This is the opposite direction from the
-deadlock the contract warns about: the thread that blocks was never part
-of the cooperative pool to begin with (SSHKit's own NIO work runs on its
-dedicated `EventLoopGroup` thread, not that pool), so there is nothing for
-it to starve.
+`GitKitSSHBridge.runBlocking(_:)` is the bridge: it starts a `Task`
+isolated to `GitKitSSHBridgeExecutor` — a global actor backed by one
+dedicated, non-cooperative-pool OS thread — and blocks the *calling*
+thread on a `DispatchSemaphore` until that task's async work — an
+`SSHExecChannel` read/write, or `SSHClient.connect`/`exec` during
+`openChannel` — finishes.
+
+Earlier builds started a plain unstructured `Task` here instead, which
+Swift schedules onto its cooperative thread pool. `SwiftGit`'s
+`GitClient` drives libgit2 from `async` code
+(`Libgit2Sandboxing.runIsolated`), so the thread calling into
+`runBlocking` can itself already be a cooperative-pool thread — blocking
+it on a semaphore while the spawned `Task` waited for a pool thread of
+its own to free up deadlocked outright once the pool was exhausted (a
+single-core CI/agent sandbox, or several concurrent `GitKitSSH`
+operations in one process, per issue #113's stated MissionControl
+adoption plan).
+
+Writing the isolation on the `Task` closure itself
+(`Task { @GitKitSSHBridgeExecutor in ... }`, not a plain `Task { ... }`)
+is what keeps even the task's *first* scheduling off the cooperative
+pool — the same mechanism `Task { @MainActor in ... }` uses to reach the
+main thread without ever touching the pool. `runBlocking`'s `operation`
+parameter is typed `@GitKitSSHBridgeExecutor @Sendable () async throws
+-> T`, not a plain `@Sendable () async throws -> T`: isolation is a
+property of a function's *type*, not something it inherits from whoever
+calls it, so a non-isolated operand would itself run as `nonisolated`
+the instant it's invoked, hopping back onto the cooperative pool for its
+own body and reopening the exact deadlock this bridge exists to close.
+With both pinned to the same actor, every resumption after every `await`
+inside `operation` — not just its first call — stays on that one
+dedicated thread, so this blocking wait never needs a pool thread to
+free up to make progress.
+
+(`Task(executorPreference:)` / `TaskExecutor` would make this simpler,
+but both the protocol and `DispatchQueue`'s conformance to it require
+macOS 15/15.4 — newer than this package's macOS 13 floor.)
 
 `GitKitSSHChannel` buffers leftover bytes between `read(into:)` calls
 (`SSHExecChannel.stdout` delivers arbitrarily-sized chunks that rarely

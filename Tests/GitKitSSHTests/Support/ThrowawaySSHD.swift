@@ -92,9 +92,27 @@ final class ThrowawaySSHD {
     func stop() {
         if self.process.isRunning {
             self.process.terminate()
-            self.process.waitUntilExit()
+            Self.waitForExit(self.process)
         }
         try? FileManager.default.removeItem(at: self.directory)
+    }
+
+    /// Waits for `process` to exit by polling `isRunning` rather than calling `waitUntilExit()`.
+    /// Called from a Swift concurrency thread, `waitUntilExit()` can block forever after the
+    /// child has already exited and been reaped (a lost run-loop wakeup, the same hang as
+    /// MissionControl #452); it wedged this suite in `stop()`. Escalates to SIGKILL after
+    /// `timeout` so a stuck `sshd` can't hang the run either.
+    static func waitForExit(_ process: Process, timeout: TimeInterval = 10) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline {
+            usleep(10_000)
+        }
+        guard process.isRunning else { return }
+        kill(process.processIdentifier, SIGKILL)
+        let killDeadline = Date().addingTimeInterval(5)
+        while process.isRunning && Date() < killDeadline {
+            usleep(10_000)
+        }
     }
 
     private static func run(_ executablePath: String, _ arguments: [String]) throws {
@@ -104,7 +122,7 @@ final class ThrowawaySSHD {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
-        process.waitUntilExit()
+        waitForExit(process, timeout: 60)
     }
 
     private static func findExecutable(_ name: String, extraPaths: [String]) -> String? {
@@ -121,7 +139,7 @@ final class ThrowawaySSHD {
         guard (try? which.run()) != nil else {
             return nil
         }
-        which.waitUntilExit()
+        waitForExit(which)
         guard which.terminationStatus == 0 else {
             return nil
         }

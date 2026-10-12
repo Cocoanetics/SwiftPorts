@@ -35,7 +35,7 @@ struct GitKitSSHEndToEndTests {
         let out = Pipe(); let err = Pipe()
         process.standardOutput = out; process.standardError = err
         try process.run()
-        process.waitUntilExit()
+        ThrowawaySSHD.waitForExit(process, timeout: 60)
         let outStr = String(decoding: (try? out.fileHandleForReading.readToEnd()) ?? Data(), as: UTF8.self)
         if process.terminationStatus != 0 {
             let errStr = String(decoding: (try? err.fileHandleForReading.readToEnd()) ?? Data(), as: UTF8.self)
@@ -52,7 +52,7 @@ struct GitKitSSHEndToEndTests {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", path, "-q"]
         try process.run()
-        process.waitUntilExit()
+        ThrowawaySSHD.waitForExit(process, timeout: 60)
         guard process.terminationStatus == 0 else {
             throw Failure("ssh-keygen failed")
         }
@@ -170,6 +170,48 @@ struct GitKitSSHEndToEndTests {
         let remoteSHA = try runGit(["rev-parse", "main"], in: destBare)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         #expect(localSHA == remoteSHA)
+    }
+
+    @Test("a clone completes while every cooperative-pool thread is blocked")
+    func cloneCompletesUnderSaturatedCooperativePool() async throws {
+        let identityPath = try makeIdentity(in: tmp("GitKitSSHIdentity"))
+        guard let sshd = try await ThrowawaySSHD.start(authorizingPublicKeyPath: identityPath + ".pub") else {
+            return
+        }
+        defer { sshd.stop() }
+
+        let knownHostsPath = tmp("GitKitSSHKnownHosts").path
+        try knownHostsLine(hostPublicKeyPath: sshd.hostPublicKeyPath, port: sshd.port)
+            .write(toFile: knownHostsPath, atomically: true, encoding: .utf8)
+        let (configPath, alias) = try writeSSHConfig(
+            directory: tmp("GitKitSSHConfig"), port: sshd.port,
+            identityPath: identityPath, knownHostsPath: knownHostsPath)
+
+        try GitSSHTransport.register(GitKitSSHTransportProvider(sshConfigPath: configPath))
+        defer { GitSSHTransport.unregister() }
+
+        let source = try makeBareSource()
+        let cloneDest = tmp("GitKitSSHSaturatedCloneDest")
+        let url = URL(string: "ssh://\(alias)\(source.path)")!
+
+        try Self.cloneWhileCooperativePoolIsSaturated(from: url, to: cloneDest)
+        #expect(FileManager.default.fileExists(atPath: cloneDest.appendingPathComponent("file.txt").path))
+    }
+
+    /// Synchronous because `poolSaturationLock` (an `NSLock`) can't be taken from an async
+    /// context. The clone runs on a plain OS thread while the pool is exhausted. It reaches the
+    /// provider through libgit2 exactly as SwiftGit's clone does, so every byte goes through
+    /// `GitKitSSHBridge.runBlocking` and SSHKit's channel. Anything on that path that still
+    /// needs a cooperative-pool thread deadlocks here, and the timeout turns that into a
+    /// failure instead of a hung suite.
+    private static func cloneWhileCooperativePoolIsSaturated(from url: URL, to destination: URL) throws {
+        poolSaturationLock.lock()
+        defer { poolSaturationLock.unlock() }
+        let release = saturateCooperativePool(count: ProcessInfo.processInfo.activeProcessorCount)
+        defer { release() }
+        try runOnDetachedThread(timeoutSeconds: 60) {
+            _ = try Repository.clone(from: url, to: destination)
+        }
     }
 
     @Test("an identity not in authorized_keys surfaces OpenSSH's permission-denied wording")
