@@ -43,6 +43,17 @@ public struct SSHConfig: Sendable {
         return parse(contents, source: path)
     }
 
+    /// Loads the selected config file after command-line `-p`/`-l`/`-i`/`-o`
+    /// directives. Since resolution is first-value-wins, prepending these lines
+    /// gives command-line settings the same precedence they have in `ssh(1)`.
+    public static func load(path: String, commandLineOptions: [String]) async throws -> SSHConfig {
+        let file = try await load(path: path)
+        let commandLines = commandLineOptions.map { Substring($0) }
+        return SSHConfig(
+            lines: commandLines + file.lines,
+            sourceDescription: path)
+    }
+
     /// Resolves every matching `Host` block's keywords against `host`, applying OpenSSH's
     /// first-value-wins rule (`readconf.c`'s `if (*activep && *intptr == -1) *intptr = value`
     /// pattern, e.g. lines 1237-1238, 1458-1459, 1596-1597) for single-value keywords, and

@@ -10,6 +10,7 @@ import GzipCommand
 import JqCommand
 import Lz4Command
 import RgCommand
+import SSHCommand
 import TarCommand
 import UnzipCommand
 import XzCommand
@@ -55,6 +56,7 @@ public enum SwiftPortsCommands {
             // search / find.
             Shell.parsableCommand(Rg.self),
             Shell.parsableCommand(FdCommand.self),
+            Shell.parsableCommand(SSHCommand.self),
             // archive family.
             Shell.parsableCommand(TarCommand.self),
             Shell.parsableCommand(ZipCommand.self),
