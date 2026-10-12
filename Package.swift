@@ -30,20 +30,20 @@ let androidDroppedTargets: Set<String> = [
     "ZipCommand", "UnzipCommand", "TarCommand", "GzipCommand",
     "Bzip2Command", "XzCommand", "ZstdCommand", "Lz4Command",
     "JqCommand", "GlamCommand", "GhCommand", "GlabCommand",
-    "GitCommand", "RgCommand", "FdCommand", "Sqlite3Command",
+    "GitCommand", "RgCommand", "FdCommand", "Sqlite3Command", "SSHCommand",
     "SwiftPortsCommands",
     // executables
     "zip", "unzip", "tar", "gzip", "gunzip", "zcat", "bzip2", "bunzip2",
     "bzcat", "xz", "unxz", "xzcat", "zstd", "unzstd", "zstdcat", "lz4",
     "unlz4", "lz4cat", "jq", "glam", "gh", "glab", "git", "rg", "fd",
-    "sqlite3",
+    "sqlite3", "ssh",
     // argv-parsing test targets (each needs a `*Command` lib)
     // NB: there's no Sqlite3 test target here — the `Sqlite3Shell` driver and
     // its suite live in Cocoanetics/SQLiteKit now, which exercises them on
     // every platform itself.
     "ZipTests", "UnzipTests", "TarTests", "GzipTests", "Bzip2Tests",
     "XzTests", "ZstdTests", "Lz4Tests", "JqTests", "GlamTests",
-    "GitCommandTests", "RgTests", "FdTests",
+    "GitCommandTests", "RgTests", "FdTests", "SSHTests",
     // GitHubTests, SSHKitTests and GitKitSSHTests all link a C++ SwiftPM
     // target (swift-crypto's BoringSSL, via GitHub / SSHKit's shared
     // `Crypto` product — GitKitSSHTests pulls it in transitively through
@@ -336,10 +336,11 @@ let package = Package(
         .library(name: "FdCommand", targets: ["FdCommand"]),
         .executable(name: "fd", targets: ["fd"]),
 
-        // SSHKit — in-process, OpenSSH-compatible SSH client engine on
-        // mainline apple/swift-nio-ssh (issue #112). `SSHCommand`/`ssh`
-        // land in a follow-up issue (#114).
+        // SSHKit — in-process, OpenSSH-compatible SSH client engine and
+        // non-interactive ssh(1) command on mainline apple/swift-nio-ssh.
         .library(name: "SSHKit", targets: ["SSHKit"]),
+        .library(name: "SSHCommand", targets: ["SSHCommand"]),
+        .executable(name: "ssh", targets: ["ssh"]),
 
         // GitKitSSH — in-process SSH transport for GitKit over SSHKit
         // (issue #113), implementing GitKit 2.2.0's
@@ -1244,6 +1245,27 @@ let package = Package(
                 .copy("Fixtures"),
             ]
         ),
+        .target(
+            name: "SSHCommand",
+            dependencies: [
+                "SSHKit",
+                .product(name: "ShellKit", package: "ShellKit"),
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            path: "Sources/SSHKit/SSHCommand"
+        ),
+        .executableTarget(
+            name: "ssh",
+            dependencies: ["SSHCommand"],
+            path: "Sources/SSHKit/ssh"
+        ),
+        .testTarget(
+            name: "SSHTests",
+            dependencies: [
+                .target(name: "SSHCommand", condition: .when(platforms: commandTestPlatforms)),
+                .product(name: "ShellKit", package: "ShellKit"),
+            ]
+        ),
 
         // MARK: GitKitSSH (issue #113)
         // Flat library: GitKit's `GitSSHTransportProvider` hook (GitKit
@@ -1336,6 +1358,7 @@ let package = Package(
                 "TarCommand", "ZipCommand", "UnzipCommand",
                 "GzipCommand", "Bzip2Command", "XzCommand",
                 "ZstdCommand", "Lz4Command",
+                "SSHCommand",
             ],
             path: "Sources/SwiftPortsCommands"
         ),

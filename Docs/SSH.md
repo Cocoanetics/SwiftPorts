@@ -3,11 +3,10 @@
 In-process, OpenSSH-compatible SSH client on mainline
 [apple/swift-nio-ssh](https://github.com/apple/swift-nio-ssh). Issue
 [#111](https://github.com/Cocoanetics/SwiftPorts/issues/111)'s Phase 1:
-`SSHKit` (library only). Phase 2
+`SSHKit` plus the non-interactive `SSHCommand`/`ssh` face. Phase 2
 ([#113](https://github.com/Cocoanetics/SwiftPorts/issues/113)): `GitKitSSH`,
 an in-process SSH transport for GitKit built on `SSHKit` — see
-[GitKitSSH](#gitkitssh-issue-113) below. `SSHCommand`/`ssh` lands in a
-follow-up issue (#114).
+[GitKitSSH](#gitkitssh-issue-113) below.
 
 ## Module layout
 
@@ -38,11 +37,22 @@ Sources/SSHKit/Lib/
 Tests/SSHKitTests/
   Fixtures/                 real ssh-keygen-generated keys, known_hosts, ssh_config
   Support/                  InProcessSSHServer (portable), ThrowawaySSHD (macOS/Linux)
+
+Sources/SSHKit/SSHCommand/  hand-rolled ssh argv parser + non-interactive driver
+Sources/SSHKit/ssh/          standalone executable entry point
+Tests/SSHTests/              argv and OpenSSH usage/exit-code tests
 ```
 
 `SSHKit` (target name matches the umbrella folder, per AGENTS.md's naming
-convention) and `GitKitSSH` (see [below](#gitkitssh-issue-113)) ship
-today — no `SSHCommand`/`ssh` executable yet.
+convention), `SSHCommand`/`ssh`, and `GitKitSSH` (see
+[below](#gitkitssh-issue-113)) ship today.
+
+`SSHCommand` implements non-interactive `ssh host command` with
+`-p`/`-l`/`-i`/`-o`/`-F`/`-T`. An explicit `-F` file must open, while the
+default `~/.ssh/config` remains optional like OpenSSH. PTY allocation (`-t`)
+and OpenSSH-style verbose diagnostics (`-v`) are not silently ignored: both
+currently take the illegal-option/usage exit-255 path until their behavior is
+implemented in the interactive Phase 3 work (#115).
 
 ## SDK API surface
 
@@ -102,7 +112,7 @@ debug promise-leak trap when a connection attempt is abandoned midway.
 - Channels: exec only (stdin/stdout/stderr + exit status). No PTY, no
   port forwarding.
 - No TTY/prompt plumbing. `StrictHostKeyChecking ask`'s interactive
-  confirmation is `SSHCommand`'s concern (#114); until then, `ask`
+  confirmation remains part of Phase 3 (#115); until then, `ask`
   behaves exactly like real `ssh` under `BatchMode=yes` or a non-tty
   stdin — it fails closed without printing a prompt, because
   `confirm()` itself returns "no" silently in that case
