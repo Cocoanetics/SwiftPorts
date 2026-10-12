@@ -78,6 +78,12 @@ Public-key authentication completes lazily: an exhausted-identities
 failure surfaces the first time `exec(_:)` is called, as
 `SSHError.permissionDenied`.
 
+Connect cancellation closes the underlying channel, and channel teardown
+settles both the host-key-completion and authentication-exhaustion
+promises on every path. Dropping a connected `SSHClient` without an
+explicit `close()` also initiates that teardown. This prevents NIO's
+debug promise-leak trap when a connection attempt is abandoned midway.
+
 ### Scope (issue #112)
 
 - `ssh_config(5)`: `Host`, `HostName`, `Port`, `User`, `IdentityFile`,
@@ -116,7 +122,7 @@ Sources/GitKitSSH/
   GitKitSSH.swift                     install() / uninstall() — opt-in registration
   GitKitSSHTransportProvider.swift    GitSSHTransportProvider over SSHKit
   GitKitSSHChannel.swift              GitSSHChannel bridging SSHExecChannel's async streams
-  GitKitSSHBridge.swift                Task + semaphore blocking bridge
+  GitKitSSHBridge.swift                TaskExecutor + semaphore blocking bridge
   GitKitSSHStderrCollector.swift       drains one channel's stderr concurrently with stdout
   GitKitSSHRemoteCommandError.swift    carries a failed remote command's stderr/exit status
 
@@ -156,12 +162,15 @@ thread until they can make progress; they must never `await` a Swift
 concurrency task directly, since that would hop off the calling thread,
 which libgit2 does not expect.
 
-`GitKitSSHBridge.runBlocking(_:)` is the bridge: it starts a `Task`
-isolated to `GitKitSSHBridgeExecutor` — a global actor backed by one
-dedicated, non-cooperative-pool OS thread — and blocks the *calling*
-thread on a `DispatchSemaphore` until that task's async work — an
-`SSHExecChannel` read/write, or `SSHClient.connect`/`exec` during
-`openChannel` — finishes.
+`GitKitSSHBridge.runBlocking(_:)` is the bridge: on runtimes that support
+SE-0417 (`Task(executorPreference:)`), it starts a task with a preference
+for `GitKitSSHBridgeExecutor`'s dedicated, non-cooperative-pool OS thread,
+then blocks the *calling* thread on a `DispatchSemaphore` until that task's
+async work — an `SSHExecChannel` read/write, or `SSHClient.connect`/`exec`
+during `openChannel` — finishes. The task-executor preference matters
+beyond initial scheduling: it follows the task through SSHKit's
+nonisolated async APIs, which otherwise move to the global cooperative
+executor under SE-0338.
 
 Earlier builds started a plain unstructured `Task` here instead, which
 Swift schedules onto its cooperative thread pool. `SwiftGit`'s
@@ -174,25 +183,22 @@ single-core CI/agent sandbox, or several concurrent `GitKitSSH`
 operations in one process, per issue #113's stated MissionControl
 adoption plan).
 
-Writing the isolation on the `Task` closure itself
-(`Task { @GitKitSSHBridgeExecutor in ... }`, not a plain `Task { ... }`)
-is what keeps even the task's *first* scheduling off the cooperative
-pool — the same mechanism `Task { @MainActor in ... }` uses to reach the
-main thread without ever touching the pool. `runBlocking`'s `operation`
-parameter is typed `@GitKitSSHBridgeExecutor @Sendable () async throws
--> T`, not a plain `@Sendable () async throws -> T`: isolation is a
-property of a function's *type*, not something it inherits from whoever
-calls it, so a non-isolated operand would itself run as `nonisolated`
-the instant it's invoked, hopping back onto the cooperative pool for its
-own body and reopening the exact deadlock this bridge exists to close.
-With both pinned to the same actor, every resumption after every `await`
-inside `operation` — not just its first call — stays on that one
-dedicated thread, so this blocking wait never needs a pool thread to
-free up to make progress.
+The close path uses NIO futures synchronously, never on an EventLoop
+thread. Event-loop-group shutdown delivers its callback on a private
+`SSHClient` dispatch queue rather than the global queue, so teardown also
+completes while every cooperative-pool worker is occupied. The
+`cloneCompletesUnderSaturatedCooperativePool` end-to-end test saturates
+that real pool while a separate OS thread performs a full SSH clone,
+including disconnect and event-loop shutdown.
 
-(`Task(executorPreference:)` / `TaskExecutor` would make this simpler,
-but both the protocol and `DispatchQueue`'s conformance to it require
-macOS 15/15.4 — newer than this package's macOS 13 floor.)
+`TaskExecutor` is unavailable before macOS 15 / iOS 18 / tvOS 18 /
+watchOS 11. On those older Apple runtimes, `runBlocking` falls back to
+the dedicated-thread global actor used by the original implementation.
+That keeps actor-isolated bridge scheduling off the pool, but SE-0338
+nonisolated SSHKit calls can still require a cooperative-pool worker;
+the full pool-starvation guarantee therefore applies only where SE-0417
+is available (and on non-Apple runtimes where the API is unconditionally
+available).
 
 `GitKitSSHChannel` buffers leftover bytes between `read(into:)` calls
 (`SSHExecChannel.stdout` delivers arbitrarily-sized chunks that rarely

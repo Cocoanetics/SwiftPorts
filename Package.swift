@@ -1249,7 +1249,7 @@ let package = Package(
         // Flat library: GitKit's `GitSSHTransportProvider` hook (GitKit
         // 2.2.0) implemented over `SSHKit`'s exec channel. Bridges
         // SSHKit's async stdin/stdout to the synchronous, libgit2-driven
-        // `GitSSHChannel` contract via an unstructured `Task` + semaphore
+        // `GitSSHChannel` contract via a dedicated task executor + semaphore
         // (see `GitKitSSHBridge`) — never by `await`ing from the calling
         // thread itself, which the contract documents as the deadlock to
         // avoid. Not in `androidDroppedTargets`: depends only on SSHKit

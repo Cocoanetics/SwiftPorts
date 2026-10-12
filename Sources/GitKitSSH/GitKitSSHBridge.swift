@@ -7,50 +7,50 @@ import Foundation
 /// the NIO event loop (GitKit's `SSHTransport.swift` documents this
 /// threading contract on `GitSSHChannel`).
 ///
-/// Runs `operation` as a `Task` isolated to ``GitKitSSHBridgeExecutor`` —
-/// a global actor backed by one dedicated, non-cooperative-pool thread —
-/// and blocks the *calling* thread on a semaphore until it finishes.
+/// On SE-0417 runtimes, runs `operation` as a task that prefers a
+/// dedicated, non-cooperative-pool thread, and blocks the *calling*
+/// thread on a semaphore until it finishes.
 /// `SwiftGit`'s `GitClient` drives libgit2 from `async` code
 /// (`Libgit2Sandboxing.runIsolated`), so that calling thread can itself
-/// already be a cooperative-pool thread. Writing the isolation on the
-/// `Task` closure itself (`Task { @GitKitSSHBridgeExecutor in ... }`,
-/// not a plain `Task { ... }`) is what keeps even the task's *first*
-/// scheduling off the cooperative pool — the same mechanism
-/// `Task { @MainActor in ... }` uses to reach the main thread without
-/// ever touching the pool.
+/// already be a cooperative-pool thread.
 ///
-/// `operation`'s own parameter type carries the `@GitKitSSHBridgeExecutor`
-/// isolation too, not just the `Task` closure that calls it — isolation
-/// is a property of a function's *type*, not something it inherits from
-/// whoever calls it, so a plain `@Sendable () async throws -> T` operand
-/// would run as `nonisolated` the instant it's invoked, hopping off this
-/// dedicated thread and right back onto the cooperative pool for its own
-/// body (confirmed empirically: `Thread.current` inside such an operand
-/// came back as an anonymous pool thread, not this file's dedicated
-/// one, until the parameter picked up the same isolation). With both
-/// pinned to the same actor, every resumption after every `await` inside
-/// `operation` — not just its first call — stays on that one dedicated
-/// thread, so this blocking wait never needs a pool thread to free up to
-/// make progress: on a pool constrained to one thread, or with every
-/// pool thread already parked in a `runBlocking` call of its own, the
-/// task still runs and the semaphore still gets signaled.
+/// The task's `TaskExecutor` preference follows it into
+/// nonisolated async functions, which is essential here: under SE-0338,
+/// calls such as `SSHClient.connect` and `AsyncStream.Iterator.next`
+/// otherwise leave the actor executor and resume on the global
+/// cooperative pool. The actor alone therefore cannot make the bridge
+/// pool-independent end to end.
 ///
-/// (`Task(executorPreference:)` / `TaskExecutor` would make this
-/// simpler, but both the protocol and `DispatchQueue`'s conformance to
-/// it require macOS 15/15.4 — newer than this package's macOS 13
-/// floor.)
+/// `TaskExecutor` is unavailable before macOS 15 / iOS 18 / tvOS 18 /
+/// watchOS 11. On those older Apple runtimes a global actor backed by the
+/// same dedicated thread provides the fallback. It keeps the bridge task's
+/// actor-isolated work off the pool, but a
+/// nonisolated async SSHKit call can require a cooperative-pool thread.
 enum GitKitSSHBridge {
-    static func runBlocking<T: Sendable>(_ operation: @escaping @GitKitSSHBridgeExecutor @Sendable () async throws -> T) throws -> T {
+    static func runBlocking<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) throws -> T {
         let semaphore = DispatchSemaphore(value: 0)
         let box = ResultBox<T>()
-        Task { @GitKitSSHBridgeExecutor in
-            do {
-                box.value = .success(try await operation())
-            } catch {
-                box.value = .failure(error)
+
+        if #available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, *) {
+            Task(executorPreference: gitKitSSHBridgeThread) {
+                do {
+                    box.value = .success(try await operation())
+                } catch {
+                    box.value = .failure(error)
+                }
+                semaphore.signal()
             }
-            semaphore.signal()
+        } else {
+            Task { @GitKitSSHBridgeExecutor in
+                do {
+                    box.value = .success(try await operation())
+                } catch {
+                    box.value = .failure(error)
+                }
+                semaphore.signal()
+            }
         }
+
         semaphore.wait()
         return try box.value.get()
     }
@@ -60,31 +60,34 @@ enum GitKitSSHBridge {
     }
 }
 
-/// Global actor every ``GitKitSSHBridge/runBlocking(_:)`` task — and the `operation` it runs —
-/// is isolated to. `shared`'s single ``GitKitSSHDedicatedThreadExecutor`` is the only executor
-/// this actor ever runs on, so nothing isolated to it — first scheduling or any later
-/// resumption — depends on Swift's cooperative thread pool having a free thread.
+/// Older-Apple-runtime fallback for scheduling the bridge task's actor-isolated wrapper on the
+/// same dedicated thread. Nonisolated operations can still leave this actor under SE-0338, which
+/// is why supported runtimes use the task-executor preference above.
 @globalActor
 actor GitKitSSHBridgeExecutor {
     static let shared = GitKitSSHBridgeExecutor()
 
-    /// `"GitKitSSHBridge"` — kept to 15 characters so it round-trips through Linux's
-    /// `pthread_setname_np`, which truncates/rejects anything past `TASK_COMM_LEN` (16 bytes
-    /// including the null terminator).
-    private let thread = GitKitSSHDedicatedThreadExecutor(name: "GitKitSSHBridge")
-
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        thread.asUnownedSerialExecutor()
+        gitKitSSHBridgeThread.asUnownedSerialExecutor()
     }
 }
 
-/// A `SerialExecutor` backed by one dedicated OS thread that Swift's cooperative thread pool
-/// never manages or schedules onto — jobs queue up and run strictly one at a time, each only
-/// until its next suspension point, same as any other serial executor, just on a thread that
-/// isn't shared with (or contended for by) anything else in the process.
+/// `"GitKitSSHBridge"` is kept to 15 characters so it round-trips through Linux's
+/// `pthread_setname_np`, which truncates/rejects anything past `TASK_COMM_LEN` (16 bytes
+/// including the null terminator).
+private let gitKitSSHBridgeThread = GitKitSSHDedicatedThreadExecutor(name: "GitKitSSHBridge")
+
+/// A serial and task executor backed by one dedicated OS thread that Swift's cooperative thread
+/// pool never manages or schedules onto. Serial-executor and task-executor jobs retain their
+/// respective executor identity even though they share the same underlying thread.
 private final class GitKitSSHDedicatedThreadExecutor: @unchecked Sendable, SerialExecutor {
+    private struct QueuedJob {
+        let job: UnownedJob
+        let usesTaskExecutor: Bool
+    }
+
     private let condition = NSCondition()
-    private var jobs: [UnownedJob] = []
+    private var jobs: [QueuedJob] = []
 
     private lazy var thread: Thread = Thread { [weak self] in
         while true {
@@ -95,7 +98,7 @@ private final class GitKitSSHDedicatedThreadExecutor: @unchecked Sendable, Seria
             }
             let job = self.jobs.removeFirst()
             self.condition.unlock()
-            job.runSynchronously(on: self.asUnownedSerialExecutor())
+            self.run(job)
         }
     }
 
@@ -105,13 +108,36 @@ private final class GitKitSSHDedicatedThreadExecutor: @unchecked Sendable, Seria
     }
 
     func enqueue(_ job: UnownedJob) {
+        enqueue(job, usesTaskExecutor: false)
+    }
+
+    private func enqueue(_ job: UnownedJob, usesTaskExecutor: Bool) {
         condition.lock()
-        jobs.append(job)
+        jobs.append(QueuedJob(job: job, usesTaskExecutor: usesTaskExecutor))
         condition.signal()
         condition.unlock()
     }
 
+    private func run(_ queued: QueuedJob) {
+        if queued.usesTaskExecutor {
+            if #available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, *) {
+                queued.job.runSynchronously(on: asUnownedTaskExecutor())
+            } else {
+                preconditionFailure("TaskExecutor job scheduled on an unavailable runtime")
+            }
+        } else {
+            queued.job.runSynchronously(on: asUnownedSerialExecutor())
+        }
+    }
+
     func asUnownedSerialExecutor() -> UnownedSerialExecutor {
         UnownedSerialExecutor(ordinary: self)
+    }
+}
+
+@available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, *)
+extension GitKitSSHDedicatedThreadExecutor: TaskExecutor {
+    func enqueue(_ job: consuming ExecutorJob) {
+        enqueue(UnownedJob(job), usesTaskExecutor: true)
     }
 }

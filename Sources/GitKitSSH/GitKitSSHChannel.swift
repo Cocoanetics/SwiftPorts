@@ -1,5 +1,5 @@
 import GitKit
-import SSHKit
+@_spi(GitKitSSH) import SSHKit
 
 /// Bridges one SSHKit exec channel to GitKit's synchronous
 /// ``GitSSHChannel`` contract. libgit2 calls `read`/`write`/`close`
@@ -50,10 +50,7 @@ final class GitKitSSHChannel: GitSSHChannel, @unchecked Sendable {
     }
 
     func close() {
-        _ = try? GitKitSSHBridge.runBlocking { () async throws -> Void in
-            try? await self.exec.closeStdin()
-            try await self.client.close()
-        }
+        try? self.client.closeSynchronously()
     }
 
     /// Called once `stdout` hits EOF. The exit status and any stderr the

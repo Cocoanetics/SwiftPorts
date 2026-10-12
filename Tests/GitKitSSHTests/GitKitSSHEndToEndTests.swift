@@ -174,6 +174,8 @@ struct GitKitSSHEndToEndTests {
 
     @Test("a clone completes while every cooperative-pool thread is blocked")
     func cloneCompletesUnderSaturatedCooperativePool() async throws {
+        guard #available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, *) else { return }
+
         let identityPath = try makeIdentity(in: tmp("GitKitSSHIdentity"))
         guard let sshd = try await ThrowawaySSHD.start(authorizingPublicKeyPath: identityPath + ".pub") else {
             return

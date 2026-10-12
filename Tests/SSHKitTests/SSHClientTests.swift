@@ -232,5 +232,42 @@ struct SSHClientTests {
             )
         }
     }
+
+    /// Cancelling a connect after TCP acceptance but before the peer sends an SSH version used to
+    /// abandon the host-key-completion and authentication-exhaustion promises. In debug builds,
+    /// their later deinitialization trapped with NIO's "leaking promise" fatal error.
+    @Test func abandonedConnectMidHandshakeSettlesPromises() async throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let acceptedPromise = group.next().makePromise(of: Void.self)
+        let listener = try await ServerBootstrap(group: group)
+            .childChannelInitializer { channel in
+                acceptedPromise.succeed(())
+                // Deliberately leave the connection open without an SSH version exchange.
+                return channel.eventLoop.makeSucceededVoidFuture()
+            }
+            .bind(host: "127.0.0.1", port: 0).get()
+
+        let port = listener.localAddress?.port ?? 0
+        let identity = try await IdentityLoader.load(path: SSHKitFixtures.path("id_ed25519_test"))
+        let connect = Task {
+            try await SSHClient.connect(
+                host: "127.0.0.1",
+                port: port,
+                username: "sshkit-tests",
+                identities: [identity],
+                knownHosts: KnownHostsStore(),
+                strictHostKeyChecking: .yes
+            )
+        }
+
+        try await acceptedPromise.futureResult.get()
+        connect.cancel()
+        await #expect(throws: CancellationError.self) {
+            _ = try await connect.value
+        }
+
+        try await listener.close().get()
+        try await group.shutdownGracefully()
+    }
 }
 #endif

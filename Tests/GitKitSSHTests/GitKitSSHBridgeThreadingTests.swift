@@ -7,9 +7,9 @@
 // exhausted (a single-core CI/agent sandbox, or several concurrent GitKitSSH operations in one
 // process, per issue #113's stated MissionControl adoption).
 //
-// The fix pins every `runBlocking` task to `GitKitSSHBridgeExecutor`, a global actor backed by
-// one dedicated, non-pool thread (`GitKitSSHDedicatedThreadExecutor`), so nothing here — first
-// scheduling or any later resumption — ever depends on the cooperative pool having a free thread.
+// The fix gives every `runBlocking` task an SE-0417 task-executor preference backed by one
+// dedicated, non-pool thread (`GitKitSSHDedicatedThreadExecutor`), so nonisolated async calls and
+// their later resumptions do not depend on the cooperative pool having a free thread.
 // See `GitKitSSHEndToEndTests.cloneCompletesUnderSaturatedCooperativePool` for the same guarantee
 // exercised through a real clone over a throwaway `sshd`.
 import Foundation
@@ -24,8 +24,10 @@ import Testing
 @Suite("GitKitSSHBridge threading", .serialized)
 struct GitKitSSHBridgeThreadingTests {
 
-    @Test("runBlocking always runs its operation on its own dedicated thread, never the cooperative pool")
+    @Test("runBlocking uses its own dedicated thread on SE-0417 runtimes")
     func runBlockingUsesDedicatedThread() throws {
+        guard #available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, *) else { return }
+
         // `Thread.current` is `NS_SWIFT_UNAVAILABLE_FROM_ASYNC` — `runBlocking`'s operation
         // parameter type is `async`, so even this non-suspending closure counts as an
         // asynchronous context; routing through a plain synchronous function sidesteps that.
@@ -37,6 +39,8 @@ struct GitKitSSHBridgeThreadingTests {
 
     @Test("runBlocking completes even with every cooperative-pool thread already blocked")
     func runBlockingCompletesUnderSaturatedPool() throws {
+        guard #available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, *) else { return }
+
         poolSaturationLock.lock()
         defer { poolSaturationLock.unlock() }
 
