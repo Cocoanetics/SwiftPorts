@@ -24,7 +24,11 @@ struct SSHClientThrowawaySSHDTests {
         let hostPublicKey = try NIOSSHPublicKey(openSSHPublicKey: hostPublicKeyLine)
 
         var knownHosts = KnownHostsStore()
-        knownHosts.recordNewHost("127.0.0.1", publicKey: hostPublicKey, hashed: false)
+        knownHosts.recordNewHost(
+            SSHKnownHostsName.make(host: "127.0.0.1", port: sshd.port),
+            publicKey: hostPublicKey,
+            hashed: false
+        )
 
         let client = try await SSHClient.connect(
             host: "127.0.0.1",

@@ -1,3 +1,5 @@
+import NIOCore
+import NIOPosix
 import NIOSSH
 import Testing
 
@@ -11,7 +13,11 @@ struct SSHClientTests {
 
         let identity = try await IdentityLoader.load(path: SSHKitFixtures.path("id_ed25519_test"))
         var knownHosts = KnownHostsStore()
-        knownHosts.recordNewHost("127.0.0.1", publicKey: server.hostKey.publicKey, hashed: false)
+        knownHosts.recordNewHost(
+            SSHKnownHostsName.make(host: "127.0.0.1", port: server.port),
+            publicKey: server.hostKey.publicKey,
+            hashed: false
+        )
 
         let client = try await SSHClient.connect(
             host: "127.0.0.1",
@@ -100,7 +106,11 @@ struct SSHClientTests {
 
         let identity = try await IdentityLoader.load(path: SSHKitFixtures.path("id_ed25519_test"))
         var knownHosts = KnownHostsStore()
-        knownHosts.recordNewHost("127.0.0.1", publicKey: server.hostKey.publicKey, hashed: false)
+        knownHosts.recordNewHost(
+            SSHKnownHostsName.make(host: "127.0.0.1", port: server.port),
+            publicKey: server.hostKey.publicKey,
+            hashed: false
+        )
 
         let client = try await SSHClient.connect(
             host: "127.0.0.1",
@@ -113,6 +123,60 @@ struct SSHClientTests {
 
         await #expect(throws: SSHError.self) {
             _ = try await client.exec("echo hello")
+        }
+    }
+
+    /// A nondefault-port known-hosts entry recorded under the bare hostname (no `[host]:port`
+    /// bracketing) must not satisfy strict checking — it's the wrong lookup key, matching
+    /// `put_host_port()` in `misc.c`, not an entry for this destination at all.
+    @Test func bareHostnameEntryDoesNotMatchNondefaultPort() async throws {
+        let server = try await InProcessSSHServer.start(authentication: .acceptAnyPublicKey)
+        defer { Task { try? await server.shutdown() } }
+
+        let identity = try await IdentityLoader.load(path: SSHKitFixtures.path("id_ed25519_test"))
+        var knownHosts = KnownHostsStore()
+        knownHosts.recordNewHost("127.0.0.1", publicKey: server.hostKey.publicKey, hashed: false)
+
+        await #expect(throws: SSHError.self) {
+            _ = try await SSHClient.connect(
+                host: "127.0.0.1",
+                port: server.port,
+                username: "sshkit-tests",
+                identities: [identity],
+                knownHosts: knownHosts,
+                strictHostKeyChecking: .yes
+            )
+        }
+    }
+
+    /// If the TCP connection comes up but the peer closes it immediately — before any SSH version
+    /// exchange, and therefore before `validateHostKey` ever runs — nothing else resolves the
+    /// host-key verifier's completion promise. `connect(...)` must still fail promptly instead of
+    /// hanging forever.
+    @Test func connectionClosedBeforeHostKeyVerificationDoesNotHang() async throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer { Task { try? await group.shutdownGracefully() } }
+
+        let listener = try await ServerBootstrap(group: group)
+            .childChannelInitializer { channel in
+                channel.close(promise: nil)
+                return channel.eventLoop.makeSucceededVoidFuture()
+            }
+            .bind(host: "127.0.0.1", port: 0).get()
+        defer { Task { try? await listener.close().get() } }
+
+        let port = listener.localAddress?.port ?? 0
+        let identity = try await IdentityLoader.load(path: SSHKitFixtures.path("id_ed25519_test"))
+
+        await #expect(throws: Error.self) {
+            _ = try await SSHClient.connect(
+                host: "127.0.0.1",
+                port: port,
+                username: "sshkit-tests",
+                identities: [identity],
+                knownHosts: KnownHostsStore(),
+                strictHostKeyChecking: .yes
+            )
         }
     }
 }

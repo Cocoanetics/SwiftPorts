@@ -51,6 +51,7 @@ public final class SSHClient: @unchecked Sendable {
             let completionPromise = group.next().makePromise(of: Void.self)
             let hostKeyVerifier = SSHHostKeyVerifier(
                 host: host,
+                port: port,
                 knownHosts: knownHosts,
                 userKnownHostsFilePath: userKnownHostsFilePath,
                 policy: strictHostKeyChecking,
@@ -81,6 +82,13 @@ public final class SSHClient: @unchecked Sendable {
             // so the connection doesn't hang open forever even if `exec(_:)` is never called.
             authDelegate.exhaustedPromise.futureResult.whenSuccess { _ in
                 channel.close(promise: nil)
+            }
+
+            // If the peer disconnects or negotiation fails before `validateHostKey` ever runs,
+            // nothing else resolves `completionPromise` — without this, awaiting it below would
+            // hang forever instead of surfacing the connection's actual failure.
+            channel.closeFuture.whenComplete { _ in
+                completionPromise.fail(SSHClientChannelError.connectionClosedBeforeHostKeyVerification)
             }
 
             do {
@@ -174,9 +182,4 @@ public final class SSHClient: @unchecked Sendable {
         }
         return error
     }
-}
-
-enum SSHClientChannelError: Error {
-    case unexpectedChannelType
-    case authenticationExhausted
 }

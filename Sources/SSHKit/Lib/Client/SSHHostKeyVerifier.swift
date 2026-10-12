@@ -12,7 +12,8 @@ import NIOSSH
 /// `CheckHostIP`, no DNS (`VerifyHostKeyDNS`), no visual host key — none of which issue #112 asks
 /// for.
 final class SSHHostKeyVerifier: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
-    private let host: String
+    /// The `known_hosts` lookup/record name for `host`:`port` — see `SSHKnownHostsName`.
+    private let hostFileName: String
     private let userKnownHostsFilePath: String?
     private let policy: SSHStrictHostKeyChecking
 
@@ -35,12 +36,13 @@ final class SSHHostKeyVerifier: NIOSSHClientServerAuthenticationDelegate, @unche
 
     init(
         host: String,
+        port: Int,
         knownHosts: KnownHostsStore,
         userKnownHostsFilePath: String?,
         policy: SSHStrictHostKeyChecking,
         completionPromise: EventLoopPromise<Void>
     ) {
-        self.host = host
+        self.hostFileName = SSHKnownHostsName.make(host: host, port: port)
         self.knownHosts = knownHosts
         self.userKnownHostsFilePath = userKnownHostsFilePath
         self.policy = policy
@@ -48,7 +50,7 @@ final class SSHHostKeyVerifier: NIOSSHClientServerAuthenticationDelegate, @unche
     }
 
     func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
-        let matches = self.knownHosts.matchingEntries(forHost: self.host)
+        let matches = self.knownHosts.matchingEntries(forHost: self.hostFileName)
 
         if matches.contains(where: { $0.publicKey == hostKey }) {
             validationCompletePromise.succeed(())
@@ -69,7 +71,7 @@ final class SSHHostKeyVerifier: NIOSSHClientServerAuthenticationDelegate, @unche
             // `sshconnect.c` lines 1204-1206.
             let type = SSHPublicKeyDescribing.shortTypeName(for: hostKey)
             self.fail(
-                lines: ["No \(type) host key is known for \(self.host) and you have requested strict checking."],
+                lines: ["No \(type) host key is known for \(self.hostFileName) and you have requested strict checking."],
                 validationCompletePromise: validationCompletePromise
             )
         case .ask:
@@ -77,7 +79,7 @@ final class SSHHostKeyVerifier: NIOSSHClientServerAuthenticationDelegate, @unche
             self.fail(lines: [], validationCompletePromise: validationCompletePromise)
         case .no, .acceptNew:
             // `sshconnect.c` lines 1259-1285: silently trust and record, no prompt, no banner.
-            let entry = self.knownHosts.recordNewHost(self.host, publicKey: hostKey, hashed: false)
+            let entry = self.knownHosts.recordNewHost(self.hostFileName, publicKey: hostKey, hashed: false)
             self.pendingPersist = entry
             validationCompletePromise.succeed(())
             self.completionPromise.succeed(())
