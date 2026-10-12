@@ -44,16 +44,18 @@ let androidDroppedTargets: Set<String> = [
     "ZipTests", "UnzipTests", "TarTests", "GzipTests", "Bzip2Tests",
     "XzTests", "ZstdTests", "Lz4Tests", "JqTests", "GlamTests",
     "GitCommandTests", "RgTests", "FdTests",
-    // GitHubTests and SSHKitTests both link a C++ SwiftPM target (swift-
-    // crypto's BoringSSL, via GitHub / SSHKit's shared `Crypto` product).
-    // Linking C++ into the xctest executable makes swiftc go through
-    // clang's C++ link driver, which injects host C++ defaults (-lstdc++
-    // + a host /usr/lib/x86_64-linux-gnu search path) and breaks Bionic
-    // libc resolution for the whole bundle. Dropping them keeps the test
-    // bundle C++-free so the other SDK suites link + run on the emulator.
-    // (Both still run on the four full-build platforms; `SSHKit` itself —
-    // the library, not its tests — stays on Android, same as `GitHub`.)
-    "GitHubTests", "SSHKitTests",
+    // GitHubTests, SSHKitTests and GitKitSSHTests all link a C++ SwiftPM
+    // target (swift-crypto's BoringSSL, via GitHub / SSHKit's shared
+    // `Crypto` product — GitKitSSHTests pulls it in transitively through
+    // SSHKit). Linking C++ into the xctest executable makes swiftc go
+    // through clang's C++ link driver, which injects host C++ defaults
+    // (-lstdc++ + a host /usr/lib/x86_64-linux-gnu search path) and
+    // breaks Bionic libc resolution for the whole bundle. Dropping them
+    // keeps the test bundle C++-free so the other SDK suites link + run
+    // on the emulator. (All three still run on the four full-build
+    // platforms; `SSHKit`/`GitKitSSH` themselves — the libraries, not
+    // their tests — stay on Android, same as `GitHub`.)
+    "GitHubTests", "SSHKitTests", "GitKitSSHTests",
 ]
 
 func androidFiltered(products list: [Product]) -> [Product] {
@@ -335,10 +337,15 @@ let package = Package(
         .executable(name: "fd", targets: ["fd"]),
 
         // SSHKit — in-process, OpenSSH-compatible SSH client engine on
-        // mainline apple/swift-nio-ssh (issue #112). Library only for
-        // now: `SSHCommand`/`ssh` and the GitKit transport land in
-        // follow-up issues (#113/#114).
+        // mainline apple/swift-nio-ssh (issue #112). `SSHCommand`/`ssh`
+        // land in a follow-up issue (#114).
         .library(name: "SSHKit", targets: ["SSHKit"]),
+
+        // GitKitSSH — in-process SSH transport for GitKit over SSHKit
+        // (issue #113), implementing GitKit 2.2.0's
+        // `GitSSHTransportProvider` hook. Opt-in: a host calls
+        // `GitKitSSH.install()` itself; `SwiftGit`/`GitCommand` never do.
+        .library(name: "GitKitSSH", targets: ["GitKitSSH"]),
     ]),
     // Package traits — opt-in, build-time toggles. Off by default (none are
     // listed in any `.default(enabledTraits:)`).
@@ -1109,7 +1116,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "git",
-            dependencies: ["GitCommand", .product(name: "ShellKit", package: "ShellKit")],
+            dependencies: ["GitCommand", "GitKitSSH", .product(name: "ShellKit", package: "ShellKit")],
             path: "Sources/SwiftGit/git"
         ),
         .testTarget(
@@ -1233,6 +1240,34 @@ let package = Package(
         .testTarget(
             name: "SSHKitTests",
             dependencies: ["SSHKit"],
+            resources: [
+                .copy("Fixtures"),
+            ]
+        ),
+
+        // MARK: GitKitSSH (issue #113)
+        // Flat library: GitKit's `GitSSHTransportProvider` hook (GitKit
+        // 2.2.0) implemented over `SSHKit`'s exec channel. Bridges
+        // SSHKit's async stdin/stdout to the synchronous, libgit2-driven
+        // `GitSSHChannel` contract via an unstructured `Task` + semaphore
+        // (see `GitKitSSHBridge`) — never by `await`ing from the calling
+        // thread itself, which the contract documents as the deadlock to
+        // avoid. Not in `androidDroppedTargets`: depends only on SSHKit
+        // and GitKit, both of which already build there.
+        .target(
+            name: "GitKitSSH",
+            dependencies: [
+                "SSHKit",
+                .product(name: "ShellKit", package: "ShellKit"),
+                .product(name: "GitKit", package: "GitKit"),
+            ],
+            path: "Sources/GitKitSSH"
+        ),
+        // Links SSHKit's `Crypto` product (BoringSSL, C++) transitively,
+        // same as `SSHKitTests`/`GitHubTests` — dropped on Android there.
+        .testTarget(
+            name: "GitKitSSHTests",
+            dependencies: ["GitKitSSH", "SSHKit", .product(name: "GitKit", package: "GitKit")],
             resources: [
                 .copy("Fixtures"),
             ]

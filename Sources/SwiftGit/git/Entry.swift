@@ -1,12 +1,18 @@
 import Foundation
 import ArgumentParser
 import GitCommand
+import GitKitSSH
 import ShellKit
 
 @main
 struct Entry {
     static func main() async {
         do {
+            // Opt-in (issue #113): carries ssh:// / scp-style fetches and
+            // pushes over SSHKit instead of libgit2's `ssh_exec` fallback,
+            // which shells out to /usr/bin/ssh per call. `SwiftGit`/
+            // `GitCommand` never register this themselves.
+            try GitKitSSH.install()
             // `Shell.arguments` already strips argv[0] (see
             // `Shell.processDefault` in ShellKit), so we hand it to
             // the preprocessor as-is. The earlier `dropFirst()` here
