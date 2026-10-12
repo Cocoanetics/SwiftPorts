@@ -408,9 +408,10 @@ let package = Package(
         // GitKit 2.1.0 is the first release that requires swift-archive by
         // version, which is what lets us enable the trait from a version
         // requirement here (a stable-version package may not activate an
-        // unstable-version dependency).
+        // unstable-version dependency). GitKit 2.2.0 adds GitSSHTransport,
+        // the hook GitKitSSH (issue #113) implements over SSHKit.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.1.0",
+                 from: "2.2.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
