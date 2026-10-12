@@ -44,15 +44,16 @@ let androidDroppedTargets: Set<String> = [
     "ZipTests", "UnzipTests", "TarTests", "GzipTests", "Bzip2Tests",
     "XzTests", "ZstdTests", "Lz4Tests", "JqTests", "GlamTests",
     "GitCommandTests", "RgTests", "FdTests",
-    // GitHubTests is the only Android-scope test target that links a C++
-    // SwiftPM target (swift-crypto's BoringSSL, via GitHub). Linking C++
-    // into the xctest executable makes swiftc go through clang's C++ link
-    // driver, which injects host C++ defaults (-lstdc++ + a host
-    // /usr/lib/x86_64-linux-gnu search path) and breaks Bionic libc
-    // resolution for the whole bundle. Dropping it keeps the test bundle
-    // C++-free so the other SDK suites link + run on the emulator.
-    // (GitHubTests still runs on the four full-build platforms.)
-    "GitHubTests",
+    // GitHubTests and SSHKitTests both link a C++ SwiftPM target (swift-
+    // crypto's BoringSSL, via GitHub / SSHKit's shared `Crypto` product).
+    // Linking C++ into the xctest executable makes swiftc go through
+    // clang's C++ link driver, which injects host C++ defaults (-lstdc++
+    // + a host /usr/lib/x86_64-linux-gnu search path) and breaks Bionic
+    // libc resolution for the whole bundle. Dropping them keeps the test
+    // bundle C++-free so the other SDK suites link + run on the emulator.
+    // (Both still run on the four full-build platforms; `SSHKit` itself —
+    // the library, not its tests — stays on Android, same as `GitHub`.)
+    "GitHubTests", "SSHKitTests",
 ]
 
 func androidFiltered(products list: [Product]) -> [Product] {
@@ -1208,12 +1209,15 @@ let package = Package(
 
         // MARK: SSHKit (issue #112)
         // In-process SSH client engine on mainline apple/swift-nio-ssh.
-        // Pure library for now — no ArgumentParser dependency, so it's
-        // not pre-emptively listed in `androidDroppedTargets`; NIO/NIOSSH
-        // are a first-ever dependency family for this repo and their
-        // Android/Windows buildability is unverified (see Docs/SSH.md).
-        // If CI shows they don't build there, gate `SSHKit`/`SSHKitTests`
-        // in `androidDroppedTargets` in a follow-up.
+        // Pure library for now — no ArgumentParser dependency, so the
+        // library itself isn't in `androidDroppedTargets` (same as
+        // `GitHub`, which shares this same `Crypto` dependency). But
+        // `SSHKitTests` links that `Crypto` product's BoringSSL C++
+        // target into its xctest bundle, which pollutes the Android
+        // cross-link exactly like `GitHubTests` — so it's listed there.
+        // NIO/NIOSSH are otherwise a first-ever dependency family for
+        // this repo; their Android/Windows buildability beyond that is
+        // unverified (see Docs/SSH.md).
         .target(
             name: "SSHKit",
             dependencies: [

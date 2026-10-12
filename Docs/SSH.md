@@ -213,18 +213,23 @@ always exit 255 (OpenSSH's `fatal()`), is quoted from
 
 No CI access from this session to actually run
 `skiptools/swift-android-action` or the Windows job — the check the
-plan asks for happens on this PR's own CI run. `SSHKit` is **not**
-pre-emptively added to `androidDroppedTargets` in `Package.swift`: it
-carries no `ArgumentParser` dependency (the only Android-specific
-constraint documented in [Android.md](Android.md)), and its other
-dependencies — `swift-nio`/`NIOCore`/`NIOPosix`, `swift-nio-ssh`, and
-`swift-crypto`'s `Crypto` — are each independently exercised on Android
-elsewhere in this graph already (`Crypto` via the `GitHub` target,
-which Android builds and tests). If CI shows `swift-nio`/`swift-nio-ssh`
-don't cross-compile for Android or Windows as-is, gate `SSHKit` and
-`SSHKitTests` in `androidDroppedTargets` (or add a Windows-specific
-carve-out) as a follow-up — the layout keeps this a one-target, additive
-change since nothing else in the repo depends on `SSHKit` yet.
+plan asks for happens on this PR's own CI run. `SSHKit` (the library)
+is **not** pre-emptively added to `androidDroppedTargets`: it carries
+no `ArgumentParser` dependency (the only Android-specific constraint
+documented in [Android.md](Android.md)), and its other dependencies —
+`swift-nio`/`NIOCore`/`NIOPosix`, `swift-nio-ssh`, and `swift-crypto`'s
+`Crypto` — are each independently exercised on Android elsewhere in
+this graph already (`Crypto` via the `GitHub` target, which Android
+builds and tests). `SSHKitTests` **is** added to
+`androidDroppedTargets`, though: it links that same `Crypto` product's
+BoringSSL C++ target into its xctest bundle, which pollutes the Android
+cross-link exactly the way `GitHubTests` does (§2 in
+[Android.md](Android.md)) — the same reason `GitHubTests` is dropped
+while `GitHub` itself ships there. If CI shows `swift-nio`/`swift-nio-
+ssh` don't cross-compile for Android or Windows as-is beyond that, gate
+`SSHKit` itself in `androidDroppedTargets` (or add a Windows-specific
+carve-out) as a follow-up — the layout keeps this a one-target,
+additive change since nothing else in the repo depends on `SSHKit` yet.
 
 ## Test strategy
 
