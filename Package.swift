@@ -332,6 +332,12 @@ let package = Package(
         .library(name: "FdKit", targets: ["FdKit"]),
         .library(name: "FdCommand", targets: ["FdCommand"]),
         .executable(name: "fd", targets: ["fd"]),
+
+        // SSHKit — in-process, OpenSSH-compatible SSH client engine on
+        // mainline apple/swift-nio-ssh (issue #112). Library only for
+        // now: `SSHCommand`/`ssh` and the GitKit transport land in
+        // follow-up issues (#113/#114).
+        .library(name: "SSHKit", targets: ["SSHKit"]),
     ]),
     // Package traits — opt-in, build-time toggles. Off by default (none are
     // listed in any `.default(enabledTraits:)`).
@@ -361,6 +367,19 @@ let package = Package(
                  traits: [.defaults, "YAML", "CommandLineArguments"]),
         .package(url: "https://github.com/apple/swift-crypto",
                  from: "3.0.0"),
+
+        // Engine for SSHKit: mainline SwiftNIO SSH (Citadel and its
+        // swift-nio-ssh fork are reference-only, per issue #112 — no
+        // dependency, no fork). Pre-1.0, so pinned the way ShellKit /
+        // SQLiteKit are: `.upToNextMinor`. swift-nio itself is declared
+        // directly too — SwiftPM requires every `.product(package:)`
+        // reference to name a package this manifest depends on directly,
+        // even when (as here) it's also a transitive dependency of
+        // swift-nio-ssh.
+        .package(url: "https://github.com/apple/swift-nio",
+                 from: "2.81.0"),
+        .package(url: "https://github.com/apple/swift-nio-ssh",
+                 .upToNextMinor(from: "0.15.0")),
 
         // Community
         .package(url: "https://github.com/jpsim/Yams",
@@ -1184,6 +1203,33 @@ let package = Package(
             dependencies: [
                 .target(name: "FdCommand", condition: .when(platforms: commandTestPlatforms)),
                 "FdKit", "RipgrepKit",
+            ]
+        ),
+
+        // MARK: SSHKit (issue #112)
+        // In-process SSH client engine on mainline apple/swift-nio-ssh.
+        // Pure library for now — no ArgumentParser dependency, so it's
+        // not pre-emptively listed in `androidDroppedTargets`; NIO/NIOSSH
+        // are a first-ever dependency family for this repo and their
+        // Android/Windows buildability is unverified (see Docs/SSH.md).
+        // If CI shows they don't build there, gate `SSHKit`/`SSHKitTests`
+        // in `androidDroppedTargets` in a follow-up.
+        .target(
+            name: "SSHKit",
+            dependencies: [
+                .product(name: "ShellKit", package: "ShellKit"),
+                .product(name: "NIOSSH", package: "swift-nio-ssh"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "Crypto", package: "swift-crypto"),
+            ],
+            path: "Sources/SSHKit/Lib"
+        ),
+        .testTarget(
+            name: "SSHKitTests",
+            dependencies: ["SSHKit"],
+            resources: [
+                .copy("Fixtures"),
             ]
         ),
 
