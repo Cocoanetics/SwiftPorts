@@ -12,6 +12,17 @@ import Testing
 
 @testable import SSHKit
 
+/// Counts prompt invocations across a `@Sendable` `IdentityLoader.PassphrasePrompt` closure —
+/// sidesteps the "mutation of captured var in concurrently-executing code" diagnostic a plain
+/// `var` would trigger when captured by an `@Sendable` closure.
+private final class PromptCallCounter: @unchecked Sendable {
+    private(set) var count = 0
+
+    func increment() {
+        self.count += 1
+    }
+}
+
 @Suite("SSHClient (in-process NIOSSH server)")
 struct SSHClientTests {
     @Test func execRoundTrip() async throws {
@@ -207,6 +218,12 @@ struct SSHClientTests {
             _ = try await client.exec("echo hello", pseudoTerminal: pty, pseudoTerminalRequired: true)
         }
 
+        // The failed attempt's session channel must be closed, not leaked — a subsequent
+        // operation on the same (still-open) connection must still work, proving the client isn't
+        // left holding a dangling, half-open channel from the rejected `pty-req`.
+        let exec = try await client.exec("echo hello")
+        #expect(try await exec.exitStatus == 0)
+
         try await client.close()
     }
 
@@ -292,6 +309,64 @@ struct SSHClientTests {
                 strictHostKeyChecking: .yes
             )
         }
+    }
+
+    /// A rejected host key must fail before authentication ever starts — so `connect(identityFiles:)`
+    /// (issue #115's lazy loader) must never prompt for an encrypted identity's passphrase on the
+    /// way to that failure, matching real `ssh(1)`: host-key verification (`sshconnect.c`) strictly
+    /// precedes `pubkey_prepare`/`userauth_pubkey` (`sshconnect2.c`).
+    @Test func rejectedHostKeyNeverPromptsForIdentityFiles() async throws {
+        let server = try await InProcessSSHServer.start(authentication: .acceptAnyPublicKey)
+        defer { Task { try? await server.shutdown() } }
+
+        let counter = PromptCallCounter()
+        await #expect(throws: SSHError.self) {
+            _ = try await SSHClient.connect(
+                host: "127.0.0.1",
+                port: server.port,
+                username: "sshkit-tests",
+                identityFiles: [SSHKitFixtures.path("id_ed25519_enc_ctr_test")],
+                passphrasePrompt: { _ in
+                    counter.increment()
+                    return "correct horse battery staple"
+                },
+                knownHosts: KnownHostsStore(),
+                strictHostKeyChecking: .yes
+            )
+        }
+        #expect(counter.count == 0)
+    }
+
+    /// `connect(identityFiles:)` must only decrypt (and prompt for) an identity once it's actually
+    /// offered — so if the *first* configured identity already authenticates, a later encrypted one
+    /// must never be touched at all, matching `userauth_pubkey`'s per-attempt loop (`sshconnect2.c`):
+    /// it returns the moment one attempt succeeds, never reaching the rest of the queue.
+    @Test func laterIdentityIsNeverPromptedOnceAnEarlierOneAuthenticates() async throws {
+        let server = try await InProcessSSHServer.start(authentication: .acceptAnyPublicKey)
+        defer { Task { try? await server.shutdown() } }
+
+        let counter = PromptCallCounter()
+        let client = try await SSHClient.connect(
+            host: "127.0.0.1",
+            port: server.port,
+            username: "sshkit-tests",
+            identityFiles: [
+                SSHKitFixtures.path("id_ed25519_test"),
+                SSHKitFixtures.path("id_ed25519_enc_ctr_test"),
+            ],
+            passphrasePrompt: { _ in
+                counter.increment()
+                return "correct horse battery staple"
+            },
+            knownHosts: KnownHostsStore(),
+            strictHostKeyChecking: .acceptNew
+        )
+
+        let exec = try await client.exec("echo hello")
+        _ = try await exec.exitStatus
+        #expect(counter.count == 0)
+
+        try await client.close()
     }
 
     @Test func newHostUnderAcceptNewSucceeds() async throws {

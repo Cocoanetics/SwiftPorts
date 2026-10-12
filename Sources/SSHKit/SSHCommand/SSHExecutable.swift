@@ -57,14 +57,18 @@ public enum SSHExecutable {
                     requireFile: arguments.configFileWasSpecified)
             }
             let hostConfig = try config.resolve(host: arguments.host)
-            let identities = try await IdentityLoader.loadAvailable(paths: hostConfig.identityFiles)
             let knownHosts = try await KnownHostsStore.load(paths: hostConfig.userKnownHostsFile)
 
+            // Identity files are decrypted lazily by `SSHClient` itself, one at a time, only once
+            // authentication actually needs the next one — never before host-key verification (or
+            // even the TCP connection) succeeds, and never for an identity past the one that
+            // authenticates (issue #115), matching `ssh(1)`'s own `pubkey_prepare`/`userauth_pubkey`
+            // timing (`sshconnect2.c`).
             let connected = try await SSHClient.connect(
                 host: hostConfig.hostName,
                 port: hostConfig.port,
                 username: hostConfig.user ?? Shell.current.hostInfo.userName,
-                identities: identities,
+                identityFiles: hostConfig.identityFiles,
                 knownHosts: knownHosts,
                 userKnownHostsFilePath: hostConfig.userKnownHostsFile.first,
                 strictHostKeyChecking: hostConfig.strictHostKeyChecking)
@@ -169,8 +173,8 @@ public enum SSHExecutable {
 
         // A dedicated queue, not `.main`: this code also runs embedded in other hosts (e.g. a
         // SwiftBash builtin) whose main entry point may never drain `DispatchQueue.main`.
+        SIGWINCHDisposition.acquire()
         let windowChangeSource = DispatchSource.makeSignalSource(signal: SIGWINCH, queue: DispatchQueue(label: "SSHExecutable.windowChange"))
-        signal(SIGWINCH, SIG_IGN)
         windowChangeSource.setEventHandler {
             guard let size = SSHLocalTerminal.windowSize() else { return }
             Task {
@@ -180,7 +184,7 @@ public enum SSHExecutable {
         windowChangeSource.resume()
         defer {
             windowChangeSource.cancel()
-            signal(SIGWINCH, SIG_DFL)
+            SIGWINCHDisposition.release()
         }
 
         return try await Self.relayChannel(channel: channel, stdin: stdin, stdout: stdout, stderr: stderr)
@@ -236,3 +240,41 @@ public enum SSHExecutable {
         }
     }
 }
+
+#if !os(Windows)
+/// Process-wide reference count for the temporary `SIGWINCH` disposition an interactive session
+/// installs around its `DispatchSource.makeSignalSource` (the standard GCD idiom: `signal(2)`'s
+/// disposition must not be `SIG_DFL` for a dispatch signal source to behave). `signal(2)`'s
+/// disposition is process-global, so two overlapping interactive sessions in the same process
+/// (e.g. two SwiftBash `ssh -t` builtins running concurrently) must not let the first session's
+/// cleanup clobber the second session's still-active dispatch source — and whichever session
+/// finishes last must restore whatever disposition actually existed before the *first* of them
+/// ever touched it, not an unconditional `SIG_DFL`.
+private enum SIGWINCHDisposition {
+    private static let lock = NSLock()
+    // Guarded exclusively by `lock` above, acquired/released only inside `acquire()`/`release()`.
+    nonisolated(unsafe) private static var activeSessions = 0
+    nonisolated(unsafe) private static var previousHandler: (@convention(c) (Int32) -> Void)?
+
+    /// Call before installing a `DispatchSourceSignal` for `SIGWINCH`.
+    static func acquire() {
+        lock.lock()
+        defer { lock.unlock() }
+        if activeSessions == 0 {
+            previousHandler = signal(SIGWINCH, SIG_IGN)
+        }
+        activeSessions += 1
+    }
+
+    /// Call after tearing down a `DispatchSourceSignal` for `SIGWINCH`.
+    static func release() {
+        lock.lock()
+        defer { lock.unlock() }
+        activeSessions -= 1
+        if activeSessions == 0 {
+            signal(SIGWINCH, previousHandler)
+            previousHandler = nil
+        }
+    }
+}
+#endif

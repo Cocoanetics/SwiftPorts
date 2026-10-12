@@ -62,18 +62,10 @@ public enum IdentityLoader {
         paths: [String],
         passphrasePrompt: @escaping PassphrasePrompt = SSHPassphrasePrompt.readFromTTY
     ) async throws -> [NIOSSHPrivateKey] {
+        let source = SSHLazyIdentitySource(paths: paths, passphrasePrompt: passphrasePrompt)
         var keys: [NIOSSHPrivateKey] = []
-        for path in paths {
-            let url = Shell.resolve(SSHPath.expandingTilde(path))
-            try await Shell.authorize(url)
-            guard FileManager.default.fileExists(atPath: url.path) else {
-                continue
-            }
-            do {
-                try await keys.append(Self.load(path: path, passphrasePrompt: passphrasePrompt))
-            } catch is SSHIdentityDecryptionError {
-                continue
-            }
+        while let key = try await source.next() {
+            keys.append(key)
         }
         return keys
     }

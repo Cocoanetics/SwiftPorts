@@ -53,6 +53,8 @@ public final class SSHClient: @unchecked Sendable {
         }
     }
 
+    /// Connects with identities already decrypted (e.g. `GitKitSSH`'s non-interactive callers,
+    /// which load every available identity up front via `IdentityLoader.loadAvailable`).
     public static func connect(
         host: String,
         port: Int,
@@ -61,6 +63,59 @@ public final class SSHClient: @unchecked Sendable {
         knownHosts: KnownHostsStore,
         userKnownHostsFilePath: String? = nil,
         strictHostKeyChecking: SSHStrictHostKeyChecking = .ask
+    ) async throws -> SSHClient {
+        try await self.connect(
+            host: host,
+            port: port,
+            username: username,
+            knownHosts: knownHosts,
+            userKnownHostsFilePath: userKnownHostsFilePath,
+            strictHostKeyChecking: strictHostKeyChecking
+        ) { exhaustedPromise in
+            SSHPublicKeyAuthenticationDelegate(username: username, identities: identities, exhaustedPromise: exhaustedPromise)
+        }
+    }
+
+    /// Connects with `identityFiles` decrypted lazily, one at a time, only once the authentication
+    /// delegate is actually ready to offer the next one — which never happens before host-key
+    /// verification (or even the TCP connection) succeeds, and never for an identity past the one
+    /// that authenticates. Matches `ssh(1)`'s own `pubkey_prepare`/`userauth_pubkey` timing
+    /// (`sshconnect2.c`): unlike the `identities:` overload above, a passphrase prompt here can
+    /// never happen for an unreachable host, a rejected host key, or an identity the connection
+    /// never actually needed to try (issue #115).
+    public static func connect(
+        host: String,
+        port: Int,
+        username: String,
+        identityFiles: [String],
+        passphrasePrompt: @escaping IdentityLoader.PassphrasePrompt = SSHPassphrasePrompt.readFromTTY,
+        knownHosts: KnownHostsStore,
+        userKnownHostsFilePath: String? = nil,
+        strictHostKeyChecking: SSHStrictHostKeyChecking = .ask
+    ) async throws -> SSHClient {
+        let identitySource = SSHLazyIdentitySource(paths: identityFiles, passphrasePrompt: passphrasePrompt)
+        return try await self.connect(
+            host: host,
+            port: port,
+            username: username,
+            knownHosts: knownHosts,
+            userKnownHostsFilePath: userKnownHostsFilePath,
+            strictHostKeyChecking: strictHostKeyChecking
+        ) { exhaustedPromise in
+            SSHPublicKeyAuthenticationDelegate(username: username, identitySource: identitySource, exhaustedPromise: exhaustedPromise)
+        }
+    }
+
+    /// Everything shared by both `connect` overloads above, parameterized only by how the
+    /// authentication delegate gets its identities.
+    private static func connect(
+        host: String,
+        port: Int,
+        username: String,
+        knownHosts: KnownHostsStore,
+        userKnownHostsFilePath: String?,
+        strictHostKeyChecking: SSHStrictHostKeyChecking,
+        makeAuthDelegate: (EventLoopPromise<Void>) -> SSHPublicKeyAuthenticationDelegate
     ) async throws -> SSHClient {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let completionPromise = group.next().makePromise(of: Void.self)
@@ -75,11 +130,7 @@ public final class SSHClient: @unchecked Sendable {
                 policy: strictHostKeyChecking,
                 completionPromise: completionPromise
             )
-            let authDelegate = SSHPublicKeyAuthenticationDelegate(
-                username: username,
-                identities: identities,
-                exhaustedPromise: exhaustedPromise
-            )
+            let authDelegate = makeAuthDelegate(exhaustedPromise)
 
             let bootstrap = ClientBootstrap(group: group)
                 .channelInitializer { channel in
@@ -171,8 +222,13 @@ public final class SSHClient: @unchecked Sendable {
         let session = try await self.openSessionChannel()
         var pseudoTerminalAllocated = false
         if let pseudoTerminal {
-            pseudoTerminalAllocated = try await self.requestPseudoTerminal(
-                pseudoTerminal, required: pseudoTerminalRequired, on: session.channel, handler: session.handler)
+            do {
+                pseudoTerminalAllocated = try await self.requestPseudoTerminal(
+                    pseudoTerminal, required: pseudoTerminalRequired, on: session.channel, handler: session.handler)
+            } catch {
+                session.channel.close(promise: nil)
+                throw error
+            }
         }
         try await session.channel.triggerUserOutboundEvent(SSHChannelRequestEvent.ExecRequest(command: command, wantReply: false)).get()
         return session.makeExecChannel(hasPseudoTerminal: pseudoTerminalAllocated)
@@ -188,8 +244,13 @@ public final class SSHClient: @unchecked Sendable {
         let session = try await self.openSessionChannel()
         var pseudoTerminalAllocated = false
         if let pseudoTerminal {
-            pseudoTerminalAllocated = try await self.requestPseudoTerminal(
-                pseudoTerminal, required: pseudoTerminalRequired, on: session.channel, handler: session.handler)
+            do {
+                pseudoTerminalAllocated = try await self.requestPseudoTerminal(
+                    pseudoTerminal, required: pseudoTerminalRequired, on: session.channel, handler: session.handler)
+            } catch {
+                session.channel.close(promise: nil)
+                throw error
+            }
         }
         try await session.channel.triggerUserOutboundEvent(SSHChannelRequestEvent.ShellRequest(wantReply: false)).get()
         return session.makeExecChannel(hasPseudoTerminal: pseudoTerminalAllocated)
