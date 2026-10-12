@@ -29,6 +29,46 @@ struct SSHClientTests {
         )
 
         let exec = try await client.exec("echo hello")
+
+        var stdout: [UInt8] = []
+        for await chunk in exec.stdout {
+            stdout.append(contentsOf: chunk)
+        }
+        let exitStatus = try await exec.exitStatus
+
+        #expect(exitStatus == 0)
+        #expect(String(decoding: stdout, as: UTF8.self) == "ran: echo hello\n")
+
+        try await client.close()
+    }
+
+    /// `FixedResponseExecHandler` (used by `execRoundTrip` above) responds and closes immediately,
+    /// simulating a command that doesn't read stdin — so writing to stdin afterward would race its
+    /// close, the same way writing to a real `ssh host echo hi`'s stdin after it's already exited
+    /// would. This test instead uses `.echoStdin`, which waits for the client's EOF before
+    /// responding, to exercise `SSHExecChannel.write`/`closeStdin` deterministically.
+    @Test func stdinWriteAndCloseRoundTrip() async throws {
+        let server = try await InProcessSSHServer.start(authentication: .acceptAnyPublicKey, execBehavior: .echoStdin)
+        defer { Task { try? await server.shutdown() } }
+
+        let identity = try await IdentityLoader.load(path: SSHKitFixtures.path("id_ed25519_test"))
+        var knownHosts = KnownHostsStore()
+        knownHosts.recordNewHost(
+            SSHKnownHostsName.make(host: "127.0.0.1", port: server.port),
+            publicKey: server.hostKey.publicKey,
+            hashed: false
+        )
+
+        let client = try await SSHClient.connect(
+            host: "127.0.0.1",
+            port: server.port,
+            username: "sshkit-tests",
+            identities: [identity],
+            knownHosts: knownHosts,
+            strictHostKeyChecking: .yes
+        )
+
+        let exec = try await client.exec("cat")
         try await exec.write(Array("hello-stdin\n".utf8))
         try await exec.closeStdin()
 
@@ -39,7 +79,7 @@ struct SSHClientTests {
         let exitStatus = try await exec.exitStatus
 
         #expect(exitStatus == 0)
-        #expect(String(decoding: stdout, as: UTF8.self) == "ran: echo hello\n")
+        #expect(String(decoding: stdout, as: UTF8.self) == "hello-stdin\n")
 
         try await client.close()
     }

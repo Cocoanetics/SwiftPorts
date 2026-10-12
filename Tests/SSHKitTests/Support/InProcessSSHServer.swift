@@ -25,7 +25,10 @@ final class InProcessSSHServer: @unchecked Sendable {
         self.channel.localAddress?.port ?? 0
     }
 
-    static func start(authentication: AuthenticationPolicy) async throws -> InProcessSSHServer {
+    static func start(
+        authentication: AuthenticationPolicy,
+        execBehavior: ExecBehavior = .fixedResponse
+    ) async throws -> InProcessSSHServer {
         let hostKey = NIOSSHPrivateKey(ed25519Key: .init())
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
@@ -46,7 +49,12 @@ final class InProcessSSHServer: @unchecked Sendable {
                                     return childChannel.eventLoop.makeFailedFuture(InProcessSSHServerError.unsupportedChannelType)
                                 }
                                 return childChannel.eventLoop.makeCompletedFuture {
-                                    try childChannel.pipeline.syncOperations.addHandler(FixedResponseExecHandler())
+                                    switch execBehavior {
+                                    case .fixedResponse:
+                                        try childChannel.pipeline.syncOperations.addHandler(FixedResponseExecHandler())
+                                    case .echoStdin:
+                                        try childChannel.pipeline.syncOperations.addHandler(EchoStdinExecHandler())
+                                    }
                                 }
                             }
                         )
@@ -66,5 +74,15 @@ final class InProcessSSHServer: @unchecked Sendable {
     enum AuthenticationPolicy {
         case acceptAnyPublicKey
         case rejectAll
+    }
+
+    /// Which test exec handler a child `.session` channel gets. `.fixedResponse` (the default)
+    /// responds and closes immediately, matching a command that doesn't read stdin (e.g. `echo`) —
+    /// realistic, but races a client that writes to stdin afterward, exactly as writing to a real
+    /// `ssh host echo hi`'s stdin after it's already exited would. `.echoStdin` is for exercising
+    /// that write path deterministically: it waits for the client's stdin EOF before responding.
+    enum ExecBehavior {
+        case fixedResponse
+        case echoStdin
     }
 }
