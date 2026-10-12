@@ -6,7 +6,11 @@ In-process, OpenSSH-compatible SSH client on mainline
 `SSHKit` plus the non-interactive `SSHCommand`/`ssh` face. Phase 2
 ([#113](https://github.com/Cocoanetics/SwiftPorts/issues/113)): `GitKitSSH`,
 an in-process SSH transport for GitKit built on `SSHKit` — see
-[GitKitSSH](#gitkitssh-issue-113) below.
+[GitKitSSH](#gitkitssh-issue-113) below. Phase 3
+([#115](https://github.com/Cocoanetics/SwiftPorts/issues/115)): interactive
+sessions (PTY allocation, the shell channel, `SIGWINCH`/window-change, local
+raw-terminal mode) and encrypted `openssh-key-v1` identities — see
+[Phase 3](#phase-3-interactive-sessions--encrypted-keys-issue-115) below.
 
 ## Module layout
 
@@ -25,14 +29,22 @@ Sources/SSHKit/Lib/
     KnownHostsEntry.swift              one parsed line (plain or hashed)
     HostKeyHashing.swift               |1| HMAC-SHA1 hashed host field
   Identity/
-    IdentityLoader.swift               loads an OPENSSH PRIVATE KEY file
-    OpenSSHPrivateKeyFile.swift        openssh-key-v1 container parser
+    IdentityLoader.swift               loads an OPENSSH PRIVATE KEY file, prompting for an
+                                        encrypted one's passphrase and retrying like ssh(1)
+    OpenSSHPrivateKeyFile.swift        openssh-key-v1 container parser + decrypt
     SSHWireReader.swift                SSH binary wire format (uint32/string/mpint)
+    SSHPassphrasePrompt.swift          /dev/tty passphrase prompt (ssh(1) wording, echo off)
+    BCryptPBKDF.swift                  bcrypt_pbkdf() port (openssh-key-v1's "bcrypt" KDF)
+    Blowfish.swift                     Blowfish primitive BCryptPBKDF's bcrypt_hash() needs
+    SSHIdentityDecryptionError.swift   non-fatal "wrong/declined passphrase" (vs. SSHError)
   Client/
-    SSHClient.swift                    connect + exec
+    SSHClient.swift                    connect + exec/shell, optional PTY
     SSHHostKeyVerifier.swift           NIOSSHClientServerAuthenticationDelegate
     SSHPublicKeyAuthenticationDelegate.swift   NIOSSHClientUserAuthenticationDelegate
-    SSHExecChannel.swift               async stdin/stdout/stderr + exit status
+    SSHExecChannel.swift               async stdin/stdout/stderr + exit status + window-change
+    SSHExecChannelHandler.swift        bridges channel events incl. pty-req success/failure
+    SSHLocalTerminal.swift             local termios/winsize → pty-req; raw-mode enter/leave
+    SSHClientChannelError.swift        connection/channel-level errors (not OpenSSH-worded)
 
 Tests/SSHKitTests/
   Fixtures/                 real ssh-keygen-generated keys, known_hosts, ssh_config
@@ -47,12 +59,13 @@ Tests/SSHTests/              argv and OpenSSH usage/exit-code tests
 convention), `SSHCommand`/`ssh`, and `GitKitSSH` (see
 [below](#gitkitssh-issue-113)) ship today.
 
-`SSHCommand` implements non-interactive `ssh host command` with
-`-p`/`-l`/`-i`/`-o`/`-F`/`-T`. An explicit `-F` file must open, while the
-default `~/.ssh/config` remains optional like OpenSSH. PTY allocation (`-t`)
-and OpenSSH-style verbose diagnostics (`-v`) are not silently ignored: both
-currently take the illegal-option/usage exit-255 path until their behavior is
-implemented in the interactive Phase 3 work (#115).
+`SSHCommand` implements `ssh host [command]` with
+`-p`/`-l`/`-i`/`-o`/`-F`/`-t`/`-T`. An explicit `-F` file must open, while the
+default `~/.ssh/config` remains optional like OpenSSH. A command-less
+invocation opens the login shell (RFC 4254 §6.5 `shell`), exactly like real
+`ssh host` with no trailing command. OpenSSH-style verbose diagnostics (`-v`)
+are still not silently ignored: it takes the illegal-option/usage exit-255
+path, same as any other genuinely unsupported flag.
 
 ## SDK API surface
 
@@ -81,6 +94,18 @@ let status = try await exec.exitStatus
 try await client.close()
 ```
 
+`exec(_:pseudoTerminal:pseudoTerminalRequired:)` and
+`shell(pseudoTerminal:pseudoTerminalRequired:)` both accept an optional
+`SSHChannelRequestEvent.PseudoTerminalRequest` — `SSHLocalTerminal
+.pseudoTerminalRequest()` builds one from the local controlling terminal
+(fd 0: `TERM`, window size, termios mode flags). `pseudoTerminalRequired`
+decides what a rejected `pty-req` does: `true` (an explicit `-t`/`-tt`) throws
+`SSHClientChannelError.pseudoTerminalRequestFailed`; `false` (an automatic
+request, e.g. a command-less login shell) falls back silently to a PTY-less
+session on the same channel. `SSHExecChannel.hasPseudoTerminal` reports which
+actually happened. `SSHExecChannel.sendWindowChange(columns:rows:...)` sends
+a `window-change` request for `SIGWINCH`.
+
 `SSHClient.connect` returns once the TCP connection is up **and**
 host-key verification has resolved — a bad host key fails here,
 immediately, the way real `ssh` aborts before user auth even starts.
@@ -105,18 +130,167 @@ debug promise-leak trap when a connection attempt is abandoned midway.
 - `known_hosts`: plain and hashed (`|1|`) entries, `*`/`?` glob +
   comma-list + `!`-negation host patterns. No `@cert-authority`/`@revoked`
   markers, no `CheckHostIP`, no `VerifyHostKeyDNS`.
-- Keys: unencrypted ed25519 and ECDSA (P-256/384/521) `openssh-key-v1`
-  files only. No RSA, no ssh-agent, no encrypted keys — see Phase 0
-  findings below for why.
+- Keys: ed25519 and ECDSA (P-256/384/521) `openssh-key-v1` files, encrypted
+  or not (see [Phase 3](#phase-3-interactive-sessions--encrypted-keys-issue-115)
+  below). No RSA, no ssh-agent — see Phase 0 findings below for why.
 - Auth: public key only (no password / keyboard-interactive / host-based).
-- Channels: exec only (stdin/stdout/stderr + exit status). No PTY, no
-  port forwarding.
-- No TTY/prompt plumbing. `StrictHostKeyChecking ask`'s interactive
-  confirmation remains part of Phase 3 (#115); until then, `ask`
-  behaves exactly like real `ssh` under `BatchMode=yes` or a non-tty
-  stdin — it fails closed without printing a prompt, because
-  `confirm()` itself returns "no" silently in that case
+- Channels: exec and shell (stdin/stdout/stderr + exit status), optionally
+  with a PTY — see [Phase 3](#phase-3-interactive-sessions--encrypted-keys-issue-115)
+  below. No port forwarding.
+- `StrictHostKeyChecking ask`'s interactive confirmation is still
+  unimplemented: `ask` behaves exactly like real `ssh` under
+  `BatchMode=yes` or a non-tty stdin — it fails closed without printing a
+  prompt, because `confirm()` itself returns "no" silently in that case
   (`sshconnect.c` line 610-611).
+
+## Phase 3: interactive sessions + encrypted keys (issue #115)
+
+### Interactive sessions
+
+`-t`/`-T` (`SSHArguments.requestTTY`, an `.auto`/`.no`/`.yes`/`.force` enum)
+drive `SSHExecutable.shouldAllocatePseudoTerminal(for:stderr:)`, a direct port
+of `ssh.c`'s `tty_flag` derivation (lines ~1378-1398): allocate for `-t`/`-tt`,
+default to allocating when no command was given (a login shell), force off
+for `-T`, then veto unless stdin is a real terminal (`isatty(0)`) — *unless*
+`-tt` (`.force`) said to allocate one regardless. Vetoing a would-have-been
+PTY prints OpenSSH's exact line, `"Pseudo-terminal will not be allocated
+because stdin is not a terminal.\r\n"` (`logit()`'s plain stderr format,
+`log.c`).
+
+A command-less `ssh host` opens `SSHClient.shell(pseudoTerminal:
+pseudoTerminalRequired:)` (RFC 4254 §6.5 `shell`); `ssh host command` opens
+`exec(_:pseudoTerminal:pseudoTerminalRequired:)`. When a PTY was decided,
+`SSHLocalTerminal.pseudoTerminalRequest()` builds the `pty-req`: `TERM` from
+the environment, window size via `ioctl(0, TIOCGWINSZ, …)`, and termios mode
+flags via `tcgetattr(0, …)` encoded by `SSHLocalTerminal.terminalModes(from:)`
+— a port of `ssh_tty_make_modes()` (`ttymodes.c`) covering the
+cross-platform subset of `ttymodes.h`'s `TTYCHAR`/`TTYMODE` table (BSD-only
+characters like `VDSUSP`/`VSTATUS` and flags like `IUCLC`/`XCASE`/`OLCUC`
+that don't exist in Linux's `termios.h` are left out, the same way
+`ttymodes.h`'s own `#ifdef`s drop them there). Verified end-to-end against a
+real throwaway `sshd` (`SSHClientThrowawaySSHDTests
+.execWithPseudoTerminalAgainstRealOpenSSHServer`): it accepts this encoding
+and allocates a PTY from it.
+
+`SSHClient.requestPseudoTerminal(_:required:on:handler:)` always sends
+`pty-req` with `wantReply: true` (`client_session2_setup`'s
+`channel_request_start(ssh, id, "pty-req", 1)`,`clientloop.c`) and waits for
+the peer's `SSH_MSG_CHANNEL_SUCCESS`/`_FAILURE` — surfaced via
+`SSHExecChannelHandler`'s `expectReply(_:)`, armed on the channel's
+`EventLoop` right before the request goes out, and resolved from
+`ChannelSuccessEvent`/`ChannelFailureEvent`. What a `CHANNEL_FAILURE` reply
+does depends on `pseudoTerminalRequired`, mirroring `client_status_confirm`'s
+`CONFIRM_TTY`-vs-`CONFIRM_CLOSE` split (`clientloop.c`): `true` (`-t`/`-tt`
+explicitly asked) throws `SSHClientChannelError.pseudoTerminalRequestFailed`,
+which `SSHExecutable` turns into OpenSSH's fatal `"PTY allocation request
+failed on channel 0\r\n"` and exit 255; `false` (an automatic request) is
+silent — the subsequent `shell`/`exec` request still goes out on the *same*
+channel, without a PTY, exactly like `client_status_confirm`'s non-fatal path
+(`leave_raw_mode(0)`, then carry on). `SSHExecChannel.hasPseudoTerminal`
+reports which actually happened, since the caller can't otherwise tell.
+
+Once a PTY is allocated, `SSHExecutable.relay` puts fd 0 into raw mode via
+`SSHLocalTerminal.enterRawMode()`/`leaveRawMode(_:)` — a line-for-line port of
+`enter_raw_mode()`/`leave_raw_mode()` (`sshtty.c`): `IGNPAR` set;
+`ISTRIP`/`INLCR`/`IGNCR`/`ICRNL`/`IXON`/`IXANY`/`IXOFF` cleared on input;
+`ISIG`/`ICANON`/`ECHO`/`ECHOE`/`ECHOK`/`ECHONL`/`IEXTEN` cleared on local
+flags; `OPOST` cleared on output; `VMIN`=1/`VTIME`=0. Unlike `sshtty.c`'s
+hidden `_saved_tio` static, the prior termios state round-trips through the
+caller (there's no single global session here). A `SIGWINCH` handler
+(`DispatchSource.makeSignalSource`, after `signal(SIGWINCH, SIG_IGN)` per the
+standard GCD idiom) re-reads the window size and calls
+`SSHExecChannel.sendWindowChange(columns:rows:pixelWidth:pixelHeight:)` —
+the client side of `client_check_window_change()`'s `SIGWINCH` poll
+(`clientloop.c`). None of this (raw mode, `SIGWINCH`) runs without an
+allocated PTY, and none of it compiles on Windows (no termios/ioctl there;
+`SSHExecutable` skips straight to the plain relay, which is moot anyway since
+`SSHClient.connect` already traps on Windows — Phase 0 finding 7 below).
+
+### Encrypted private keys
+
+`OpenSSHPrivateKeyFile.parse(_:path:passphrase:)` now decrypts
+`openssh-key-v1` containers whose `cipherName` isn't `"none"`, for
+`kdfname "bcrypt"` with cipher `aes256-ctr` or `aes256-gcm@openssh.com` —
+`ssh-keygen`'s own default for new-format keys and its AEAD alternative.
+Every other cipher/KDF combination raises `SSHError.unsupportedKeyFormat`,
+matching `cipher_by_name()` returning `NULL` (`SSH_ERR_KEY_UNKNOWN_CIPHER`,
+`sshkey.c`).
+
+`BCryptPBKDF.derive(passphrase:salt:rounds:keyLength:)` and `Blowfish.swift`
+are from-scratch Swift ports of `openbsd-compat/bcrypt_pbkdf.c` and
+`openbsd-compat/blowfish.c` — there is no bcrypt_pbkdf implementation
+anywhere in this dependency graph (`swift-crypto` doesn't ship one), so this
+port transcribes the reference algorithm directly: SHA-512 pre/post
+processing (`Crypto.SHA512`) around an Eksblowfish-derived keystream
+("bcrypt_hash", encrypting the 32-byte magic string
+`"OxychromaticBlowfishSwatDynamite"` 64 times), PBKDF2-style iteration, and
+the same non-linear output-interleaving `bcrypt_pbkdf.c` itself documents as
+a deviation from plain PBKDF2. `Blowfish.piS`/`piP` (the S-box/P-box Pi-digit
+tables `Blowfish_initstate` seeds with) are machine-extracted from
+`blowfish.c`'s literal source — not hand-transcribed — and diffed
+byte-for-byte against it (1042 constants, zero mismatches) before being
+pasted into the Swift literal, specifically to rule out hex-transcription
+bugs in a 1042-constant table.
+
+Key material layout and cipher parameters match `private2_decrypt()`
+(`sshkey.c`) and `cipher.c`'s `ciphers[]` table exactly: `bcrypt_pbkdf`
+derives `keyLength + ivLength` bytes (first `keyLength` is the cipher key,
+rest is the IV); `aes256-ctr` is `keyLength: 32, ivLength: 16, authLength: 0`
+(`_CryptoExtras.AES._CTR`, whose 16-byte `Nonce` is exactly the initial
+128-bit CTR counter block); `aes256-gcm@openssh.com` is `keyLength: 32,
+ivLength: 12, authLength: 16` (`Crypto.AES.GCM`, no additional authenticated
+data, matching `cipher_crypt(..., aadlen: 0, authlen)`). `aes256-ctr` has no
+AEAD tag of its own — a wrong passphrase there is caught the same way
+`PROTOCOL.key` §3 intends: the duplicated `checkint1`/`checkint2` fields in
+the decrypted plaintext won't match. A GCM tag mismatch is caught directly by
+`AES.GCM.open` throwing.
+
+Both paths are verified against real `ssh-keygen -o`-encrypted fixtures
+(`Tests/SSHKitTests/Fixtures/id_ed25519_enc_{ctr,gcm}_test`, passphrase
+"correct horse battery staple") in `IdentityLoaderTests` — not just decrypted
+successfully, but checked to produce the exact public key `ssh-keygen -y`
+derives from the same files.
+
+`IdentityLoader.load(path:passphrasePrompt:)` mirrors `load_identity_file`'s
+retry loop (`sshconnect2.c`) exactly: an empty passphrase is always tried
+first (covers both a genuinely unencrypted key and the edge case of an
+empty-passphrase-encrypted one, and means `passphrasePrompt` is never called
+at all for an unencrypted key), then up to 3 prompted retries
+(`NumberOfPasswordPrompts`'s hardcoded default). An empty prompt response
+("no passphrase given, try next key") or an exhausted retry budget
+("bad passphrase given, try again...") both throw
+`SSHIdentityDecryptionError` — deliberately *not* an `SSHError`, since
+neither corresponds to one of OpenSSH's `fatal()` calls; `sshconnect2.c`'s
+`load_identity_file` just returns `NULL` for both and moves on to the next
+identity file. `IdentityLoader.loadAvailable(paths:passphrasePrompt:)`
+catches exactly that and skips the identity, matching that non-fatal
+behavior — only `load(path:)` called directly (an explicit, single
+`IdentityFile`) lets it propagate.
+
+`SSHPassphrasePrompt.readFromTTY` is the default `passphrasePrompt`: opens
+`/dev/tty` (not stdin — this port's callers are commonly non-interactive, and
+a redirected stdin shouldn't see prompt text or have its data mistaken for a
+passphrase), disables `ECHO` via `tcgetattr`/`tcsetattr`, and prints
+`sshconnect2.c`'s exact wording: `"Enter passphrase for key '%.100s': "`.
+Matches `read_passphrase(prompt, 0)`'s behavior (the flags
+`load_identity_file` passes) when no controlling terminal is available and no
+`SSH_ASKPASS` is configured: a missing `/dev/tty` is treated as the user
+declining, with no GUI askpass fallback (out of scope here).
+
+### Deferred: ssh-agent / Secure Enclave signing
+
+Explicitly out of scope for this PR, per the operator's existing plan on
+#111/#115: mainline `apple/swift-nio-ssh` (confirmed again at the version
+pinned in Phase 0 finding 1 below) has **no external-signer hook** —
+`NIOSSHPrivateKey`'s backing store is a closed, internal enum, so an identity
+can only ever be a concrete key type this port decrypts itself, never a
+handle to ssh-agent (`SSH_AUTH_SOCK`) or the Secure Enclave. Adding one needs
+either an upstream change to `swift-nio-ssh` (Citadel's fork shows the shape:
+a `NIOSSHPrivateKeyProtocol` with `signature(for:)`) or a fork of
+`swift-nio-ssh` itself — both bigger decisions than this port makes on its
+own. **TODO for a future phase:** get the operator's sign-off on
+fork-vs-upstream-PR before any ssh-agent/Secure Enclave work starts; nothing
+gets filed upstream without that sign-off either.
 
 ## GitKitSSH (issue #113)
 
@@ -448,6 +622,14 @@ Settled by this PR's own CI, across several rounds:
   will trap on Windows at runtime until `apple/swift-nio-ssh` adds a
   Windows CSPRNG — tracked for the operator, not something a follow-up
   in this repo can fix.
+- **`_CryptoExtras` (issue #115)**: added to `SSHKit`'s dependencies for
+  `AES._CTR` (`aes256-ctr` key decryption). It's a sibling product in the
+  same `swift-crypto` package as `Crypto`, built on the same
+  `CCryptoBoringSSL` C target already exercised on Android via `Crypto`
+  itself — expected to follow the same split as above (library ships,
+  `SSHKitTests` stays dropped), but this PR hasn't independently watched
+  an Android CI run confirm it; verify on the first Android failure if
+  one shows up.
 
 ## Test strategy
 
@@ -455,18 +637,27 @@ Settled by this PR's own CI, across several rounds:
   first-value-wins, bad-option detection), `KnownHostsStore` (plain +
   hashed matching, recording), `IdentityLoader` (round-trips a real
   `ssh-keygen`-generated private key against its own `.pub` file for
-  ed25519 and all three ECDSA curves).
+  ed25519 and all three ECDSA curves — plus, for issue #115, the same
+  round-trip for `aes256-ctr`/`aes256-gcm@openssh.com`-encrypted fixtures,
+  the retry/decline/skip semantics of its passphrase loop, and `-t`/`-T`/
+  `-tt` parsing into `SSHArguments.requestTTY` in `SSHArgumentsParserTests`).
 - **Protocol-level** (every platform except Windows — see the Android /
   Windows section above): `NIOSSH`'s own server role, bootstrapped
   in-process (`Support/InProcessSSHServer.swift`) — exercises KEX,
   host-key verification (OK / new / changed, under every
   `StrictHostKeyChecking` policy), public-key auth (including
-  exhaustion → `permissionDenied`), and a full exec round-trip, without
+  exhaustion → `permissionDenied`), a full exec round-trip, and (issue
+  #115) `shell()`, an accepted `pty-req` + `exec`, and both outcomes of a
+  rejected `pty-req` (fatal when required, silent same-channel fallback
+  when not) via `FixedResponseExecHandler.acceptsPseudoTerminal`, without
   a real OpenSSH daemon.
 - **Integration** (macOS/Linux only): a throwaway, unprivileged
   `sshd(8)` on an ephemeral port with a disposable host key and a
   single `authorized_keys` entry (`Support/ThrowawaySSHD.swift`) — the
-  strongest available proof of wire compatibility with real OpenSSH.
+  strongest available proof of wire compatibility with real OpenSSH,
+  including (issue #115) that real `sshd` accepts this port's `pty-req`
+  wire encoding (term, window size, termios modes) and allocates a PTY
+  from it.
   Skips (doesn't fail) if no system `sshd`/`ssh-keygen` is present.
 - **GitKitSSH, end-to-end** (macOS/Linux only, `GitKitSSHTests`): the
   same throwaway-`sshd` oracle, but driving real `Repository.clone`/
