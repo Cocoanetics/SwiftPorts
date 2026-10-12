@@ -81,6 +81,34 @@ struct SSHConfigTests {
         #expect(resolved.port == 2200)
     }
 
+    /// `readconf.c` validates a keyword's syntax unconditionally at parse time (e.g.
+    /// `oStrictHostKeyChecking`'s multistate lookup runs, and can fail the line, before the
+    /// `*activep` gate is ever consulted) — a malformed value is a bad configuration option even
+    /// inside a `Host` block that doesn't match the host being resolved.
+    @Test func malformedValueInInactiveBlockIsStillABadOption() throws {
+        let config = SSHConfig.parse(
+            "Host other-host\nStrictHostKeyChecking bogus-value\n",
+            source: "inactive-bad.conf"
+        )
+        #expect(throws: SSHError.self) {
+            try config.resolve(host: "example.com")
+        }
+    }
+
+    /// Same rule for a keyword a prior matching block already assigned (first-value-wins only
+    /// gates the *assignment*, not the syntax check) — a later block's malformed value for the same
+    /// keyword is still a bad configuration option, matching `readconf.c`'s `oPort` validating
+    /// `a2port()` before checking `*intptr == -1`.
+    @Test func malformedValueAfterAlreadySetIsStillABadOption() throws {
+        let config = SSHConfig.parse(
+            "Host example.com\nPort 2222\nHost example.com\nPort not-a-number\n",
+            source: "already-set-bad.conf"
+        )
+        #expect(throws: SSHError.self) {
+            try config.resolve(host: "example.com")
+        }
+    }
+
     @Test func missingConfigFileResolvesToDefaults() async throws {
         let config = try await SSHConfig.load(path: "/nonexistent/path/to/ssh_config_\(UUID().uuidString)")
         let resolved = try config.resolve(host: "example.com")

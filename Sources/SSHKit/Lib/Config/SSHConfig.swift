@@ -63,6 +63,12 @@ public struct SSHConfig: Sendable {
                 continue
             }
 
+            // Every keyword below validates its argument's syntax unconditionally, the way
+            // `readconf.c` does (e.g. `oPort`'s "Bad port" / `parse_string`'s "Missing argument"
+            // checks run, and can `goto out` as a bad option, before the `*activep` gate near the
+            // bottom of each case is ever consulted) — only the *assignment* is gated on `active`
+            // and first-value-wins. A malformed or missing value is a bad configuration option
+            // even inside a non-matching `Host` block, or on a keyword a prior block already set.
             switch keyword.lowercased() {
             case "host":
                 active = SSHPatternList.matches(host: host, tokens: args)
@@ -70,40 +76,56 @@ public struct SSHConfig: Sendable {
                 // Match conditionals are unimplemented; a Match block never applies.
                 active = false
             case "hostname":
-                if active, hostName == nil, let value = args.first {
+                guard let value = args.first else {
+                    badOptionCount += 1
+                    break
+                }
+                if active, hostName == nil {
                     hostName = String(value)
                 }
             case "port":
-                if active, port == nil, let value = args.first.flatMap({ Int($0) }) {
-                    port = value
-                } else if active, port == nil {
+                guard let value = args.first.flatMap({ Int($0) }) else {
                     badOptionCount += 1
+                    break
+                }
+                if active, port == nil {
+                    port = value
                 }
             case "user":
-                if active, user == nil, let value = args.first {
+                guard let value = args.first else {
+                    badOptionCount += 1
+                    break
+                }
+                if active, user == nil {
                     user = String(value)
                 }
             case "identityfile":
-                if active, let value = args.first {
+                guard let value = args.first else {
+                    badOptionCount += 1
+                    break
+                }
+                if active {
                     identityFiles.append(String(value))
                 }
             case "identitiesonly":
-                if active, identitiesOnly == nil, let value = args.first.flatMap(Self.parseFlag) {
-                    identitiesOnly = value
-                } else if active, identitiesOnly == nil {
+                guard let value = args.first.flatMap(Self.parseFlag) else {
                     badOptionCount += 1
+                    break
+                }
+                if active, identitiesOnly == nil {
+                    identitiesOnly = value
                 }
             case "userknownhostsfile":
                 if active, userKnownHostsFile == nil, !args.isEmpty {
                     userKnownHostsFile = args.map(String.init)
                 }
             case "stricthostkeychecking":
-                if active, strictHostKeyChecking == nil, let value = args.first {
-                    if let parsed = SSHStrictHostKeyChecking(configValue: String(value)) {
-                        strictHostKeyChecking = parsed
-                    } else {
-                        badOptionCount += 1
-                    }
+                guard let value = args.first, let parsed = SSHStrictHostKeyChecking(configValue: String(value)) else {
+                    badOptionCount += 1
+                    break
+                }
+                if active, strictHostKeyChecking == nil {
+                    strictHostKeyChecking = parsed
                 }
             default:
                 if !Self.recognizedButUnimplementedKeywords.contains(keyword.lowercased()) {
