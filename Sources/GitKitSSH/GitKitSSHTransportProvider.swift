@@ -64,12 +64,35 @@ public struct GitKitSSHTransportProvider: GitSSHTransportProvider {
     /// `<command> '<path>'` — exactly how `GitSSHTransportProvider.openChannel`'s
     /// doc comment (in GitKit's `SSHTransport.swift`) says libgit2 expects the
     /// remote command to be invoked, mirroring what `ssh host "git-upload-pack
-    /// '/repo.git'"` sends today.
+    /// '/repo.git'"` sends today. `path` is shell-quoted (see
+    /// ``shellQuote(_:)``) since it comes straight from a parsed remote URL.
     private static func remoteCommand(for command: GitSSHCommand) -> String {
         switch command {
-        case .uploadPack(let path): return "git-upload-pack '\(path)'"
-        case .receivePack(let path): return "git-receive-pack '\(path)'"
-        case .uploadArchive(let path): return "git-upload-archive '\(path)'"
+        case .uploadPack(let path): return "git-upload-pack \(shellQuote(path))"
+        case .receivePack(let path): return "git-receive-pack \(shellQuote(path))"
+        case .uploadArchive(let path): return "git-upload-archive \(shellQuote(path))"
         }
+    }
+
+    /// Shell-quotes `path` exactly like git's own `sq_quote_buf` (`quote.c`),
+    /// which git's SSH transport uses to build this same remote command:
+    /// wrap in single quotes, and within that, turn each embedded `'` into
+    /// `'\''` (close the quote, emit an escaped literal quote, reopen) and
+    /// each `!` into `'\!'` (close, emit an escaped literal `!`, reopen —
+    /// defends a remote login shell that is csh/tcsh, where `!` triggers
+    /// history expansion even inside single quotes). Without this, a path
+    /// containing `'` would terminate the quoting early and let the rest of
+    /// the path execute as shell syntax on the remote.
+    static func shellQuote(_ path: String) -> String {
+        var quoted = "'"
+        for character in path {
+            switch character {
+            case "'": quoted += "'\\''"
+            case "!": quoted += "'\\!'"
+            default: quoted.append(character)
+            }
+        }
+        quoted += "'"
+        return quoted
     }
 }

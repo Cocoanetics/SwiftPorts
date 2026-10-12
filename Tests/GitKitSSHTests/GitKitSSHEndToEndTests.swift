@@ -240,5 +240,37 @@ struct GitKitSSHEndToEndTests {
             #expect(error.message.contains("Host key verification failed."))
         }
     }
+
+    @Test("a nonexistent remote repository path surfaces the remote's own stderr diagnostic")
+    func nonexistentRemotePathSurfacesRemoteStderr() async throws {
+        let identityPath = try makeIdentity(in: tmp("GitKitSSHIdentity"))
+        guard let sshd = try await ThrowawaySSHD.start(authorizingPublicKeyPath: identityPath + ".pub") else {
+            return
+        }
+        defer { sshd.stop() }
+
+        let knownHostsPath = tmp("GitKitSSHKnownHosts").path
+        try knownHostsLine(hostPublicKeyPath: sshd.hostPublicKeyPath, port: sshd.port)
+            .write(toFile: knownHostsPath, atomically: true, encoding: .utf8)
+
+        let (configPath, alias) = try writeSSHConfig(
+            directory: tmp("GitKitSSHConfig"), port: sshd.port,
+            identityPath: identityPath, knownHostsPath: knownHostsPath)
+
+        try GitSSHTransport.register(GitKitSSHTransportProvider(sshConfigPath: configPath))
+        defer { GitSSHTransport.unregister() }
+
+        let missingPath = tmp("GitKitSSHMissingRepo").path
+        let dest = tmp("GitKitSSHMissingRepoDest")
+        let repo = try Repository.initialize(at: dest, initialBranch: "main")
+        try repo.addRemote(name: "origin", url: URL(string: "ssh://\(alias)\(missingPath)")!)
+
+        do {
+            try repo.fetch(remote: "origin", refspec: "+refs/heads/*:refs/remotes/origin/*", progress: { _ in })
+            Issue.record("expected the fetch to fail against a nonexistent remote path")
+        } catch let error as Libgit2Error {
+            #expect(error.message.contains(missingPath))
+        }
+    }
 }
 #endif

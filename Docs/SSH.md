@@ -117,9 +117,12 @@ Sources/GitKitSSH/
   GitKitSSHTransportProvider.swift    GitSSHTransportProvider over SSHKit
   GitKitSSHChannel.swift              GitSSHChannel bridging SSHExecChannel's async streams
   GitKitSSHBridge.swift                Task + semaphore blocking bridge
+  GitKitSSHStderrCollector.swift       drains one channel's stderr concurrently with stdout
+  GitKitSSHRemoteCommandError.swift    carries a failed remote command's stderr/exit status
 
 Tests/GitKitSSHTests/
-  GitKitSSHEndToEndTests.swift         clone / fetch / push + auth / host-key failure wording
+  GitKitSSHEndToEndTests.swift         clone / fetch / push + auth / host-key / missing-repo failures
+  GitKitSSHTransportProviderQuotingTests.swift   shellQuote unit tests (quote/bang/space/injection)
   Support/ThrowawaySSHD.swift          duplicated from Tests/SSHKitTests/Support (macOS/Linux)
 ```
 
@@ -135,6 +138,13 @@ present) win over the config's. The remote command sent over the exec
 channel is `<command> '<path>'` — `git-upload-pack '/repo.git'`,
 `git-receive-pack '/repo.git'`, or `git-upload-archive '/repo.git'` —
 exactly as `GitSSHTransportProvider.openChannel`'s doc comment specifies.
+`path` is shell-quoted by `GitKitSSHTransportProvider.shellQuote(_:)`,
+matching git's own `sq_quote_buf` (`quote.c`): wrap in single quotes, turn
+each embedded `'` into `'\''` and each `!` into `'\!'` (the latter defends
+a remote login shell that is csh/tcsh, where `!` triggers history
+expansion even inside single quotes) — a path straight from a parsed
+remote URL is otherwise attacker-controlled input reaching a remote shell
+command line.
 
 ### Threading bridge
 
@@ -177,6 +187,26 @@ calls `install()`) keeps libgit2's `ssh_exec` fallback unchanged — which
 is also why `GitKitSSH` had to stay out of `SwiftGit`'s own target
 dependencies.
 
+Within the `git` executable itself, calling `install()` is further gated
+behind an env var, **default off**:
+`SWIFTPORTS_GIT_INPROCESS_SSH=1`. `GitKitSSH` only loads unencrypted
+ed25519/ECDSA identities (no ssh-agent, no RSA, no encrypted keys — see
+the Phase 0 findings below) and has no interactive prompt for
+`StrictHostKeyChecking ask`'s first-connect confirmation (no TTY
+plumbing — see the Scope section above). Registering it unconditionally
+would silently break interactive clones/fetches/pushes that rely on any
+of those (an exhausted-identities failure instead of a working
+ssh-agent/RSA key, or a hard failure instead of OpenSSH's "are you sure
+you want to continue connecting" prompt for a brand-new host). So
+interactive use of this `git` executable keeps libgit2's `ssh_exec`
+fallback — and everything that comes with shelling out to the system
+`ssh(1)` — until Phase 3 (#115) adds agent/RSA/encrypted-key support and
+an interactive prompt to `GitKitSSH` itself. A non-interactive host that
+already fully controls its own `known_hosts` and identities
+(MissionControl, CI) sets the env var, or — equivalently, and the only
+option for a host that embeds `GitKitSSH` as a library rather than
+spawning this `git` executable — calls `GitKitSSH.install()` itself.
+
 ### Error wording
 
 `openChannel`/`read`/`write` propagate `SSHError` values unwrapped.
@@ -188,6 +218,21 @@ GitKit caller as a `Libgit2Error` whose message is OpenSSH's own wording
 (publickey)."), not a GitKitSSH-specific message.
 `GitKitSSHEndToEndTests` asserts both verbatim against a real throwaway
 `sshd`.
+
+`GitKitSSHChannel` also surfaces failures from the remote command itself
+(`git-upload-pack`/`git-receive-pack` exiting non-zero — e.g. the
+repository path doesn't exist on the remote), not just transport-level
+failures. `GitKitSSHStderrCollector` drains the exec channel's stderr
+into a buffer concurrently with `read(into:)` consuming stdout (a
+background `Task` over `SSHExecChannel.stderr`, guarded by a lock since
+it runs alongside the synchronous `read`/`write` calls). When `stdout`
+hits true EOF, `GitKitSSHChannel` checks `SSHExecChannel.exitStatus`
+(already resolved by then — the exit-status event always arrives before
+`SSHExecChannelHandler.channelInactive` finishes both streams); a
+non-zero status throws `GitKitSSHRemoteCommandError`, carrying whatever
+stderr text was collected (or just the exit status, if the remote wrote
+none). Without this, libgit2 would only ever see a generic EOF/protocol
+failure instead of the remote's own diagnostic.
 
 ## Phase 0 findings (verified against source at the pinned commits)
 
