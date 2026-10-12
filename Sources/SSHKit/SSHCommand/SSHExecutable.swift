@@ -85,47 +85,46 @@ public enum SSHExecutable {
         stdout: OutputSink,
         stderr: OutputSink
     ) async throws -> Int32 {
-        try await withThrowingTaskGroup(of: Int32?.self) { group in
-            group.addTask {
-                do {
-                    for await data in stdin.bytes {
-                        try Task.checkCancellation()
-                        try await channel.write(Array(data))
-                    }
-                    try await channel.closeStdin()
-                } catch is CancellationError {
-                    // The remote command exited before local stdin did.
-                } catch {
-                    if !Task.isCancelled { throw error }
-                }
-                return nil
+        let inputTask = Task {
+            for await data in stdin.bytes {
+                try Task.checkCancellation()
+                try await channel.write(Array(data))
             }
-            group.addTask {
-                for await bytes in channel.stdout {
-                    stdout.write(Data(bytes))
-                }
-                return nil
+            try await channel.closeStdin()
+        }
+        async let stdoutRelay: Void = {
+            for await bytes in channel.stdout {
+                stdout.write(Data(bytes))
             }
-            group.addTask {
-                for await bytes in channel.stderr {
-                    stderr.write(Data(bytes))
-                }
-                return nil
+        }()
+        async let stderrRelay: Void = {
+            for await bytes in channel.stderr {
+                stderr.write(Data(bytes))
             }
-            group.addTask {
-                let status = try await channel.exitStatus
-                try await channel.waitUntilClosed()
-                return status
-            }
+        }()
 
-            var exitStatus: Int32?
-            for try await result in group {
-                if let result {
-                    exitStatus = result
-                    group.cancelAll()
-                }
+        do {
+            let status = try await channel.exitStatus
+            try await channel.waitUntilClosed()
+
+            // A remote command may exit while process stdin remains open (the
+            // common terminal case). Stop only that relay; stdout/stderr must
+            // drain their already-buffered final chunks before returning.
+            inputTask.cancel()
+            do {
+                try await inputTask.value
+            } catch is CancellationError {
+                // Expected when the peer exits before local stdin closes.
+            } catch {
+                if !inputTask.isCancelled { throw error }
             }
-            return exitStatus ?? 255
+            _ = await (stdoutRelay, stderrRelay)
+            return status
+        } catch {
+            inputTask.cancel()
+            _ = try? await inputTask.value
+            _ = await (stdoutRelay, stderrRelay)
+            throw error
         }
     }
 }
