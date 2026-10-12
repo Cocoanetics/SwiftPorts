@@ -1267,10 +1267,7 @@ let package = Package(
         // same as `SSHKitTests`/`GitHubTests` — dropped on Android there.
         .testTarget(
             name: "GitKitSSHTests",
-            dependencies: ["GitKitSSH", "SSHKit", .product(name: "GitKit", package: "GitKit")],
-            resources: [
-                .copy("Fixtures"),
-            ]
+            dependencies: ["GitKitSSH", "SSHKit", .product(name: "GitKit", package: "GitKit")]
         ),
 
         // MARK: SQLiteKit umbrella (issue #43)
