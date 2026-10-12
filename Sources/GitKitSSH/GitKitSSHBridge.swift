@@ -88,8 +88,20 @@ private final class GitKitSSHDedicatedThreadExecutor: @unchecked Sendable, Seria
 
     private let condition = NSCondition()
     private var jobs: [QueuedJob] = []
+    private let threadName: String
 
+    // Named from *inside* the closure, once it's actually running as the
+    // thread's entry point, rather than via `thread.name = name` beforehand:
+    // on Linux, `Thread`'s `name` setter only reaches the live pthread when
+    // the thread calling it is the one being named (`pthread_setname_np`'s
+    // single-thread-targeting form) — setting it on a `Thread` that hasn't
+    // started yet silently never reaches the OS thread at all there, so
+    // `Thread.current.name` (and `pthread_getname_np`) keeps reporting
+    // whatever name the process inherited. Darwin doesn't have this gap
+    // (confirmed: this threading suite passes there), but naming from
+    // within the thread works unconditionally on both.
     private lazy var thread: Thread = Thread { [weak self] in
+        Thread.current.name = self?.threadName
         while true {
             guard let self else { return }
             self.condition.lock()
@@ -103,7 +115,7 @@ private final class GitKitSSHDedicatedThreadExecutor: @unchecked Sendable, Seria
     }
 
     init(name: String) {
-        thread.name = name
+        self.threadName = name
         thread.start()
     }
 

@@ -200,6 +200,20 @@ the full pool-starvation guarantee therefore applies only where SE-0417
 is available (and on non-Apple runtimes where the API is unconditionally
 available).
 
+The dedicated thread names itself (`Thread.current.name = ...`) from
+*inside* its own entry closure, rather than via `thread.name = ...` on the
+`Thread` object before calling `start()`. On Linux, `Thread`'s `name`
+setter only reaches the live pthread when the thread calling it is the
+one being named (`pthread_setname_np`'s single-thread-targeting form) —
+setting it on a `Thread` that hasn't started yet is silently dropped
+there, so `Thread.current.name` (and `pthread_getname_np`) keeps
+reporting whatever name the process inherited instead. Darwin doesn't
+have this gap. Caught by `GitKitSSHBridgeThreadingTests.
+runBlockingUsesDedicatedThread` failing only in `build-linux` CI, not
+`build-macos` — reproduced and confirmed fixed against the
+`swift:6.2-jammy` container CI itself uses, not just inferred from
+reading the divergence.
+
 `GitKitSSHChannel` buffers leftover bytes between `read(into:)` calls
 (`SSHExecChannel.stdout` delivers arbitrarily-sized chunks that rarely
 line up with libgit2's requested buffer size) and is `@unchecked
