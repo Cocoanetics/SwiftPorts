@@ -1,3 +1,10 @@
+// `swift-nio-ssh` 0.15.0's own `CSPRNG` traps on any platform other than Darwin/Linux/Android
+// (`Sources/NIOSSH/CSPRNG.swift`: `#if canImport(Darwin) || os(Linux) || os(Android)` else
+// `fatalError("Platform does not have a supported CSPRNG")`) — confirmed by `build-windows` CI
+// crashing with that exact message the moment a real SSH handshake (KEX) runs. Every test here
+// either performs a full handshake or installs a client-side `NIOSSHHandler`, so the whole suite
+// is gated off Windows until upstream adds a Windows CSPRNG; see Docs/SSH.md.
+#if !os(Windows)
 import NIOCore
 import NIOPosix
 import NIOSSH
@@ -220,3 +227,4 @@ struct SSHClientTests {
         }
     }
 }
+#endif

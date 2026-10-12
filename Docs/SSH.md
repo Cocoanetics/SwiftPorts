@@ -156,6 +156,20 @@ failure surfaces the first time `exec(_:)` is called, as
    local `SSHWireReader` — `NIOSSH`'s own wire-format helpers
    (`readSSHString`/`writeSSHHostKey`) are `internal` to that module and
    not visible here.
+7. **`swift-nio-ssh` 0.15.0 cannot run its protocol handshake on
+   Windows at all.** `CSPRNG` (`Sources/NIOSSH/CSPRNG.swift`), which
+   NIOSSH uses internally for protocol-level randomness (KEX ephemeral
+   keys, packet padding), is gated
+   `#if canImport(Darwin) || os(Linux) || os(Android)` and
+   `fatalError("Platform does not have a supported CSPRNG")` on every
+   other platform — confirmed by `build-windows` CI crashing with that
+   exact message the instant a real connection attempted KEX. This is
+   independent of this port's own code: `SSHKit` compiles cleanly on
+   Windows, but any `SSHClient.connect(...)` there will trap. Apple
+   platforms (via `canImport(Darwin)`, covering iOS/tvOS/watchOS too)
+   and Android are both fine. Tracked as a pure upstream gap — worth
+   reporting to `apple/swift-nio-ssh` separately from this port; nothing
+   in `SSHKit` can work around a `fatalError` inside a dependency.
 
 ## OpenSSH message/exit-code fidelity (quoted, with citations)
 
@@ -211,25 +225,35 @@ always exit 255 (OpenSSH's `fatal()`), is quoted from
 
 ## Android / Windows build check
 
-No CI access from this session to actually run
-`skiptools/swift-android-action` or the Windows job — the check the
-plan asks for happens on this PR's own CI run. `SSHKit` (the library)
-is **not** pre-emptively added to `androidDroppedTargets`: it carries
-no `ArgumentParser` dependency (the only Android-specific constraint
-documented in [Android.md](Android.md)), and its other dependencies —
-`swift-nio`/`NIOCore`/`NIOPosix`, `swift-nio-ssh`, and `swift-crypto`'s
-`Crypto` — are each independently exercised on Android elsewhere in
-this graph already (`Crypto` via the `GitHub` target, which Android
-builds and tests). `SSHKitTests` **is** added to
-`androidDroppedTargets`, though: it links that same `Crypto` product's
-BoringSSL C++ target into its xctest bundle, which pollutes the Android
-cross-link exactly the way `GitHubTests` does (§2 in
-[Android.md](Android.md)) — the same reason `GitHubTests` is dropped
-while `GitHub` itself ships there. If CI shows `swift-nio`/`swift-nio-
-ssh` don't cross-compile for Android or Windows as-is beyond that, gate
-`SSHKit` itself in `androidDroppedTargets` (or add a Windows-specific
-carve-out) as a follow-up — the layout keeps this a one-target,
-additive change since nothing else in the repo depends on `SSHKit` yet.
+Settled by this PR's own CI, across several rounds:
+
+- **Android**: `SSHKit` (the library) is **not** added to
+  `androidDroppedTargets`: it carries no `ArgumentParser` dependency
+  (the only Android-specific constraint documented in
+  [Android.md](Android.md)), and its other dependencies —
+  `swift-nio`/`NIOCore`/`NIOPosix`, `swift-nio-ssh`, and
+  `swift-crypto`'s `Crypto` — are each independently exercised on
+  Android elsewhere in this graph already (`Crypto` via the `GitHub`
+  target, which Android builds and tests). `SSHKitTests` **is** added
+  to `androidDroppedTargets`: it links that same `Crypto` product's
+  BoringSSL C++ target into its xctest bundle, which pollutes the
+  Android cross-link exactly the way `GitHubTests` does (§2 in
+  [Android.md](Android.md)) — the same reason `GitHubTests` is dropped
+  while `GitHub` itself ships there. `build-android` is green with this
+  split.
+- **Windows**: `SSHKit` compiles and links cleanly — no target gating
+  needed for the library. But `SSHClientTests` (in `SSHKitTests`), the
+  suite that actually drives a live `NIOSSH` handshake, crashes there:
+  see Phase 0 finding 7 above (`CSPRNG.swift` traps on every non-Darwin/
+  Linux/Android platform). That test file is wrapped in `#if
+  !os(Windows)` — `SSHKitTests`' pure-parsing suites
+  (`SSHConfigTests`, `KnownHostsStoreTests`, `IdentityLoaderTests`,
+  `SSHPatternListTests`, `SSHKnownHostsNameTests`) still run there, and
+  `SSHClientThrowawaySSHDTests` was already macOS/Linux-only. This is a
+  real functional gap, not a CI formality: `SSHClient.connect(...)`
+  will trap on Windows at runtime until `apple/swift-nio-ssh` adds a
+  Windows CSPRNG — tracked for the operator, not something a follow-up
+  in this repo can fix.
 
 ## Test strategy
 
@@ -238,12 +262,13 @@ additive change since nothing else in the repo depends on `SSHKit` yet.
   hashed matching, recording), `IdentityLoader` (round-trips a real
   `ssh-keygen`-generated private key against its own `.pub` file for
   ed25519 and all three ECDSA curves).
-- **Protocol-level** (every platform, including Windows/iOS/Android):
-  `NIOSSH`'s own server role, bootstrapped in-process
-  (`Support/InProcessSSHServer.swift`) — exercises KEX, host-key
-  verification (OK / new / changed, under every `StrictHostKeyChecking`
-  policy), public-key auth (including exhaustion → `permissionDenied`),
-  and a full exec round-trip, without a real OpenSSH daemon.
+- **Protocol-level** (every platform except Windows — see the Android /
+  Windows section above): `NIOSSH`'s own server role, bootstrapped
+  in-process (`Support/InProcessSSHServer.swift`) — exercises KEX,
+  host-key verification (OK / new / changed, under every
+  `StrictHostKeyChecking` policy), public-key auth (including
+  exhaustion → `permissionDenied`), and a full exec round-trip, without
+  a real OpenSSH daemon.
 - **Integration** (macOS/Linux only): a throwaway, unprivileged
   `sshd(8)` on an ephemeral port with a disposable host key and a
   single `authorized_keys` entry (`Support/ThrowawaySSHD.swift`) — the
