@@ -132,7 +132,13 @@ final class ThrowawaySSHD {
     /// Binds a TCP socket to port 0 to let the kernel pick a free port, then releases it — a brief
     /// race window exists before `sshd` binds the same port, acceptable for a throwaway test fixture.
     private static func findEphemeralPort() -> Int? {
-        let socketFD = socket(AF_INET, SOCK_STREAM, 0)
+        #if canImport(Glibc)
+        // Glibc types `SOCK_STREAM` as `__socket_type`, not `Int32` like Darwin's macro constant.
+        let socketType = Int32(SOCK_STREAM.rawValue)
+        #else
+        let socketType = SOCK_STREAM
+        #endif
+        let socketFD = socket(AF_INET, socketType, 0)
         guard socketFD >= 0 else {
             return nil
         }
