@@ -51,8 +51,3 @@ struct SSHWireReader {
         return value
     }
 }
-
-enum SSHWireReaderError: Error {
-    case truncated
-    case invalidUTF8
-}
