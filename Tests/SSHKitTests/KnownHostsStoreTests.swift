@@ -44,6 +44,21 @@ struct KnownHostsStoreTests {
         #expect(store.matchingEntries(forHost: "other-host").isEmpty)
     }
 
+    /// `match_hostname()` in `match.c` lowercases the connection host before comparing it against
+    /// a plain `known_hosts` pattern, so case differences in how a hostname is typed/resolved don't
+    /// cause a spurious "unknown host" failure.
+    @Test func plainEntryMatchingIsCaseInsensitiveOnTheConnectionHost() throws {
+        let store = KnownHostsStore.parse(try SSHKitFixtures.contents("known_hosts_plain"), source: "known_hosts_plain")
+        #expect(store.matchingEntries(forHost: "EXAMPLE.COM").count == 1)
+        #expect(store.matchingEntries(forHost: "Example.Com").count == 1)
+    }
+
+    /// Hashed entries are an HMAC over the literal connection-host bytes — no case folding applies.
+    @Test func hashedEntryMatchingStaysCaseSensitive() throws {
+        let store = KnownHostsStore.parse(try SSHKitFixtures.contents("known_hosts_hashed"), source: "known_hosts_hashed")
+        #expect(store.matchingEntries(forHost: "EXAMPLE.COM").isEmpty)
+    }
+
     @Test func malformedLinesAreSkipped() {
         let store = KnownHostsStore.parse("not-enough-fields\n\n# comment\n@revoked marker ssh-ed25519 AAAA\n", source: "bad")
         #expect(store.entries.isEmpty)

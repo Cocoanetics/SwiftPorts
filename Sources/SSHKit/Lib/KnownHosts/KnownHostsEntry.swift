@@ -32,8 +32,12 @@ public struct KnownHostsEntry: Sendable {
 
     public func matches(host: String) -> Bool {
         if self.hostField.hasPrefix(HostKeyHashing.magic) {
+            // Hashed entries match the literal bytes the HMAC was computed over — no case folding.
             return HostKeyHashing.matches(host: host, hashedField: self.hostField)
         }
-        return SSHPatternList.matches(host: host, tokens: self.hostField.split(separator: ","))
+        // `match_hostname()` in `match.c` (lines 232-240) lowercases the host being looked up
+        // before comparing it against a plain (unhashed) pattern list, so e.g. an `EXAMPLE.COM`
+        // entry still matches a connection to `example.com`.
+        return SSHPatternList.matches(host: host.lowercased(), tokens: self.hostField.split(separator: ","))
     }
 }
