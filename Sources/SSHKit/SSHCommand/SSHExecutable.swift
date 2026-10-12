@@ -1,6 +1,20 @@
 import Foundation
+import ForgeKit
+import NIOSSH
 import ShellKit
 import SSHKit
+#if canImport(Dispatch)
+import Dispatch
+#endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#elseif canImport(Android)
+import Android
+#endif
 
 public enum SSHExecutable {
     @discardableResult
@@ -27,12 +41,7 @@ public enum SSHExecutable {
             return 255
         }
 
-        // Interactive shell and PTY channels are deliberately Phase 3 (#115).
-        // This target is the Phase-1 non-interactive `ssh host command` face.
-        guard !arguments.command.isEmpty else {
-            stderr.write(SSHArgumentsParser.usage)
-            return 255
-        }
+        let ttyFlag = Self.shouldAllocatePseudoTerminal(for: arguments, stderr: stderr)
 
         var client: SSHClient?
         do {
@@ -61,12 +70,29 @@ public enum SSHExecutable {
                 strictHostKeyChecking: hostConfig.strictHostKeyChecking)
             client = connected
 
-            let channel = try await connected.exec(arguments.command.joined(separator: " "))
-            let status = try await relay(
-                channel: channel,
-                stdin: stdin,
-                stdout: stdout,
-                stderr: stderr)
+            let pseudoTerminal = ttyFlag ? Self.pseudoTerminalRequest() : nil
+            let pseudoTerminalRequired = arguments.requestTTY == .yes || arguments.requestTTY == .force
+
+            let channel: SSHExecChannel
+            do {
+                if arguments.command.isEmpty {
+                    channel = try await connected.shell(pseudoTerminal: pseudoTerminal, pseudoTerminalRequired: pseudoTerminalRequired)
+                } else {
+                    channel = try await connected.exec(
+                        arguments.command.joined(separator: " "),
+                        pseudoTerminal: pseudoTerminal,
+                        pseudoTerminalRequired: pseudoTerminalRequired)
+                }
+            } catch SSHClientChannelError.pseudoTerminalRequestFailed {
+                // Only reachable when `pseudoTerminalRequired` — an explicit `-t`/`-tt` — matching
+                // `client_status_confirm` elevating `CONFIRM_TTY` to `CONFIRM_CLOSE` and the whole
+                // connection being `fatal()`'d (`clientloop.c`).
+                try? await connected.close()
+                stderr.write("PTY allocation request failed on channel 0\r\n")
+                return 255
+            }
+
+            let status = try await relay(channel: channel, stdin: stdin, stdout: stdout, stderr: stderr)
             try? await connected.close()
             return status
         } catch let error as SSHError {
@@ -80,7 +106,88 @@ public enum SSHExecutable {
         }
     }
 
+    /// `ssh.c`'s `tty_flag` derivation (lines ~1378-1398): starts from `-t`/`-T`
+    /// (`arguments.requestTTY`), defaults to "allocate when no command was given" (a login shell),
+    /// is forced off by `-T`, and is finally vetoed unless stdin is a real terminal — *unless*
+    /// `-tt` (`.force`) said to allocate one regardless.
+    private static func shouldAllocatePseudoTerminal(for arguments: SSHArguments, stderr: OutputSink) -> Bool {
+        var ttyFlag: Bool
+        switch arguments.requestTTY {
+        case .yes, .force:
+            ttyFlag = true
+        case .auto, .no:
+            ttyFlag = false
+        }
+
+        // "Allocate a tty by default if no command specified."
+        if arguments.command.isEmpty {
+            ttyFlag = arguments.requestTTY != .no
+        }
+
+        if arguments.requestTTY == .no {
+            ttyFlag = false
+        }
+
+        if !TTY.isStdinTTY, arguments.requestTTY != .force {
+            if ttyFlag {
+                // `logit(...)` to stderr (`clientloop.c`/`ssh.c`), the exact wording and CRLF
+                // OpenSSH uses even outside raw mode.
+                stderr.write("Pseudo-terminal will not be allocated because stdin is not a terminal.\r\n")
+            }
+            ttyFlag = false
+        }
+
+        return ttyFlag
+    }
+
+    #if os(Windows)
+    private static func pseudoTerminalRequest() -> SSHChannelRequestEvent.PseudoTerminalRequest? {
+        // No termios/ioctl on Windows to build one from, and `SSHClient.connect` already traps
+        // there before any of this runs (Docs/SSH.md's Phase 0 findings) — never reachable in
+        // practice, just needs to compile.
+        nil
+    }
+    #else
+    private static func pseudoTerminalRequest() -> SSHChannelRequestEvent.PseudoTerminalRequest? {
+        SSHLocalTerminal.pseudoTerminalRequest()
+    }
+    #endif
+
     private static func relay(
+        channel: SSHExecChannel,
+        stdin: InputSource,
+        stdout: OutputSink,
+        stderr: OutputSink
+    ) async throws -> Int32 {
+        #if os(Windows)
+        return try await Self.relayChannel(channel: channel, stdin: stdin, stdout: stdout, stderr: stderr)
+        #else
+        guard channel.hasPseudoTerminal, let savedTerminal = SSHLocalTerminal.enterRawMode() else {
+            return try await Self.relayChannel(channel: channel, stdin: stdin, stdout: stdout, stderr: stderr)
+        }
+        defer { SSHLocalTerminal.leaveRawMode(savedTerminal) }
+
+        // A dedicated queue, not `.main`: this code also runs embedded in other hosts (e.g. a
+        // SwiftBash builtin) whose main entry point may never drain `DispatchQueue.main`.
+        let windowChangeSource = DispatchSource.makeSignalSource(signal: SIGWINCH, queue: DispatchQueue(label: "SSHExecutable.windowChange"))
+        signal(SIGWINCH, SIG_IGN)
+        windowChangeSource.setEventHandler {
+            guard let size = SSHLocalTerminal.windowSize() else { return }
+            Task {
+                try? await channel.sendWindowChange(columns: size.columns, rows: size.rows, pixelWidth: size.pixelWidth, pixelHeight: size.pixelHeight)
+            }
+        }
+        windowChangeSource.resume()
+        defer {
+            windowChangeSource.cancel()
+            signal(SIGWINCH, SIG_DFL)
+        }
+
+        return try await Self.relayChannel(channel: channel, stdin: stdin, stdout: stdout, stderr: stderr)
+        #endif
+    }
+
+    private static func relayChannel(
         channel: SSHExecChannel,
         stdin: InputSource,
         stdout: OutputSink,

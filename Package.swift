@@ -1235,6 +1235,9 @@ let package = Package(
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "Crypto", package: "swift-crypto"),
+                // `AES._CTR`, for decrypting `aes256-ctr`-encrypted `openssh-key-v1` files
+                // (issue #115) — `Crypto` itself only ships AES-GCM.
+                .product(name: "_CryptoExtras", package: "swift-crypto"),
             ],
             path: "Sources/SSHKit/Lib"
         ),
@@ -1249,6 +1252,7 @@ let package = Package(
             name: "SSHCommand",
             dependencies: [
                 "SSHKit",
+                "ForgeKit",
                 .product(name: "ShellKit", package: "ShellKit"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],

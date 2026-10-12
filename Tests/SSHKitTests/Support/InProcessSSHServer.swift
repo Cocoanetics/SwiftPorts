@@ -52,6 +52,9 @@ final class InProcessSSHServer: @unchecked Sendable {
                                     switch execBehavior {
                                     case .fixedResponse:
                                         try childChannel.pipeline.syncOperations.addHandler(FixedResponseExecHandler())
+                                    case .rejectPseudoTerminal:
+                                        try childChannel.pipeline.syncOperations.addHandler(
+                                            FixedResponseExecHandler(acceptsPseudoTerminal: false))
                                     case .echoStdin:
                                         try childChannel.pipeline.syncOperations.addHandler(EchoStdinExecHandler())
                                     }
@@ -83,6 +86,10 @@ final class InProcessSSHServer: @unchecked Sendable {
     /// that write path deterministically: it waits for the client's stdin EOF before responding.
     enum ExecBehavior {
         case fixedResponse
+        /// Like `.fixedResponse`, but replies `SSH_MSG_CHANNEL_FAILURE` to a `pty-req` — for
+        /// exercising the explicit-`-t`-is-fatal vs. auto-request-falls-back-silently split in
+        /// `SSHClient.requestPseudoTerminal`.
+        case rejectPseudoTerminal
         case echoStdin
     }
 }

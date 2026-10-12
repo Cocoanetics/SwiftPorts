@@ -25,6 +25,7 @@ enum SSHArgumentsParser {
         var configFile = "~/.ssh/config"
         var configFileWasSpecified = false
         var directives: [String] = []
+        var requestTTY: SSHRequestTTY = .auto
 
         while index < argv.count {
             let argument = argv[index]
@@ -63,10 +64,13 @@ enum SSHArgumentsParser {
                 while clusterIndex < cluster.count {
                     let option = cluster[clusterIndex]
                     switch option {
+                    case "t":
+                        // `ssh.c`'s `case 't'`: a second `-t` forces a PTY (even without a local
+                        // terminal); otherwise it's just a request that stdin-isn't-a-tty can
+                        // still veto.
+                        requestTTY = (requestTTY == .yes) ? .force : .yes
                     case "T":
-                        // Exec channels never allocate a PTY, so this is already
-                        // the command's effective behavior.
-                        break
+                        requestTTY = .no
                     case "p", "l", "i", "o", "F":
                         let value: String
                         if clusterIndex + 1 < cluster.count {
@@ -152,7 +156,8 @@ enum SSHArgumentsParser {
             configFileWasSpecified: configFileWasSpecified,
             host: destinationHost,
             command: command,
-            configurationDirectives: directives)
+            configurationDirectives: directives,
+            requestTTY: requestTTY)
     }
 
     private static func splitDestination(_ destination: String) throws -> (user: String?, host: String) {
