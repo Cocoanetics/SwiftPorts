@@ -74,9 +74,6 @@ struct SSHArgumentsParserTests {
         #expect(throws: SSHArgumentError.illegalOption("z")) {
             _ = try SSHArgumentsParser.parse(["-z", "example.com", "true"])
         }
-        #expect(throws: SSHArgumentError.illegalOption("t")) {
-            _ = try SSHArgumentsParser.parse(["-t", "example.com", "true"])
-        }
         #expect(throws: SSHArgumentError.illegalOption("v")) {
             _ = try SSHArgumentsParser.parse(["-v", "example.com", "true"])
         }
@@ -86,6 +83,26 @@ struct SSHArgumentsParserTests {
         #expect(throws: SSHArgumentError.badPort("nope")) {
             _ = try SSHArgumentsParser.parse(["-p", "nope", "example.com", "true"])
         }
+    }
+
+    @Test("-t/-T/-tt set requestTTY the way ssh.c's case 't'/'T' do")
+    func requestTTYOptions() throws {
+        let unset = try SSHArgumentsParser.parse(["example.com", "true"])
+        #expect(unset.requestTTY == .auto)
+
+        let forcedOff = try SSHArgumentsParser.parse(["-T", "example.com", "true"])
+        #expect(forcedOff.requestTTY == .no)
+
+        let requested = try SSHArgumentsParser.parse(["-t", "example.com", "true"])
+        #expect(requested.requestTTY == .yes)
+
+        let forced = try SSHArgumentsParser.parse(["-t", "-t", "example.com", "true"])
+        #expect(forced.requestTTY == .force)
+
+        // A later `-T` still wins over an earlier `-t` — each option just overwrites the
+        // tracked state, matching `ssh.c`'s own last-flag-wins switch statement.
+        let lastWins = try SSHArgumentsParser.parse(["-t", "-T", "example.com", "true"])
+        #expect(lastWins.requestTTY == .no)
     }
 
     @Test("missing or malformed destinations print usage")

@@ -53,6 +53,8 @@ public final class SSHClient: @unchecked Sendable {
         }
     }
 
+    /// Connects with identities already decrypted (e.g. `GitKitSSH`'s non-interactive callers,
+    /// which load every available identity up front via `IdentityLoader.loadAvailable`).
     public static func connect(
         host: String,
         port: Int,
@@ -61,6 +63,59 @@ public final class SSHClient: @unchecked Sendable {
         knownHosts: KnownHostsStore,
         userKnownHostsFilePath: String? = nil,
         strictHostKeyChecking: SSHStrictHostKeyChecking = .ask
+    ) async throws -> SSHClient {
+        try await self.connect(
+            host: host,
+            port: port,
+            username: username,
+            knownHosts: knownHosts,
+            userKnownHostsFilePath: userKnownHostsFilePath,
+            strictHostKeyChecking: strictHostKeyChecking
+        ) { exhaustedPromise in
+            SSHPublicKeyAuthenticationDelegate(username: username, identities: identities, exhaustedPromise: exhaustedPromise)
+        }
+    }
+
+    /// Connects with `identityFiles` decrypted lazily, one at a time, only once the authentication
+    /// delegate is actually ready to offer the next one — which never happens before host-key
+    /// verification (or even the TCP connection) succeeds, and never for an identity past the one
+    /// that authenticates. Matches `ssh(1)`'s own `pubkey_prepare`/`userauth_pubkey` timing
+    /// (`sshconnect2.c`): unlike the `identities:` overload above, a passphrase prompt here can
+    /// never happen for an unreachable host, a rejected host key, or an identity the connection
+    /// never actually needed to try (issue #115).
+    public static func connect(
+        host: String,
+        port: Int,
+        username: String,
+        identityFiles: [String],
+        passphrasePrompt: @escaping IdentityLoader.PassphrasePrompt = SSHPassphrasePrompt.readFromTTY,
+        knownHosts: KnownHostsStore,
+        userKnownHostsFilePath: String? = nil,
+        strictHostKeyChecking: SSHStrictHostKeyChecking = .ask
+    ) async throws -> SSHClient {
+        let identitySource = SSHLazyIdentitySource(paths: identityFiles, passphrasePrompt: passphrasePrompt)
+        return try await self.connect(
+            host: host,
+            port: port,
+            username: username,
+            knownHosts: knownHosts,
+            userKnownHostsFilePath: userKnownHostsFilePath,
+            strictHostKeyChecking: strictHostKeyChecking
+        ) { exhaustedPromise in
+            SSHPublicKeyAuthenticationDelegate(username: username, identitySource: identitySource, exhaustedPromise: exhaustedPromise)
+        }
+    }
+
+    /// Everything shared by both `connect` overloads above, parameterized only by how the
+    /// authentication delegate gets its identities.
+    private static func connect(
+        host: String,
+        port: Int,
+        username: String,
+        knownHosts: KnownHostsStore,
+        userKnownHostsFilePath: String?,
+        strictHostKeyChecking: SSHStrictHostKeyChecking,
+        makeAuthDelegate: (EventLoopPromise<Void>) -> SSHPublicKeyAuthenticationDelegate
     ) async throws -> SSHClient {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let completionPromise = group.next().makePromise(of: Void.self)
@@ -75,11 +130,7 @@ public final class SSHClient: @unchecked Sendable {
                 policy: strictHostKeyChecking,
                 completionPromise: completionPromise
             )
-            let authDelegate = SSHPublicKeyAuthenticationDelegate(
-                username: username,
-                identities: identities,
-                exhaustedPromise: exhaustedPromise
-            )
+            let authDelegate = makeAuthDelegate(exhaustedPromise)
 
             let bootstrap = ClientBootstrap(group: group)
                 .channelInitializer { channel in
@@ -158,8 +209,77 @@ public final class SSHClient: @unchecked Sendable {
     }
 
     /// Runs `command` as a single remote exec channel (RFC 4254 §6.5) — the SSH equivalent of
-    /// `ssh host command`.
-    public func exec(_ command: String) async throws -> SSHExecChannel {
+    /// `ssh host command`. `pseudoTerminal`, when non-`nil`, sends a `pty-req` first (`ssh -t host
+    /// command`); its `wantReply` is ignored — this port always requests one, matching
+    /// `client_session2_setup`'s own `channel_request_start(ssh, id, "pty-req", 1)`.
+    /// `pseudoTerminalRequired` controls what a rejected `pty-req` does: see
+    /// `requestPseudoTerminal(_:required:on:handler:)`.
+    public func exec(
+        _ command: String,
+        pseudoTerminal: SSHChannelRequestEvent.PseudoTerminalRequest? = nil,
+        pseudoTerminalRequired: Bool = false
+    ) async throws -> SSHExecChannel {
+        let session = try await self.openSessionChannel()
+        var pseudoTerminalAllocated = false
+        if let pseudoTerminal {
+            do {
+                pseudoTerminalAllocated = try await self.requestPseudoTerminal(
+                    pseudoTerminal, required: pseudoTerminalRequired, on: session.channel, handler: session.handler)
+            } catch {
+                session.channel.close(promise: nil)
+                throw error
+            }
+        }
+        try await session.channel.triggerUserOutboundEvent(SSHChannelRequestEvent.ExecRequest(command: command, wantReply: false)).get()
+        return session.makeExecChannel(hasPseudoTerminal: pseudoTerminalAllocated)
+    }
+
+    /// Requests the authenticated user's login shell (RFC 4254 §6.5) — the SSH equivalent of
+    /// plain `ssh host` with no command. `pseudoTerminal`/`pseudoTerminalRequired` behave as in
+    /// `exec(_:pseudoTerminal:pseudoTerminalRequired:)`.
+    public func shell(
+        pseudoTerminal: SSHChannelRequestEvent.PseudoTerminalRequest? = nil,
+        pseudoTerminalRequired: Bool = false
+    ) async throws -> SSHExecChannel {
+        let session = try await self.openSessionChannel()
+        var pseudoTerminalAllocated = false
+        if let pseudoTerminal {
+            do {
+                pseudoTerminalAllocated = try await self.requestPseudoTerminal(
+                    pseudoTerminal, required: pseudoTerminalRequired, on: session.channel, handler: session.handler)
+            } catch {
+                session.channel.close(promise: nil)
+                throw error
+            }
+        }
+        try await session.channel.triggerUserOutboundEvent(SSHChannelRequestEvent.ShellRequest(wantReply: false)).get()
+        return session.makeExecChannel(hasPseudoTerminal: pseudoTerminalAllocated)
+    }
+
+    /// The pieces common to opening any session channel, before the final request (`pty-req`,
+    /// `exec`, `shell`) that gives it a purpose. `makeExecChannel` defers building the
+    /// `SSHExecChannel` until the caller knows whether a PTY actually ended up allocated.
+    private struct PendingSessionChannel {
+        let channel: Channel
+        let handler: SSHExecChannelHandler
+        let stdout: AsyncStream<[UInt8]>
+        let stderr: AsyncStream<[UInt8]>
+        let exitStatusPromise: EventLoopPromise<Int32>
+
+        func makeExecChannel(hasPseudoTerminal: Bool) -> SSHExecChannel {
+            SSHExecChannel(
+                channel: self.channel,
+                stdout: self.stdout,
+                stderr: self.stderr,
+                exitStatusPromise: self.exitStatusPromise,
+                hasPseudoTerminal: hasPseudoTerminal)
+        }
+    }
+
+    /// Opens a session channel (RFC 4254 §6.1) and installs its `SSHExecChannelHandler`, shared by
+    /// `exec(_:pseudoTerminal:)` and `shell(pseudoTerminal:)` — everything up to the final
+    /// request (`exec`/`shell`) that distinguishes them.
+    private func openSessionChannel() async throws -> PendingSessionChannel {
         let (stdout, stdoutContinuation) = AsyncStream<[UInt8]>.makeStream()
         let (stderr, stderrContinuation) = AsyncStream<[UInt8]>.makeStream()
         let exitStatusPromise = self.channel.eventLoop.makePromise(of: Int32.self)
@@ -206,9 +326,39 @@ public final class SSHClient: @unchecked Sendable {
         // cannot remain pending until deallocation.
         self.authDelegate.exhaustedPromise.fail(SSHClientChannelError.authenticationCompleted)
 
-        try await childChannel.triggerUserOutboundEvent(SSHChannelRequestEvent.ExecRequest(command: command, wantReply: false)).get()
+        return PendingSessionChannel(
+            channel: childChannel, handler: handler, stdout: stdout, stderr: stderr, exitStatusPromise: exitStatusPromise)
+    }
 
-        return SSHExecChannel(channel: childChannel, stdout: stdout, stderr: stderr, exitStatusPromise: exitStatusPromise)
+    /// Sends a `pty-req` and waits for the peer's `SSH_MSG_CHANNEL_SUCCESS`/`_FAILURE`, matching
+    /// `client_session2_setup`'s `channel_request_start(ssh, id, "pty-req", 1)` +
+    /// `client_expect_confirm(ssh, id, "PTY allocation", CONFIRM_TTY)` (`clientloop.c`). Returns
+    /// whether the PTY was actually allocated.
+    ///
+    /// A `CHANNEL_FAILURE` reply only throws `SSHClientChannelError.pseudoTerminalRequestFailed`
+    /// when `required` is `true` — the explicit-`-t` case, where `client_status_confirm` elevates
+    /// `CONFIRM_TTY` to `CONFIRM_CLOSE` and the whole connection is `fatal()`'d. Otherwise (a PTY
+    /// only requested automatically) a rejection is silent: the caller's subsequent `shell`/`exec`
+    /// request still proceeds on this same channel, without a PTY — `client_status_confirm`'s own
+    /// non-fatal path just calls `leave_raw_mode(0)` and carries on.
+    private func requestPseudoTerminal(
+        _ request: SSHChannelRequestEvent.PseudoTerminalRequest,
+        required: Bool,
+        on channel: Channel,
+        handler: SSHExecChannelHandler
+    ) async throws -> Bool {
+        var request = request
+        request.wantReply = true
+        let replyPromise = channel.eventLoop.makePromise(of: Bool.self)
+        try await channel.eventLoop.submit {
+            handler.expectReply(replyPromise)
+        }.get()
+        try await channel.triggerUserOutboundEvent(request).get()
+        let accepted = try await replyPromise.futureResult.get()
+        if !accepted && required {
+            throw SSHClientChannelError.pseudoTerminalRequestFailed
+        }
+        return accepted
     }
 
     /// Closes the connection.

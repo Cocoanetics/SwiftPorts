@@ -12,6 +12,12 @@ final class SSHExecChannelHandler: ChannelInboundHandler, @unchecked Sendable {
     private let stderrContinuation: AsyncStream<[UInt8]>.Continuation
     private let exitStatusPromise: EventLoopPromise<Int32>
 
+    /// Settled by the next `ChannelSuccessEvent`/`ChannelFailureEvent` this channel sees — used
+    /// only for `pty-req`, the one channel request this port sends with `wantReply: true`
+    /// (`client_session2_setup`, `clientloop.c`). Must only be mutated on this channel's
+    /// `EventLoop` (see `SSHClient.requestPseudoTerminal`).
+    private var pendingReplyPromise: EventLoopPromise<Bool>?
+
     init(
         stdoutContinuation: AsyncStream<[UInt8]>.Continuation,
         stderrContinuation: AsyncStream<[UInt8]>.Continuation,
@@ -20,6 +26,12 @@ final class SSHExecChannelHandler: ChannelInboundHandler, @unchecked Sendable {
         self.stdoutContinuation = stdoutContinuation
         self.stderrContinuation = stderrContinuation
         self.exitStatusPromise = exitStatusPromise
+    }
+
+    /// Arms `pendingReplyPromise` for the next channel-request reply. Must be called on this
+    /// channel's `EventLoop`.
+    func expectReply(_ promise: EventLoopPromise<Bool>) {
+        self.pendingReplyPromise = promise
     }
 
     func handlerAdded(context: ChannelHandlerContext) {
@@ -47,6 +59,12 @@ final class SSHExecChannelHandler: ChannelInboundHandler, @unchecked Sendable {
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
         if let exitStatus = event as? SSHChannelRequestEvent.ExitStatus {
             self.exitStatusPromise.succeed(Int32(exitStatus.exitStatus))
+        } else if event is ChannelSuccessEvent {
+            self.pendingReplyPromise?.succeed(true)
+            self.pendingReplyPromise = nil
+        } else if event is ChannelFailureEvent {
+            self.pendingReplyPromise?.succeed(false)
+            self.pendingReplyPromise = nil
         }
         context.fireUserInboundEventTriggered(event)
     }
@@ -55,6 +73,8 @@ final class SSHExecChannelHandler: ChannelInboundHandler, @unchecked Sendable {
         self.stdoutContinuation.finish()
         self.stderrContinuation.finish()
         self.exitStatusPromise.fail(ChannelError.alreadyClosed)
+        self.pendingReplyPromise?.fail(ChannelError.alreadyClosed)
+        self.pendingReplyPromise = nil
         context.fireChannelInactive()
     }
 

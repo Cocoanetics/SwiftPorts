@@ -12,6 +12,17 @@ import Testing
 
 @testable import SSHKit
 
+/// Counts prompt invocations across a `@Sendable` `IdentityLoader.PassphrasePrompt` closure —
+/// sidesteps the "mutation of captured var in concurrently-executing code" diagnostic a plain
+/// `var` would trigger when captured by an `@Sendable` closure.
+private final class PromptCallCounter: @unchecked Sendable {
+    private(set) var count = 0
+
+    func increment() {
+        self.count += 1
+    }
+}
+
 @Suite("SSHClient (in-process NIOSSH server)")
 struct SSHClientTests {
     @Test func execRoundTrip() async throws {
@@ -91,6 +102,176 @@ struct SSHClientTests {
         try await client.close()
     }
 
+    /// `ssh host` with no command — the login-shell / interactive-session face `SSHExecutable`
+    /// uses when `arguments.command.isEmpty` (issue #115).
+    @Test func shellRoundTrip() async throws {
+        let server = try await InProcessSSHServer.start(authentication: .acceptAnyPublicKey)
+        defer { Task { try? await server.shutdown() } }
+
+        let identity = try await IdentityLoader.load(path: SSHKitFixtures.path("id_ed25519_test"))
+        var knownHosts = KnownHostsStore()
+        knownHosts.recordNewHost(
+            SSHKnownHostsName.make(host: "127.0.0.1", port: server.port),
+            publicKey: server.hostKey.publicKey,
+            hashed: false
+        )
+
+        let client = try await SSHClient.connect(
+            host: "127.0.0.1",
+            port: server.port,
+            username: "sshkit-tests",
+            identities: [identity],
+            knownHosts: knownHosts,
+            strictHostKeyChecking: .yes
+        )
+
+        let shell = try await client.shell()
+        #expect(shell.hasPseudoTerminal == false)
+
+        var stdout: [UInt8] = []
+        for await chunk in shell.stdout {
+            stdout.append(contentsOf: chunk)
+        }
+        #expect(try await shell.exitStatus == 0)
+        #expect(String(decoding: stdout, as: UTF8.self) == "shell\n")
+
+        try await client.close()
+    }
+
+    /// `ssh -t host command` — a `pty-req` accepted by the peer, then `exec`, on the same channel.
+    @Test func execWithAcceptedPseudoTerminalRoundTrips() async throws {
+        let server = try await InProcessSSHServer.start(authentication: .acceptAnyPublicKey)
+        defer { Task { try? await server.shutdown() } }
+
+        let identity = try await IdentityLoader.load(path: SSHKitFixtures.path("id_ed25519_test"))
+        var knownHosts = KnownHostsStore()
+        knownHosts.recordNewHost(
+            SSHKnownHostsName.make(host: "127.0.0.1", port: server.port),
+            publicKey: server.hostKey.publicKey,
+            hashed: false
+        )
+
+        let client = try await SSHClient.connect(
+            host: "127.0.0.1",
+            port: server.port,
+            username: "sshkit-tests",
+            identities: [identity],
+            knownHosts: knownHosts,
+            strictHostKeyChecking: .yes
+        )
+
+        let pty = SSHChannelRequestEvent.PseudoTerminalRequest(
+            wantReply: true,
+            term: "xterm",
+            terminalCharacterWidth: 80,
+            terminalRowHeight: 24,
+            terminalPixelWidth: 0,
+            terminalPixelHeight: 0,
+            terminalModes: SSHTerminalModes([:]))
+        let exec = try await client.exec("echo hello", pseudoTerminal: pty, pseudoTerminalRequired: true)
+        #expect(exec.hasPseudoTerminal)
+
+        var stdout: [UInt8] = []
+        for await chunk in exec.stdout {
+            stdout.append(contentsOf: chunk)
+        }
+        #expect(try await exec.exitStatus == 0)
+        #expect(String(decoding: stdout, as: UTF8.self) == "ran: echo hello\n")
+
+        try await client.close()
+    }
+
+    /// `ssh -t host command` against a server that rejects `pty-req`: fatal, matching
+    /// `client_status_confirm` elevating `CONFIRM_TTY` to `CONFIRM_CLOSE` for an explicit request
+    /// (`clientloop.c`).
+    @Test func explicitPseudoTerminalRejectionThrows() async throws {
+        let server = try await InProcessSSHServer.start(authentication: .acceptAnyPublicKey, execBehavior: .rejectPseudoTerminal)
+        defer { Task { try? await server.shutdown() } }
+
+        let identity = try await IdentityLoader.load(path: SSHKitFixtures.path("id_ed25519_test"))
+        var knownHosts = KnownHostsStore()
+        knownHosts.recordNewHost(
+            SSHKnownHostsName.make(host: "127.0.0.1", port: server.port),
+            publicKey: server.hostKey.publicKey,
+            hashed: false
+        )
+
+        let client = try await SSHClient.connect(
+            host: "127.0.0.1",
+            port: server.port,
+            username: "sshkit-tests",
+            identities: [identity],
+            knownHosts: knownHosts,
+            strictHostKeyChecking: .yes
+        )
+
+        let pty = SSHChannelRequestEvent.PseudoTerminalRequest(
+            wantReply: true,
+            term: "xterm",
+            terminalCharacterWidth: 80,
+            terminalRowHeight: 24,
+            terminalPixelWidth: 0,
+            terminalPixelHeight: 0,
+            terminalModes: SSHTerminalModes([:]))
+
+        await #expect(throws: SSHClientChannelError.pseudoTerminalRequestFailed) {
+            _ = try await client.exec("echo hello", pseudoTerminal: pty, pseudoTerminalRequired: true)
+        }
+
+        // The failed attempt's session channel must be closed, not leaked — a subsequent
+        // operation on the same (still-open) connection must still work, proving the client isn't
+        // left holding a dangling, half-open channel from the rejected `pty-req`.
+        let exec = try await client.exec("echo hello")
+        #expect(try await exec.exitStatus == 0)
+
+        try await client.close()
+    }
+
+    /// An automatically-requested PTY (not `-t`) rejected by the peer falls back to a PTY-less
+    /// session on the *same* channel, silently — matching `client_status_confirm`'s non-fatal
+    /// `CONFIRM_TTY` path, which just calls `leave_raw_mode(0)` and carries on.
+    @Test func automaticPseudoTerminalRejectionFallsBackSilently() async throws {
+        let server = try await InProcessSSHServer.start(authentication: .acceptAnyPublicKey, execBehavior: .rejectPseudoTerminal)
+        defer { Task { try? await server.shutdown() } }
+
+        let identity = try await IdentityLoader.load(path: SSHKitFixtures.path("id_ed25519_test"))
+        var knownHosts = KnownHostsStore()
+        knownHosts.recordNewHost(
+            SSHKnownHostsName.make(host: "127.0.0.1", port: server.port),
+            publicKey: server.hostKey.publicKey,
+            hashed: false
+        )
+
+        let client = try await SSHClient.connect(
+            host: "127.0.0.1",
+            port: server.port,
+            username: "sshkit-tests",
+            identities: [identity],
+            knownHosts: knownHosts,
+            strictHostKeyChecking: .yes
+        )
+
+        let pty = SSHChannelRequestEvent.PseudoTerminalRequest(
+            wantReply: true,
+            term: "xterm",
+            terminalCharacterWidth: 80,
+            terminalRowHeight: 24,
+            terminalPixelWidth: 0,
+            terminalPixelHeight: 0,
+            terminalModes: SSHTerminalModes([:]))
+        let shell = try await client.shell(pseudoTerminal: pty, pseudoTerminalRequired: false)
+        #expect(shell.hasPseudoTerminal == false)
+
+        var stdout: [UInt8] = []
+        for await chunk in shell.stdout {
+            stdout.append(contentsOf: chunk)
+        }
+        #expect(try await shell.exitStatus == 0)
+        #expect(String(decoding: stdout, as: UTF8.self) == "shell\n")
+
+        try await client.close()
+    }
+
     @Test func hostKeyMismatchFailsClosed() async throws {
         let server = try await InProcessSSHServer.start(authentication: .acceptAnyPublicKey)
         defer { Task { try? await server.shutdown() } }
@@ -128,6 +309,64 @@ struct SSHClientTests {
                 strictHostKeyChecking: .yes
             )
         }
+    }
+
+    /// A rejected host key must fail before authentication ever starts — so `connect(identityFiles:)`
+    /// (issue #115's lazy loader) must never prompt for an encrypted identity's passphrase on the
+    /// way to that failure, matching real `ssh(1)`: host-key verification (`sshconnect.c`) strictly
+    /// precedes `pubkey_prepare`/`userauth_pubkey` (`sshconnect2.c`).
+    @Test func rejectedHostKeyNeverPromptsForIdentityFiles() async throws {
+        let server = try await InProcessSSHServer.start(authentication: .acceptAnyPublicKey)
+        defer { Task { try? await server.shutdown() } }
+
+        let counter = PromptCallCounter()
+        await #expect(throws: SSHError.self) {
+            _ = try await SSHClient.connect(
+                host: "127.0.0.1",
+                port: server.port,
+                username: "sshkit-tests",
+                identityFiles: [SSHKitFixtures.path("id_ed25519_enc_ctr_test")],
+                passphrasePrompt: { _ in
+                    counter.increment()
+                    return "correct horse battery staple"
+                },
+                knownHosts: KnownHostsStore(),
+                strictHostKeyChecking: .yes
+            )
+        }
+        #expect(counter.count == 0)
+    }
+
+    /// `connect(identityFiles:)` must only decrypt (and prompt for) an identity once it's actually
+    /// offered — so if the *first* configured identity already authenticates, a later encrypted one
+    /// must never be touched at all, matching `userauth_pubkey`'s per-attempt loop (`sshconnect2.c`):
+    /// it returns the moment one attempt succeeds, never reaching the rest of the queue.
+    @Test func laterIdentityIsNeverPromptedOnceAnEarlierOneAuthenticates() async throws {
+        let server = try await InProcessSSHServer.start(authentication: .acceptAnyPublicKey)
+        defer { Task { try? await server.shutdown() } }
+
+        let counter = PromptCallCounter()
+        let client = try await SSHClient.connect(
+            host: "127.0.0.1",
+            port: server.port,
+            username: "sshkit-tests",
+            identityFiles: [
+                SSHKitFixtures.path("id_ed25519_test"),
+                SSHKitFixtures.path("id_ed25519_enc_ctr_test"),
+            ],
+            passphrasePrompt: { _ in
+                counter.increment()
+                return "correct horse battery staple"
+            },
+            knownHosts: KnownHostsStore(),
+            strictHostKeyChecking: .acceptNew
+        )
+
+        let exec = try await client.exec("echo hello")
+        _ = try await exec.exitStatus
+        #expect(counter.count == 0)
+
+        try await client.close()
     }
 
     @Test func newHostUnderAcceptNewSucceeds() async throws {
