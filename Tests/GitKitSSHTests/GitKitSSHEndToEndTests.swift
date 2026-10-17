@@ -12,6 +12,7 @@ import Foundation
 import Testing
 import GitKit
 import GitKitSSH
+import ShellKit
 
 @Suite("GitKitSSH (throwaway sshd)", .serialized)
 struct GitKitSSHEndToEndTests {
@@ -170,6 +171,38 @@ struct GitKitSSHEndToEndTests {
         let remoteSHA = try runGit(["rev-parse", "main"], in: destBare)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         #expect(localSHA == remoteSHA)
+    }
+
+    /// Issue #122: the transport's connection goes through the sandbox of the shell the git
+    /// operation runs in — which also proves `GitKitSSHBridge`'s task carries that shell along.
+    /// No sshd needed: a sandbox that allows no hosts must refuse before anything is dialled
+    /// (nothing listens on port 9, so a dial would fail with a different error).
+    @Test("an SSH fetch is refused by the bound shell's sandbox before dialling")
+    func fetchIsDeniedByTheBoundSandbox() async throws {
+        let root = tmp("GitKitSSHSandboxRoot")
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("home"), withIntermediateDirectories: true)
+        let shell = Shell(environment: Environment(), sandbox: Sandbox.rooted(at: root))
+
+        // The default `~/.ssh/config` — resolved inside the sandbox's home, so the provider gets
+        // as far as dialling before the gate decides.
+        try GitSSHTransport.register(GitKitSSHTransportProvider())
+        defer { GitSSHTransport.unregister() }
+
+        let repo = try Repository.initialize(at: tmp("GitKitSSHSandboxDest"), initialBranch: "main")
+        try repo.addRemote(name: "origin", url: URL(string: "ssh://127.0.0.1:9/repo.git")!)
+
+        let message = await shell.withCurrent {
+            do {
+                try repo.fetch(remote: "origin", refspec: "+refs/heads/*:refs/remotes/origin/*", progress: { _ in })
+                return "fetch unexpectedly succeeded"
+            } catch let error as Libgit2Error {
+                return error.message
+            } catch {
+                return "\(error)"
+            }
+        }
+        #expect(message.contains("host '127.0.0.1' is not in the sandbox allowlist"), "\(message)")
     }
 
     @Test("a clone completes while every cooperative-pool thread is blocked")
