@@ -75,10 +75,11 @@ public struct GitClient: ForgeKit.GitClient {
     ) async throws {
         // Gate the clone source URL (file or network) and the
         // destination directory before handing them to libgit2.
-        // libgit2's internal HTTP/SSH and packfile FS ops are below
-        // this Swift boundary and are not gated by v1 — see #15
-        // open-question § 5.6.
-        try await Shell.authorize(url)
+        // libgit2's internal HTTP and packfile FS ops are below this
+        // Swift boundary and are not gated by v1 — see #15
+        // open-question § 5.6. (SSH connections made through
+        // GitKitSSH authorize their destination themselves, #122.)
+        try await Shell.authorize(Self.authorizationURL(forRemote: url))
         let destURL = directory ?? defaultCloneDirectory(for: url)
         try await Shell.authorize(destURL)
         let progress = shellProgressSink()
