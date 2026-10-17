@@ -11,6 +11,11 @@ import ShellKit
             ("git@github.com:Cocoanetics/SwiftPorts.git", "ssh://git@github.com/Cocoanetics/SwiftPorts.git", "github.com"),
             ("myhost:repo.git", "ssh://myhost/repo.git", "myhost"),
             ("myhost:/srv/git/repo.git", "ssh://myhost/srv/git/repo.git", "myhost"),
+            // Bracketed IPv6 hosts — `URL(string:)` percent-encodes these,
+            // and the address's own colons mustn't end the host.
+            ("git@[::1]:repo.git", "ssh://git@[::1]/repo.git", "::1"),
+            ("[::1]:repo.git", "ssh://[::1]/repo.git", "::1"),
+            ("git@[fe80::1%en0]:repo.git", "ssh://git@[fe80::1%25en0]/repo.git", "fe80::1%en0"),
         ]
         for testCase in cases {
             let remote = try #require(URL(string: testCase.remote))
@@ -51,5 +56,22 @@ import ShellKit
             }
         }
         #expect(denial?.reason == "host 'example.invalid' is not in the sandbox allowlist")
+    }
+
+    @Test func cloneOfBracketedIPv6RemoteIsJudgedByHost() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitClientRemoteAuthorizationTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let shell = Shell(environment: Environment(), sandbox: Sandbox.rooted(at: root))
+
+        let denial = await #expect(throws: Sandbox.Denial.self) {
+            try await shell.withCurrent {
+                try await GitClient(workingDirectory: root).clone(
+                    url: try #require(URL(string: "git@[::1]:repo.git")),
+                    directory: root.appendingPathComponent("repo"))
+            }
+        }
+        #expect(denial?.reason == "host '::1' is not in the sandbox allowlist")
     }
 }
