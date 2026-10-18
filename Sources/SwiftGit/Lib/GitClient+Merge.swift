@@ -201,8 +201,41 @@ extension GitClient {
             // An empty value clears the list, as in git.
             if entry.value.isEmpty { patterns = [] } else { patterns.append(entry.value) }
         }
-        if patterns.contains(where: { Self.glob($0, matches: branch) }) { return subject }
-        return subject + " into " + branch
+        let title = patterns.contains(where: { Self.glob($0, matches: branch) })
+            ? subject : subject + " into " + branch
+        // An annotated tag's message follows, as fmt_merge_msg_sigs adds
+        // it (its signature left out).
+        guard head.description.hasPrefix("tag '"),
+              let message = try await annotatedTagMessage(head.oid), !message.isEmpty
+        else { return title }
+        return title + "\n\n" + message
+    }
+
+    /// The message of annotated tag object `oid`, without a signature
+    /// and trailing whitespace; `nil` when `oid` is no tag object.
+    func annotatedTagMessage(_ oid: String) async throws -> String? {
+        try await withRepository { _ in
+            var repo: OpaquePointer?
+            var tag: OpaquePointer?
+            defer {
+                git_tag_free(tag)
+                git_repository_free(repo)
+            }
+            try Self.check(git_repository_open_ext(&repo, workingDirectory.path, 0, nil))
+            var id = git_oid()
+            guard git_oid_fromstr(&id, oid) == 0, git_tag_lookup(&tag, repo, &id) == 0,
+                  let text = git_tag_message(tag).map({ String(cString: $0) })
+            else { return nil }
+            var message = Substring(text)
+            for marker in ["-----BEGIN PGP SIGNATURE-----", "-----BEGIN SSH SIGNATURE-----",
+                           "-----BEGIN SIGNED MESSAGE-----"] {
+                if let start = message.range(of: "\n" + marker) ?? (message.hasPrefix(marker) ? message.range(of: marker) : nil) {
+                    message = message[..<start.lowerBound]
+                }
+            }
+            while let last = message.last, last.isWhitespace { message = message.dropLast() }
+            return String(message)
+        }
     }
 
     /// `git pull`'s fetch for one branch, and what it marked to merge.
@@ -340,13 +373,14 @@ extension GitClient {
     }
 
     /// Whether glob `pattern` matches `text`, as git's wildmatch does
-    /// for a branch name, over UTF-8 bytes: `*`, `?`, bracket expressions
+    /// for a branch name (with WM_PATHNAME), over UTF-8 bytes: `*`, `**`, `?`, bracket expressions
     /// (`[tw]`, `[a-z]`, `[!x]`, `[^x]`, `[[:alpha:]]`) and `\\`
     /// escaping the next byte.
     static func glob(_ pattern: String, matches text: String) -> Bool {
         let pattern = Array(pattern.utf8), text = Array(text.utf8)
         let (star, question, open, close, backslash, colon, dash, bang, caret): (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8)
             = (0x2a, 0x3f, 0x5b, 0x5d, 0x5c, 0x3a, 0x2d, 0x21, 0x5e)
+        let slash: UInt8 = 0x2f
         /// The end of the bracket expression opening at `p` and whether
         /// it matches `c`, or `nil` when it is malformed (it then matches
         /// nothing, as in wildmatch).
@@ -387,10 +421,25 @@ extension GitClient {
         func match(_ p: Int, _ t: Int) -> Bool {
             if p == pattern.count { return t == text.count }
             switch pattern[p] {
-            case star: return (t...text.count).contains { match(p + 1, $0) }
-            case question: return t < text.count && match(p + 1, t + 1)
+            case star:
+                // `**` between slashes (or the ends) crosses them, `**/`
+                // matching no directory too; any other `*` stays within
+                // a component (WM_PATHNAME, as dest_suppressed uses).
+                if p + 1 < pattern.count, pattern[p + 1] == star,
+                   p == 0 || pattern[p - 1] == slash,
+                   p + 2 == pattern.count || pattern[p + 2] == slash {
+                    if p + 2 < pattern.count, match(p + 3, t) { return true }
+                    return (t...text.count).contains { match(p + 2, $0) }
+                }
+                var end = t
+                while end < text.count, text[end] != slash { end += 1 }
+                var skip = p + 1
+                while skip < pattern.count, pattern[skip] == star { skip += 1 }
+                return (t...end).contains { match(skip, $0) }
+            case question: return t < text.count && text[t] != slash && match(p + 1, t + 1)
             case open:
-                guard t < text.count, let (end, matches) = bracket(p, text[t]) else { return false }
+                guard t < text.count, text[t] != slash,
+                      let (end, matches) = bracket(p, text[t]) else { return false }
                 return matches && match(end, t + 1)
             case backslash where p + 1 < pattern.count:
                 return t < text.count && text[t] == pattern[p + 1] && match(p + 2, t + 1)
