@@ -2,6 +2,7 @@ import Foundation
 import NIOCore
 import NIOPosix
 import NIOSSH
+import ShellKit
 
 /// An in-process, OpenSSH-compatible SSH client connection: TCP connect, host-key verification
 /// against `known_hosts`, and public-key user authentication, on mainline `apple/swift-nio-ssh`
@@ -117,6 +118,13 @@ public final class SSHClient: @unchecked Sendable {
         strictHostKeyChecking: SSHStrictHostKeyChecking,
         makeAuthDelegate: (EventLoopPromise<Void>) -> SSHPublicKeyAuthenticationDelegate
     ) async throws -> SSHClient {
+        // Every other network access in an embedding shell goes through its sandbox's URL gate
+        // (`gh`, `curl`, `git clone`'s source URL); an SSH connection must too, or an embedder's
+        // network policy never sees `ssh` sessions or GitKitSSH fetches and pushes (issue #122).
+        // Checked before any event loop or socket exists; a no-op when no sandbox is bound (the
+        // standalone `ssh`).
+        try await Shell.authorize(self.networkAuthorizationURL(host: host, port: port))
+
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let completionPromise = group.next().makePromise(of: Void.self)
         let exhaustedPromise = group.next().makePromise(of: Void.self)
@@ -206,6 +214,20 @@ public final class SSHClient: @unchecked Sendable {
             }
             throw error
         }
+    }
+
+    /// The destination as the sandbox gate sees it: `ssh://host:port`, bracketing an IPv6 literal
+    /// and percent-encoding anything a URL host can't carry verbatim (an IPv6 zone index, stray
+    /// spaces), so `URL.host` decodes back to exactly the host being dialled. An empty host yields
+    /// a host-less URL, which ShellKit's gates deny.
+    static func networkAuthorizationURL(host: String, port: Int) -> URL {
+        let authority = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+        let encoded = authority.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) ?? authority
+        guard let url = URL(string: "ssh://\(encoded):\(port)") else {
+            // Unreachable after the encoding above; still fail closed rather than skip the gate.
+            return URL(fileURLWithPath: "/dev/null/unauthorizable-ssh-destination")
+        }
+        return url
     }
 
     /// Runs `command` as a single remote exec channel (RFC 4254 §6.5) — the SSH equivalent of
