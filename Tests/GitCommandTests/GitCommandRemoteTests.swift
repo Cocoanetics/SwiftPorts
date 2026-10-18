@@ -1282,6 +1282,67 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "main"], in: remote))
     }
 
+    @Test("git pull into an unborn branch takes its upstream")
+    func pullIntoUnbornBranch() async throws {
+        let seed = tmp("GitRemoteSeed")
+        try FileManager.default.createDirectory(at: seed, withIntermediateDirectories: true)
+        let remote = tmp("GitRemoteBare")
+        try systemGit(["init", "-q", "--bare", "-b", "main", remote.path], in: seed)
+        let clone = tmp("GitRemoteClone")
+        try systemGit(["clone", "-q", remote.path, clone.path], in: seed)
+        try systemGit(["init", "-q", "-b", "main"], in: seed)
+        try commitFile("one.txt", in: seed)
+        try systemGit(["push", "-q", remote.path, "main"], in: seed)
+        // An empty clone's branch has an upstream, but no commit yet.
+        try systemGit(["config", "branch.main.remote", "origin"], in: clone)
+        try systemGit(["config", "branch.main.merge", "refs/heads/main"], in: clone)
+
+        try await git(["pull", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+        #expect(FileManager.default.fileExists(atPath: clone.appendingPathComponent("one.txt").path))
+    }
+
+    @Test("an empty remote.<name>.fetch maps nothing: git pull <remote> merges its HEAD")
+    func pullEmptyFetchRefspec() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try systemGit(["remote", "add", "blank", remote.path], in: clone)
+        try systemGit(["config", "remote.blank.fetch", ""], in: clone)
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        try commitFile("mine.txt", in: clone)
+        try systemGit(["config", "pull.rebase", "false"], in: clone)
+        let theirs = try twin(of: clone)
+        try systemGit(["pull", "-q", "--no-edit", "blank"], in: theirs)
+        try await git(["pull", "-q", "blank"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD^2"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+        let subject = try systemGit(["log", "-1", "--format=%s"], in: clone)
+        #expect(try subject == systemGit(["log", "-1", "--format=%s"], in: theirs))
+    }
+
+    @Test("a branch whose remote is `.` merges its upstream without a source")
+    func pullFromDotRemote() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["switch", "-q", "-c", "side"], in: clone)
+        try commitFile("side.txt", in: clone)
+        try systemGit(["switch", "-q", "-c", "work", "main"], in: clone)
+        try commitFile("work.txt", in: clone)
+        try systemGit(["config", "branch.work.remote", "."], in: clone)
+        try systemGit(["config", "branch.work.merge", "refs/heads/side"], in: clone)
+        try systemGit(["config", "pull.rebase", "false"], in: clone)
+
+        let theirs = try twin(of: clone)
+        try systemGit(["pull", "-q", "--no-edit"], in: theirs)
+        try await git(["pull", "-q"], in: clone)
+        let subject = try systemGit(["log", "-1", "--format=%s"], in: clone)
+        #expect(try subject == systemGit(["log", "-1", "--format=%s"], in: theirs))
+        #expect(subject == "Merge branch 'side' into work")
+    }
+
     @Test("a valueless pull.rebase is true, an empty one false")
     func pullValuelessBoolean() async throws {
         let (remote, clone) = try makeDiverged()

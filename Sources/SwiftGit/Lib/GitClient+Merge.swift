@@ -1,4 +1,5 @@
 import Foundation
+import CGitKit
 import ForgeKit
 import GitKit
 
@@ -95,6 +96,26 @@ extension GitClient {
                         oid: String(fields[0]), isMerge: fields[1] != "not-for-merge",
                         description: String(fields[2]))
                 }
+        }
+    }
+
+    /// The branch HEAD names, born or not (`git symbolic-ref --short
+    /// HEAD`); `nil` when HEAD is detached. GitKit keeps its repository
+    /// handle to itself, so this opens its own.
+    public func symbolicHeadBranch() async throws -> String? {
+        try await withRepository { _ in
+            var repo: OpaquePointer?
+            var head: OpaquePointer?
+            defer {
+                git_reference_free(head)
+                git_repository_free(repo)
+            }
+            try Self.check(git_repository_open_ext(&repo, workingDirectory.path, 0, nil))
+            try Self.check(git_reference_lookup(&head, repo, "HEAD"))
+            guard let target = git_reference_symbolic_target(head).map({ String(cString: $0) }),
+                  target.hasPrefix("refs/heads/")
+            else { return nil }
+            return String(target.dropFirst("refs/heads/".count))
         }
     }
 

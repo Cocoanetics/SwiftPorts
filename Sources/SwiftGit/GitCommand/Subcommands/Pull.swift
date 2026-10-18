@@ -73,7 +73,9 @@ struct Pull: AsyncParsableCommand {
 
     private func pull() async throws {
         let client = CommandContext.gitClient(quiet: quiet)
-        let branch = try await client.currentBranch()
+        // An unborn branch is a branch too.
+        var branch = try await client.currentBranch()
+        if branch == nil { branch = try await client.symbolicHeadBranch() }
 
         // git reads `pull.ff` unless the command line says, and lets a
         // command-line `--rebase`/`--no-rebase` turn its `only` into `--ff`.
@@ -114,13 +116,21 @@ struct Pull: AsyncParsableCommand {
         }
         var wantsMerge = false
         if let fetchFrom {
+            // An empty `remote.<name>.fetch` maps nothing.
             var mapped = false
+            var blank = false
             if remotes.contains(fetchFrom) {
-                mapped = try await client.configGet("remote.\(fetchFrom).fetch") != nil
+                let key = "remote.\(fetchFrom).fetch".lowercased()
+                let values = try await client.configList().filter { $0.name.lowercased() == key }.map(\.value)
+                mapped = values.contains { !$0.isEmpty }
+                blank = !values.isEmpty && !mapped
             }
             let upstreamHere = upstreamMerge != nil && fetchFrom == branchRemote
             if refspecs.isEmpty, !mapped, upstreamHere, let upstreamMerge {
                 refspecs = [upstreamMerge]
+            } else if refspecs.isEmpty, blank {
+                // GitKit reads an empty refspec as one; git fetches HEAD.
+                refspecs = ["HEAD"]
             }
             wantsMerge = !refspecs.isEmpty || !mapped || upstreamHere
             try await client.fetch(remote: fetchFrom, refspecs: refspecs, depth: nil)
@@ -204,7 +214,8 @@ struct Pull: AsyncParsableCommand {
         }
         var mergeMessage = message
         if mergeMessage == nil {
-            mergeMessage = try await client.pullMergeMessage(for: heads, repository: repository)
+            // The repository as typed, or as `branch.<name>.remote` has it.
+            mergeMessage = try await client.pullMergeMessage(for: heads, repository: fetchFrom)
         }
         if heads.count > 1 {
             // git's merge of `FETCH_HEAD`: the heads named by their
