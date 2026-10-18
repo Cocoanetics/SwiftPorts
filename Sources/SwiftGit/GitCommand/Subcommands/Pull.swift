@@ -119,11 +119,16 @@ struct Pull: AsyncParsableCommand {
             // An empty `remote.<name>.fetch` maps nothing.
             var mapped = false
             var blank = false
+            // Without an upstream, git merges the first refspec if it
+            // isn't a pattern.
+            var firstIsExact = false
             if remotes.contains(fetchFrom) {
                 let key = "remote.\(fetchFrom).fetch".lowercased()
                 let values = try await client.configList().filter { $0.name.lowercased() == key }.map(\.value)
-                mapped = values.contains { !$0.isEmpty }
-                blank = !values.isEmpty && !mapped
+                    .filter { !$0.isEmpty }
+                mapped = !values.isEmpty
+                if !mapped { blank = try await client.configGet(key) != nil }
+                firstIsExact = values.first.map { !$0.contains("*") } ?? false
             }
             let upstreamHere = upstreamMerge != nil && fetchFrom == branchRemote
             if refspecs.isEmpty, !mapped, upstreamHere, let upstreamMerge {
@@ -133,6 +138,7 @@ struct Pull: AsyncParsableCommand {
                 refspecs = ["HEAD"]
             }
             wantsMerge = !refspecs.isEmpty || !mapped || upstreamHere
+                || (upstreamMerge == nil && firstIsExact)
             try await client.fetch(remote: fetchFrom, refspecs: refspecs, depth: nil)
         }
         let heads = wantsMerge ? try await client.fetchHeadEntries().filter(\.isMerge) : []

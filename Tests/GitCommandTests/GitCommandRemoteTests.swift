@@ -1343,6 +1343,39 @@ struct GitCommandRemoteTests {
         #expect(subject == "Merge branch 'side' into work")
     }
 
+    @Test("without an upstream, git pull <remote> merges its first exact fetch refspec")
+    func pullFirstExactRefspec() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try systemGit(["config", "remote.origin.fetch", "refs/heads/main:refs/remotes/origin/main"], in: clone)
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        try await git(["pull", "-q", "origin"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+    }
+
+    @Test("git pull of an annotated tag keeps its message in the merge commit")
+    func pullAnnotatedTag() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["tag", "-a", "v1", "-m", "Release one\n\nDetails here."], in: other)
+        try systemGit(["push", "-q", "origin", "main", "v1"], in: other)
+        try commitFile("mine.txt", in: clone)
+        try systemGit(["config", "pull.rebase", "false"], in: clone)
+
+        let theirs = try twin(of: clone)
+        try systemGit(["pull", "-q", "--no-edit", "origin", "v1"], in: theirs)
+        try await git(["pull", "-q", "origin", "v1"], in: clone)
+        let message = try systemGit(["log", "-1", "--format=%B"], in: clone)
+        #expect(try message == systemGit(["log", "-1", "--format=%B"], in: theirs))
+        #expect(message.hasSuffix("Release one\n\nDetails here."))
+    }
+
     @Test("a valueless pull.rebase is true, an empty one false")
     func pullValuelessBoolean() async throws {
         let (remote, clone) = try makeDiverged()
@@ -1369,6 +1402,9 @@ struct GitCommandRemoteTests {
             ("[[:alpha:]]ork", "work", true), ("[[:digit:]]ork", "work", false),
             ("[[:digit:][:lower:]]ork", "work", true), ("[[:bogus:]]ork", "work", false),
             ("?", "é", false), ("??", "é", true), ("[[:alpha:]]", "é", false),
+            ("*", "feature/x", false), ("feature/*", "feature/x", true), ("**", "feature/x", true),
+            ("**/x", "x", true), ("**/x", "a/b/x", true), ("f?ature/x", "f/ature/x", false),
+            ("feature?x", "feature/x", false), ("a**", "a/b", false),
         ] {
             #expect(SwiftGit.GitClient.glob(pattern, matches: branch) == matches, "\(pattern) \(branch)")
         }
