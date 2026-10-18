@@ -441,16 +441,16 @@ extension GitClient {
                 // `**` between slashes (or the ends) crosses them, `**/`
                 // matching no directory too; any other `*` stays within
                 // a component (WM_PATHNAME, as dest_suppressed uses).
-                if p + 1 < pattern.count, pattern[p + 1] == star,
-                   p == 0 || pattern[p - 1] == slash,
-                   p + 2 == pattern.count || pattern[p + 2] == slash {
-                    if p + 2 < pattern.count, match(p + 3, t) { return true }
-                    return (t...text.count).contains { match(p + 2, $0) }
+                // A run of stars counts as one.
+                var skip = p + 1
+                while skip < pattern.count, pattern[skip] == star { skip += 1 }
+                if skip - p > 1, p == 0 || pattern[p - 1] == slash,
+                   skip == pattern.count || pattern[skip] == slash {
+                    if skip < pattern.count, match(skip + 1, t) { return true }
+                    return (t...text.count).contains { match(skip, $0) }
                 }
                 var end = t
                 while end < text.count, text[end] != slash { end += 1 }
-                var skip = p + 1
-                while skip < pattern.count, pattern[skip] == star { skip += 1 }
                 return (t...end).contains { match(skip, $0) }
             case question: return t < text.count && text[t] != slash && match(p + 1, t + 1)
             case open:
