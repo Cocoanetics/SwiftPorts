@@ -919,10 +919,13 @@ struct GitCommandRemoteTests {
         let (_, clone) = try makeRemoteAndClone()
         try systemGit(["config", "--add", "remote.origin.push", "refs/heads/main:refs/heads/main"], in: clone)
         let config = clone.appendingPathComponent(".git/config")
-        let text = try String(contentsOf: config, encoding: .utf8) + "[remote \"origin\"]\n\tpush\n"
-        try text.write(to: config, atomically: true, encoding: .utf8)
-        let line = text.split(separator: "\n", omittingEmptySubsequences: false).count - 1
-        for args in [["push", "-f"], ["push"]] {
+        let original = try String(contentsOf: config, encoding: .utf8)
+        // As `[remote "origin"]`, and in the older `[remote.origin]`.
+        for (header, args) in [("[remote \"origin\"]", ["push", "-f"]), ("[remote \"origin\"]", ["push"]),
+                               ("[remote.origin]", ["push", "-f"])] {
+            let text = original + "\(header)\n\tpush\n"
+            try text.write(to: config, atomically: true, encoding: .utf8)
+            let line = text.split(separator: "\n", omittingEmptySubsequences: false).count - 1
             do {
                 try await git(args, in: clone)
                 Issue.record("expected \(args) to fail")

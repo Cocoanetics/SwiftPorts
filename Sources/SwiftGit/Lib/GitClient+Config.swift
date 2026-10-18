@@ -124,8 +124,17 @@ extension GitClient {
                 // subsection doesn't.
                 let header = line.dropFirst().prefix { $0 != "]" }
                 let pieces = header.split(separator: " ", maxSplits: 1)
-                inSection = pieces.first?.lowercased() == String(parts[0])
-                    && pieces.count == 2 && pieces[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"")) == subsection
+                if pieces.count == 2 {
+                    inSection = pieces[0].lowercased() == String(parts[0])
+                        && pieces[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"")) == subsection
+                } else if let dot = header.firstIndex(of: ".") {
+                    // The older `[remote.origin]`, which git reads with
+                    // the subsection lowercased.
+                    inSection = header[..<dot].lowercased() == String(parts[0])
+                        && header[header.index(after: dot)...].lowercased() == subsection.lowercased()
+                } else {
+                    inSection = false
+                }
                 continue
             }
             if inSection, !line.contains("="), line.lowercased() == variable {
