@@ -222,15 +222,16 @@ struct Merge: AsyncParsableCommand {
         case .conflicts:
             Shell.print("Automatic merge failed; fix conflicts and then commit the result.")
             throw CLIError.stderr([], exitCode: 1)
-        case .headLocked(let lockFile):
+        case .headNotUpdated(let lockFile, let reason):
             // The merge is staged for `git commit`; HEAD couldn't move.
+            // git says why, with a hint where another process holds it.
             if !quiet { Shell.print("Merge made by the 'octopus' strategy.") }
-            throw CLIError.stderr([
-                "fatal: update_ref failed for ref 'HEAD': cannot lock ref 'HEAD': Unable to create '"
-                    + asSeen(lockFile) + "': File exists.",
-                "",
-                "Another git process seems to be running in this repository, or the lock file may be stale",
-            ], exitCode: 128)
+            let unable = "fatal: update_ref failed for ref 'HEAD': cannot lock ref 'HEAD': Unable to create '"
+                + asSeen(lockFile) + "': " + reason
+            let held = reason == "File exists"
+            throw CLIError.stderr(held ? [unable + ".", "",
+                "Another git process seems to be running in this repository, or the lock file may be stale"]
+                : [unable], exitCode: 128)
         case .failed(let failure):
             switch failure {
             case .localChanges(let paths):
