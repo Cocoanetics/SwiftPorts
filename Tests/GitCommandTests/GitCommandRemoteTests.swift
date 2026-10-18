@@ -704,6 +704,40 @@ struct GitCommandRemoteTests {
         try await same(["push", typed, "nothing"], ["push", twinTyped, "nothing"])
     }
 
+    @Test("without a work tree to go to, a relative remote is read from where git runs, as git reads it")
+    func fetchRelativeRemoteFromBareRepository() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let root = tmp("GitRemoteBareBase")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // Two repositories named `target.git`: one beside each starting
+        // point, and one where the top of a work tree would lead.
+        let bare = root.appendingPathComponent("b.git")
+        try systemGit(["clone", "-q", "--bare", remote.path, bare.path], in: clone)
+        try systemGit(["clone", "-q", "--bare", remote.path, root.appendingPathComponent("target.git").path], in: clone)
+        try commitFile("inner.txt", in: clone)
+        try systemGit(["clone", "-q", "--bare", clone.path, bare.appendingPathComponent("target.git").path], in: clone)
+        try systemGit(["clone", "-q", "--bare", clone.path, clone.appendingPathComponent("target.git").path], in: clone)
+        try systemGit(["config", "remote.x.url", "../target.git"], in: bare)
+        try systemGit(["config", "remote.x.url", "../target.git"], in: clone)
+        let sub = bare.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+
+        // Below a bare repository, and inside a work tree's `.git`.
+        for start in [sub, clone.appendingPathComponent(".git")] {
+            let fetchHead = (start == sub ? bare : clone.appendingPathComponent(".git"))
+                .appendingPathComponent("FETCH_HEAD")
+            let expected = try systemGitStderr(["fetch", "x", "main"], in: start)
+            #expect(expected.status == 0)
+            let expectedHead = try String(contentsOf: fetchHead, encoding: .utf8)
+            try FileManager.default.removeItem(at: fetchHead)
+            let fetched = try await gitStderr(["fetch", "x", "main"], in: start)
+            #expect(fetched.stderr == expected.stderr)
+            #expect(fetched.status == 0)
+            #expect(try String(contentsOf: fetchHead, encoding: .utf8) == expectedHead)
+            #expect(expectedHead.hasPrefix(try systemGit(["rev-parse", "HEAD"], in: clone)))
+        }
+    }
+
     @Test("under a path-mapped sandbox, a configured relative remote fetches from the mapped work tree")
     func fetchConfiguredRelativeRemoteUnderPathMapping() async throws {
         let (remote, clone) = try makeRemoteAndClone()

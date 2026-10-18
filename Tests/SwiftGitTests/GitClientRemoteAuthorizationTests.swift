@@ -129,7 +129,9 @@ import ShellKit
         // As the kernel spells it (`/private/var`, on macOS), as libgit2
         // reports the top of the work tree.
         func onDisk(_ path: String) -> String? {
-            realpath(path, nil).map { defer { free($0) }; return String(cString: $0) }
+            guard let resolved = realpath(path, nil) else { return nil }
+            defer { free(resolved) }
+            return String(cString: resolved)
         }
         let base = URL(fileURLWithPath: try #require(onDisk(FileManager.default.temporaryDirectory.path)))
         let root = base.appendingPathComponent("GitClientRemoteAuthorizationTests-\(UUID().uuidString)")

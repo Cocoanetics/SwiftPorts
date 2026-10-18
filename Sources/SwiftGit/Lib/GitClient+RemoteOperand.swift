@@ -37,7 +37,11 @@ extension GitClient {
         // looks on disk first.
         if Self.hasDrivePrefix(remote) { try Self.requireTransport(for: remote) }
         #endif
-        let top = try await withRepository { try $0.toplevel() ?? $0.gitDir() }
+        let top = try await withRepository { repository in
+            Self.remoteBase(
+                top: try repository.toplevel(), gitDir: try repository.gitDir(),
+                workingDirectory: workingDirectory)
+        }
         // A URL isn't a valid remote name, so the lookup throws for it.
         if (try? await remoteExists(named: remote)) == true {
             let configured = try await withRepository { _ in
@@ -56,6 +60,25 @@ extension GitClient {
         let location = Self.connectionLocation(of: rewritten, relativeTo: top)
         try await Self.authorize(location: location)
         return RemoteConnection(remote: remote, location: location)
+    }
+
+    /// Where git reads a relative remote from: the top of the work tree,
+    /// where it chdirs — unless there's no work tree (a bare repository)
+    /// or the command runs inside the git directory, where it stays put
+    /// (`setup_git_directory`), so from `bare.git/sub`, `../x.git` is
+    /// `bare.git/x.git`.
+    static func remoteBase(top: String?, gitDir: String?, workingDirectory: URL) -> String {
+        func onDisk(_ path: String) -> String {
+            URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        }
+        guard let top else { return workingDirectory.path }
+        if let gitDir {
+            let here = onDisk(workingDirectory.path), git = onDisk(gitDir)
+            if here == git || here.hasPrefix(git.hasSuffix("/") ? git : git + "/") {
+                return workingDirectory.path
+            }
+        }
+        return top
     }
 
     /// Where to connect for `location`, a URL or path as git reads it
