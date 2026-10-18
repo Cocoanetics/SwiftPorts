@@ -58,6 +58,13 @@ struct Push: AsyncParsableCommand {
                 for: rejected, currentBranch: try? await client.currentBranch(), quiet: quiet)
         } catch let error as UnsupportedTransportError {
             throw CLIError(error)
+        } catch let error as Libgit2Error
+            where error.message.hasPrefix("src refspec ") || error.message.hasPrefix("dst ref ") {
+            // Refused before anything was sent, in git's words.
+            throw CLIError.stderr([
+                "error: \(error.message)",
+                "error: failed to push some refs to '\(await client.remoteDisplayName(plan.remote))'"
+            ], exitCode: 1)
         }
     }
 

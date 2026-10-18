@@ -370,6 +370,25 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "main"], in: other))
     }
 
+    @Test("a push refused before it starts reads as git's")
+    func pushRefusedUpFront() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        try systemGit(["branch", "dev"], in: clone)
+        for (refspecs, reason) in [
+            (["mian"], "src refspec mian does not match any"),
+            (["main:refs/heads/main", "dev:refs/heads/main"],
+             "dst ref refs/heads/main receives from more than one src")
+        ] {
+            do {
+                try await git(["push", "origin"] + refspecs, in: clone)
+                Issue.record("expected git push \(refspecs) to fail")
+            } catch let error as CLIError {
+                #expect(error.lines == ["error: \(reason)", "error: failed to push some refs to '\(url)'"])
+            }
+        }
+    }
+
     @Test("git fetch and push take a URL or path for <repository>")
     func fetchAndPushAPath() async throws {
         let (remote, clone) = try makeRemoteAndClone()
