@@ -94,11 +94,24 @@ struct Pull: AsyncParsableCommand {
         // dropped since stay dropped.
         var forkPoint: String?
         // Only for the upstream: no refspec, and no other remote named.
-        if rebasing != .no, arguments.count <= 1, let branch {
-            let remote = try await client.configGet("branch.\(branch).remote")
-            if arguments.first == nil || arguments.first == remote,
-               let upstream = try? await client.upstreamBranch(of: branch) {
-                forkPoint = try await Self.forkPoint(of: "refs/remotes/\(upstream)", client: client)
+        if rebasing != .no, arguments.count <= 1, let branch,
+           let remote = try await client.configGet("branch.\(branch).remote"),
+           let merge = try await client.configGet("branch.\(branch).merge"),
+           arguments.first == nil || arguments.first == remote {
+            // The upstream's ref here: the branch itself from `.`, else
+            // where the remote's fetch refspecs put it.
+            let tracking: String?
+            if remote == "." {
+                tracking = merge
+            } else {
+                let key = "remote.\(remote).fetch"
+                let mappings = try await client.configList()
+                    .filter { $0.name.dropFirst(7).dropLast(6) == remote && $0.name.lowercased() == key.lowercased() }
+                    .map(\.value)
+                tracking = Self.destination(of: merge, under: mappings)
+            }
+            if let tracking {
+                forkPoint = try await Self.forkPoint(of: tracking, client: client)
             }
         }
 
@@ -217,7 +230,8 @@ struct Pull: AsyncParsableCommand {
                     "fatal: an interactive rebase (pull.rebase=interactive) is not supported", exitCode: 128)
             }
             if rebasing == .merges,
-               try await client.log(LogQuery(starts: ["HEAD"], excludes: [head.oid])).contains(where: \.isMerge) {
+               try await client.log(LogQuery(starts: ["HEAD"], excludes: [forkPoint ?? head.oid]))
+                .contains(where: \.isMerge) {
                 throw CLIError.stderr(
                     "fatal: rebasing merge commits (pull.rebase=merges) is not supported", exitCode: 128)
             }
@@ -270,6 +284,34 @@ struct Pull: AsyncParsableCommand {
         } else if case .conflicts = outcome {
             try Merge.printOutcome(outcome)
         }
+    }
+
+    /// Where fetch refspecs `refspecs` store remote ref `ref`: the
+    /// destination of the last one that maps it (as git's remote-tracking
+    /// lookup picks it), `nil` when none does or a negative one excludes it.
+    static func destination(of ref: String, under refspecs: [String]) -> String? {
+        let full = ref.hasPrefix("refs/") ? ref : "refs/heads/" + ref
+        var found: String?
+        for refspec in refspecs {
+            if refspec.hasPrefix("^") {
+                if Self.refspecs([String(refspec.dropFirst())], fetch: full) { return nil }
+                continue
+            }
+            let body = refspec.hasPrefix("+") ? refspec.dropFirst() : Substring(refspec)
+            let sides: [Substring] = body.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard sides.count == 2, !sides[1].isEmpty else { continue }
+            let (source, target) = (String(sides[0]), String(sides[1]))
+            if let star = source.firstIndex(of: "*"), let targetStar = target.firstIndex(of: "*") {
+                let prefix = source[..<star], suffix = source[source.index(after: star)...]
+                guard full.count >= prefix.count + suffix.count,
+                      full.hasPrefix(prefix), full.hasSuffix(suffix) else { continue }
+                let middle = full.dropFirst(prefix.count).dropLast(suffix.count)
+                found = String(target[..<targetStar]) + middle + target[target.index(after: targetStar)...]
+            } else if ["", "refs/", "refs/heads/"].contains(where: { $0 + source == full }) {
+                found = target
+            }
+        }
+        return found
     }
 
     /// `git merge-base --fork-point <ref> HEAD`: the newest of `ref`'s

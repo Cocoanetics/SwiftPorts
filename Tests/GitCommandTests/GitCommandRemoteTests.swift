@@ -1280,6 +1280,17 @@ struct GitCommandRemoteTests {
         #expect(subjects == "mine.txt\nnew.txt\none")
     }
 
+    @Test("the fork point follows the remote's own fetch destination")
+    func forkPointDestination() {
+        #expect(Pull.destination(of: "refs/heads/main", under: ["+refs/heads/*:refs/cache/origin/*"])
+                == "refs/cache/origin/main")
+        #expect(Pull.destination(of: "refs/heads/main", under: ["refs/heads/main:refs/remotes/o/m"])
+                == "refs/remotes/o/m")
+        #expect(Pull.destination(of: "refs/heads/dev", under: ["refs/heads/main:refs/remotes/o/m"]) == nil)
+        #expect(Pull.destination(of: "refs/heads/dev",
+                                 under: ["+refs/heads/*:refs/remotes/o/*", "^refs/heads/dev"]) == nil)
+    }
+
     @Test("pull.rebase=merges refuses to flatten local merges")
     func pullRebaseMergesRefusesMerges() async throws {
         let (_, clone) = try makeDiverged()
