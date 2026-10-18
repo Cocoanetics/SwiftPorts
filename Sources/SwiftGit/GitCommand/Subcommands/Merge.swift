@@ -74,7 +74,8 @@ struct Merge: AsyncParsableCommand {
             } catch let err as Libgit2Error where err.message.hasSuffix("not something we can merge") {
                 throw CLIError.stderr(err.message, exitCode: 1)
             }
-            if (try? await client.resolveOID("HEAD")) == nil {
+            // An unborn branch takes one commit: what's left once reduced.
+            if heads.heads.count > 1, (try? await client.resolveOID("HEAD")) == nil {
                 throw CLIError.stderr("fatal: Can merge only exactly one commit into empty head", exitCode: 128)
             }
             // Each head's name, and its object, so an annotated tag's
@@ -295,6 +296,8 @@ struct Merge: AsyncParsableCommand {
             Shell.print("Already up to date.")
 
         case .fastForward(let oldSHA, let newSHA, let summary, let added, let deleted):
+            // An unborn branch just takes the commit, without a word.
+            if oldSHA.allSatisfy({ $0 == "0" }) { return }
             Shell.print("Updating \(String(oldSHA.prefix(7)))..\(String(newSHA.prefix(7)))")
             Shell.print("Fast-forward")
             Shell.print(summary)

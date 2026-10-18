@@ -1755,6 +1755,24 @@ struct GitCommandRemoteTests {
                 == "Merge tags 'te' and 'ta'\n\n# tag 'te'\n\n# tag 'ta'\ntag A")
     }
 
+    @Test("git merge into an unborn branch takes the one head reduction leaves, quietly")
+    func mergeIntoUnbornBranch() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        try systemGit(["switch", "-q", "--orphan", "fresh"], in: clone)
+        // `origin/main` is in `a`'s history: one head is left.
+        let result = try await expectLikeGit(["merge", "origin/main", "origin/a"], in: clone)
+        #expect(result.stdout.isEmpty && result.status == 0)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone) == systemGit(["rev-parse", "origin/a"], in: clone))
+        try systemGit(["switch", "-q", "--orphan", "fresh2"], in: clone)
+        try systemGit(["clean", "-qfd"], in: clone)
+        // Two left: refused, and the branch stays unborn.
+        let copy = try twin(of: clone)
+        let expected = try theirs(["merge", "origin/a", "origin/b"], in: copy)
+        let actual = try await ours(["merge", "origin/a", "origin/b"], in: clone)
+        #expect(actual.status == expected.status && actual.stderr == expected.stderr)
+        #expect(actual.stderr == "fatal: Can merge only exactly one commit into empty head\n")
+    }
+
     @Test("git merge of several heads reduces them, and refuses as git does")
     func mergeOctopusReducesAndRefuses() async throws {
         let clone = try makeOctopusRemoteAndClone()
