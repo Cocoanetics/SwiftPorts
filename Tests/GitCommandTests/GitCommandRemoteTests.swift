@@ -695,7 +695,15 @@ struct GitCommandRemoteTests {
         }
         let expected = try systemGitStderr(["push", twinTyped, "main"], in: twin)
         let refused = try await gitStderr(["push", typed, "main"], in: clone)
-        #expect(refused.stderr == expected.stderr.replacingOccurrences(of: twinTyped, with: typed))
+        // The hints are git 2.54's (see pushRejected); a CI runner's older
+        // git words them differently, so compare the rest.
+        func withoutHints(_ text: String) -> String {
+            text.split(separator: "\n", omittingEmptySubsequences: false)
+                .filter { !$0.hasPrefix("hint: ") }.joined(separator: "\n")
+        }
+        #expect(withoutHints(refused.stderr)
+                == withoutHints(expected.stderr.replacingOccurrences(of: twinTyped, with: typed)))
+        #expect(refused.stderr.contains("\nhint: "))
         #expect(refused.stderr.hasPrefix("To \(typed)\n"))
         #expect(refused.stderr.contains("error: failed to push some refs to '\(typed)'\n"))
         #expect(refused.status == expected.status)
