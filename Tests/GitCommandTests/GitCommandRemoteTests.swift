@@ -432,6 +432,40 @@ struct GitCommandRemoteTests {
         }
     }
 
+    @Test("a destination git can't complete reads as git's, hint and all")
+    func pushUnqualifiedDestination() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        try commitFile("two.txt", in: clone)
+        let expected = [
+            "error: The destination you provided is not a full refname (i.e.,",
+            "starting with \"refs/\"). We tried to guess what you meant by:",
+            "",
+            "- Looking for a ref that matches 'x2' on the remote side.",
+            "- Checking if the <src> being pushed ('HEAD^')",
+            "  is a ref in \"refs/{heads,tags}/\". If so we add a corresponding",
+            "  refs/{heads,tags}/ prefix on the remote side.",
+            "",
+            "Neither worked, so we gave up. You must fully qualify the ref.",
+            "hint: The <src> part of the refspec is a commit object.",
+            "hint: Did you mean to create a new branch by pushing to",
+            "hint: 'HEAD^:refs/heads/x2'?",
+            "error: failed to push some refs to '\(url)'"
+        ]
+        for unqualifiedAdvice in [true, false] {
+            if !unqualifiedAdvice {
+                try systemGit(["config", "advice.pushUnqualifiedRefName", "false"], in: clone)
+            }
+            do {
+                try await git(["push", "origin", "HEAD^:x2"], in: clone)
+                Issue.record("expected git push to fail")
+            } catch let error as CLIError {
+                #expect(error.lines == expected.filter { unqualifiedAdvice || !$0.hasPrefix("hint: ") })
+                #expect(error.exitCode == 1)
+            }
+        }
+    }
+
     @Test("a push refused before it starts reads as git's")
     func pushRefusedUpFront() async throws {
         let (_, clone) = try makeRemoteAndClone()

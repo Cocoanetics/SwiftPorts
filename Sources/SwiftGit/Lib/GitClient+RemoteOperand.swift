@@ -5,13 +5,6 @@ import GitKit
 
 extension GitClient {
 
-    /// How git names `remote` in a push's output: a configured remote's
-    /// push URL (else its URL), or the URL or path as given, without the
-    /// credentials it may carry.
-    public func remoteDisplayName(_ remote: String) async -> String {
-        (try? await withRepository { $0.displayName(ofRemote: remote) }) ?? remote
-    }
-
     /// Which way a remote is used: a push goes to its push URL.
     enum RemoteUse { case fetch, push }
 

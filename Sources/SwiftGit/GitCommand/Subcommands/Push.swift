@@ -59,16 +59,9 @@ struct Push: AsyncParsableCommand {
                 switches: settings.advice)
         } catch let error as UnsupportedTransportError {
             throw CLIError(error)
-        } catch let error as Libgit2Error
-            where ["src refspec ", "dst ref ", "dst refspec ", "unable to delete "]
-                .contains(where: error.message.hasPrefix) {
-            // Refused before anything was sent, in git's words: GitKit
-            // lists every refspec it refused, one per line.
-            let display = await client.remoteDisplayName(plan.remote)
-            throw CLIError.stderr(
-                error.message.split(separator: "\n").map { "error: \($0)" }
-                    + ["error: failed to push some refs to '\(display)'"],
-                exitCode: 1)
+        } catch let refused as PushRefusedError {
+            // Refused before anything was sent, in git's words.
+            throw PushRejectionAdvice.error(for: refused, switches: settings.advice)
         }
     }
 

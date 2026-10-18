@@ -11,16 +11,40 @@ enum PushRejectionAdvice {
         /// The `advice.*` keys that govern push hints.
         static let keys = [
             "pushUpdateRejected", "pushNonFastForward", "pushNonFFCurrent",
-            "pushNonFFMatching", "pushAlreadyExists", "pushFetchFirst", "pushNeedsForce"
+            "pushNonFFMatching", "pushAlreadyExists", "pushFetchFirst", "pushNeedsForce",
+            "pushUnqualifiedRefName"
         ]
         var global = true
         /// Keys configured false, lowercased as git compares them.
         var off: Set<String> = []
 
+        /// A rejected push's hint: its own switch and the umbrella one.
         func enabled(_ key: String) -> Bool {
-            global && ![key, "pushUpdateRejected", "pushNonFastForward"]
+            enabledAlone(key) && !["pushUpdateRejected", "pushNonFastForward"]
                 .contains { off.contains($0.lowercased()) }
         }
+
+        /// A hint only its own switch governs.
+        func enabledAlone(_ key: String) -> Bool {
+            global && !off.contains(key.lowercased())
+        }
+    }
+
+    /// The error for a push git refused before sending anything: each
+    /// refusal's `error:` (a message's further lines as they are) and
+    /// hint, then git's verdict.
+    static func error(for refused: PushRefusedError, switches: Switches = Switches()) -> CLIError {
+        var lines: [String] = []
+        for refusal in refused.refusals {
+            let message = refusal.message.split(separator: "\n", omittingEmptySubsequences: false)
+            lines.append("error: \(message.first ?? "")")
+            lines += message.dropFirst().map(String.init)
+            if let key = refusal.adviceKey, switches.enabledAlone(key) {
+                lines += refusal.hint.map { "hint: \($0)" }
+            }
+        }
+        lines.append("error: failed to push some refs to '\(refused.url)'")
+        return CLIError.stderr(lines, exitCode: 1)
     }
 
     /// The error for `rejected`. With `quiet`, it leads with the push's
