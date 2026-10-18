@@ -122,11 +122,13 @@ struct Pull: AsyncParsableCommand {
             // Without an upstream, git merges the first refspec if it
             // isn't a pattern.
             var firstIsExact = false
+            var mappings: [String] = []
             if remotes.contains(fetchFrom) {
                 let key = "remote.\(fetchFrom).fetch".lowercased()
                 let values = try await client.configList().filter { $0.name.lowercased() == key }.map(\.value)
                     .filter { !$0.isEmpty }
                 mapped = !values.isEmpty
+                mappings = values
                 if !mapped { blank = try await client.configGet(key) != nil }
                 firstIsExact = values.first.map { !$0.contains("*") } ?? false
             }
@@ -140,6 +142,12 @@ struct Pull: AsyncParsableCommand {
             wantsMerge = !refspecs.isEmpty || !mapped || upstreamHere
                 || (upstreamMerge == nil && firstIsExact)
             try await client.fetch(remote: fetchFrom, refspecs: refspecs, depth: nil)
+            // An upstream the mappings don't fetch, git fetches as well
+            // (add_merge_config), into FETCH_HEAD.
+            if refspecs.isEmpty, mapped, upstreamHere, let upstreamMerge,
+               !Self.refspecs(mappings, fetch: upstreamMerge) {
+                try await client.fetch(remote: fetchFrom, refspecs: [upstreamMerge], depth: nil)
+            }
         }
         let heads = wantsMerge ? try await client.fetchHeadEntries().filter(\.isMerge) : []
         guard let head = heads.first else {
@@ -228,6 +236,34 @@ struct Pull: AsyncParsableCommand {
         } else if case .conflicts = outcome {
             try Merge.printOutcome(outcome)
         }
+    }
+
+    /// Whether fetch refspecs `refspecs` fetch remote ref `ref`
+    /// (`refs/heads/x`, or as short as git takes it): one's source names
+    /// or matches it, and no negative one excludes it.
+    static func refspecs(_ refspecs: [String], fetch ref: String) -> Bool {
+        let full = ref.hasPrefix("refs/") ? ref : "refs/heads/" + ref
+        func matches(_ source: Substring) -> Bool {
+            let source = String(source)
+            if let star = source.firstIndex(of: "*") {
+                let prefix = source[..<star], suffix = source[source.index(after: star)...]
+                return full.count >= prefix.count + suffix.count
+                    && full.hasPrefix(prefix) && full.hasSuffix(suffix)
+            }
+            return ["", "refs/", "refs/heads/", "refs/tags/"].contains { $0 + source == full }
+        }
+        var fetched = false
+        for refspec in refspecs {
+            if refspec.hasPrefix("^") {
+                if matches(refspec.dropFirst()) { return false }
+                continue
+            }
+            let body = refspec.hasPrefix("+") ? refspec.dropFirst() : Substring(refspec)
+            if matches(body.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)[0]) {
+                fetched = true
+            }
+        }
+        return fetched
     }
 
     /// `pull.ff`: a boolean (`true` is `--ff`, `false` `--no-ff`) or
@@ -358,7 +394,8 @@ struct Pull: AsyncParsableCommand {
             .last { ["core.commentchar", "core.commentstring"].contains($0.name.lowercased()) }?.value
         guard let configured, !configured.isEmpty else { return "#" }
         guard configured.lowercased() == "auto" else { return configured }
-        let starts = Set(message.split(separator: "\n").compactMap { $0.drop { $0 == " " }.first })
+        // A line's very first character, as git looks at it.
+        let starts = Set(message.split(separator: "\n").compactMap(\.first))
         return "#;@!$%^&|:".first { !starts.contains($0) }.map(String.init) ?? "#"
     }
 

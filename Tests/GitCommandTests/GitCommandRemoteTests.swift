@@ -1357,6 +1357,32 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "main"], in: remote))
     }
 
+    @Test("git pull fetches an upstream the remote's refspecs don't cover")
+    func pullUpstreamNotMapped() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        try systemGit(["push", "-q", "origin", "main:feature"], in: clone)
+        try systemGit(["fetch", "-q"], in: clone)
+        try systemGit(["switch", "-q", "-c", "local", "--track", "origin/feature"], in: clone)
+        try systemGit(["config", "remote.origin.fetch", "refs/heads/main:refs/remotes/origin/main"], in: clone)
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", "-b", "feature", remote.path, other.path], in: clone)
+        try commitFile("feature.txt", in: other)
+        try systemGit(["push", "-q", "origin", "feature"], in: other)
+
+        try await git(["pull", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "feature"], in: remote))
+    }
+
+    @Test("which upstreams fetch refspecs cover")
+    func refspecCoverage() {
+        #expect(Pull.refspecs(["+refs/heads/*:refs/remotes/origin/*"], fetch: "refs/heads/feature"))
+        #expect(!Pull.refspecs(["refs/heads/main:refs/remotes/origin/main"], fetch: "refs/heads/feature"))
+        #expect(Pull.refspecs(["main:refs/remotes/origin/main"], fetch: "refs/heads/main"))
+        #expect(!Pull.refspecs(["refs/heads/*:refs/remotes/origin/*", "^refs/heads/feature"],
+                               fetch: "refs/heads/feature"))
+    }
+
     @Test("git pull of an annotated tag keeps its message in the merge commit")
     func pullAnnotatedTag() async throws {
         let (remote, clone) = try makeRemoteAndClone()
@@ -1404,7 +1430,8 @@ struct GitCommandRemoteTests {
             ("?", "é", false), ("??", "é", true), ("[[:alpha:]]", "é", false),
             ("*", "feature/x", false), ("feature/*", "feature/x", true), ("**", "feature/x", true),
             ("**/x", "x", true), ("**/x", "a/b/x", true), ("f?ature/x", "f/ature/x", false),
-            ("feature?x", "feature/x", false), ("a**", "a/b", false),
+            ("feature?x", "feature/x", false), ("a**", "a/b", false), ("***", "feature/x", true),
+            ("***/x", "a/x", true),
         ] {
             #expect(SwiftGit.GitClient.glob(pattern, matches: branch) == matches, "\(pattern) \(branch)")
         }
