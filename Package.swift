@@ -446,7 +446,7 @@ let package = Package(
         // bump may change API; the family moves minors together
         // (Cocoanetics/SwiftBash#89).
         .package(url: "https://github.com/Cocoanetics/ShellKit",
-                 .upToNextMinor(from: "0.1.0")),
+                 .upToNextMinor(from: "0.1.2")),
 
         // swift-markdown supplies the CommonMark + GFM AST used by
         // GlamKit. We picked it directly rather than going through
@@ -1136,6 +1136,8 @@ let package = Package(
             dependencies: [
                 .target(name: "GitCommand", condition: .when(platforms: commandTestPlatforms)),
                 "SwiftGit", "ForgeKit",
+                // `Shell.parsableCommand`, to run git the way a host shell does.
+                .product(name: "ShellCommandKit", package: "ShellKit"),
             ]
         ),
 
