@@ -63,6 +63,11 @@ public struct GitCommand: AsyncParsableCommand {
     ///   means `always`, and only attaches the value with `=`.
     /// - `-U<n>` becomes `-U <n>` for `diff`.
     /// - `-<n>` becomes `-n <n>` for `log`.
+    /// - For `push`, a bare `--force-with-lease` and
+    ///   `--no-force-with-lease` (and an empty `--force-with-lease=`,
+    ///   which ArgumentParser reads as no value) become values of the one
+    ///   `--force-with-lease` option, so that, as in git, they take
+    ///   effect in the order given among its `=<ref>[:<expect>]` forms.
     ///
     /// Tokens after a standalone `--` are pathspecs and pass through
     /// untouched, so `git diff -- --color` still filters a file literally
@@ -95,6 +100,12 @@ public struct GitCommand: AsyncParsableCommand {
                       arg.dropFirst().allSatisfy(\.isNumber) {
                 out.append("-n")
                 out.append(String(arg.dropFirst()))
+            } else if !afterDoubleDash, subcommand == "push", arg == "--force-with-lease" {
+                out.append("--force-with-lease=\(Push.leaseAll)")
+            } else if !afterDoubleDash, subcommand == "push", arg == "--force-with-lease=" {
+                out.append("--force-with-lease=\(Push.leaseEmpty)")
+            } else if !afterDoubleDash, subcommand == "push", arg == "--no-force-with-lease" {
+                out.append("--force-with-lease=\(Push.leaseNone)")
             } else {
                 out.append(arg)
             }

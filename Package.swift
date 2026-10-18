@@ -425,8 +425,11 @@ let package = Package(
         // and `git push` need to apply them as git does. GitKit 2.5.0
         // pushes what git's rules allow and reports the rest as
         // `PushRejectedError`, which `git push` turns into git's verdict.
+        // GitKit 2.7.0 adds per-ref force-with-lease (`PushLeases`) and
+        // which tags a fetch brings (`FetchTags`), which `git push
+        // --force-with-lease` and `git fetch --tags`/`--no-tags` need.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.5.0",
+                 from: "2.7.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
