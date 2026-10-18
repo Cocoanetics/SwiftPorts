@@ -67,8 +67,15 @@ import Testing
         #expect(GitClient.urlScheme(of: "+x://host/r") == nil)
         try GitClient.requireTransport(for: "ssh://host/r.git")
         try GitClient.requireTransport(for: "git@host:r.git")
-        #expect(throws: NoRemoteHelperError(scheme: "foo")) {
+        #expect(throws: UnsupportedTransportError.noHelper(scheme: "foo")) {
             try GitClient.requireTransport(for: "foo://host/r.git")
+        }
+        // `://` after anything but a scheme: git knows no such protocol.
+        for (remote, name) in [("a_://host/r", "a_"), ("+x://host/r", "+x"),
+                               ("foo/bar://host/r", "foo/bar"), ("me@host:path://x", "me@host:path")] {
+            #expect(throws: UnsupportedTransportError.protocolNotSupported(name)) {
+                try GitClient.requireTransport(for: remote)
+            }
         }
     }
 

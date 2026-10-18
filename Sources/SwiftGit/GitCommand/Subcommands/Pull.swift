@@ -56,7 +56,7 @@ struct Pull: AsyncParsableCommand {
     func run() async throws {
         do {
             try await pull()
-        } catch let error as NoRemoteHelperError {
+        } catch let error as UnsupportedTransportError {
             throw CLIError(error)
         }
     }

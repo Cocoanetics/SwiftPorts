@@ -35,7 +35,7 @@ public struct CLIError: Error, LocalizedError {
 
 extension CLIError {
     /// git's words, and exit status, for a URL no transport handles.
-    init(_ error: NoRemoteHelperError) {
+    init(_ error: UnsupportedTransportError) {
         self.init(lines: error.lines, exitCode: 128)
     }
 

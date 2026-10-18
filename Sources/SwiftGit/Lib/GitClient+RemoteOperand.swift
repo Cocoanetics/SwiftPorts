@@ -34,18 +34,11 @@ extension GitClient {
             #if os(Windows)
             if Self.hasDrivePrefix(location) { try Self.requireTransport(for: location) }
             #endif
-            if Self.isURLOrSCPLike(location) {
-                try Self.requireTransport(for: location)
-                try await Self.authorizeURL(location)
-            } else {
-                // libgit2 reads a configured path as the process's, so
-                // that's the path to authorize.
-                try await Shell.authorize(URL(fileURLWithPath: location))
-            }
+            try await Self.authorize(location: location)
             return remote
         }
         let top = try await withRepository { try $0.toplevel() ?? $0.gitDir() }
-        return try await remoteForLibgit2(remote, relativeTo: top)
+        return try await remoteForLibgit2(remote, relativeTo: top, for: use, in: workingDirectory)
     }
 
     /// Where libgit2 connects for configured remote `name`: its URL
@@ -68,6 +61,41 @@ extension GitClient {
         return String(cString: location)
     }
 
+    /// Where libgit2 connects for `spelling`, a URL or path as it gets it:
+    /// after `url.<base>.insteadOf` (and `pushInsteadOf` for a push),
+    /// through an anonymous remote of the repository at `directory`, or
+    /// of the default configuration without one, as for a clone.
+    static func effectiveLocation(of spelling: String, for use: RemoteUse, in directory: URL?) throws -> String {
+        var repo: OpaquePointer?
+        var remote: OpaquePointer?
+        defer {
+            git_remote_free(remote)
+            git_repository_free(repo)
+        }
+        if let directory {
+            try check(git_repository_open_ext(&repo, directory.path, 0, nil))
+            try check(git_remote_create_anonymous(&remote, repo, spelling))
+        } else {
+            var options = git_remote_create_options()
+            try check(git_remote_create_options_init(&options, UInt32(GIT_REMOTE_CREATE_OPTIONS_VERSION)))
+            try check(git_remote_create_with_opts(&remote, spelling, &options))
+        }
+        let pushURL = use == .push ? git_remote_pushurl(remote) : nil
+        return (pushURL ?? git_remote_url(remote)).map { String(cString: $0) } ?? spelling
+    }
+
+    /// Authorize where libgit2 connects: a URL or scp-style remote by its
+    /// host, refusing one git has no transport for; a path as the process
+    /// reads it.
+    static func authorize(location: String) async throws {
+        if isURLOrSCPLike(location) {
+            try requireTransport(for: location)
+            try await authorizeURL(location)
+        } else {
+            try await Shell.authorize(URL(fileURLWithPath: location))
+        }
+    }
+
     /// Authorize a URL or scp-style remote by the host it reaches. One
     /// `URL(string:)` can't read as typed is read percent-encoded, so a
     /// sandbox still sees its host; one that still can't be read is
@@ -87,29 +115,37 @@ extension GitClient {
     }
 
     /// A remote as git takes it — a URL, a scp-style `[user@]host:path`
-    /// or a path — authorized like a clone source and ready for
-    /// libgit2. URLs and scp-style remotes pass through exactly as typed;
-    /// a relative path resolves against `directory`, else the shell's
-    /// working directory, since libgit2 would read it relative to the
-    /// process's.
-    func remoteForLibgit2(_ remote: String, relativeTo directory: String? = nil) async throws -> String {
+    /// or a path — ready for libgit2. URLs and scp-style remotes pass
+    /// through exactly as typed; a relative path resolves against
+    /// `directory`, else the shell's working directory, since libgit2
+    /// would read it relative to the process's. libgit2 then applies
+    /// `url.<base>.insteadOf` from the repository at `repository` (or the
+    /// default configuration, for a clone), so what's authorized is
+    /// where it connects after that.
+    func remoteForLibgit2(
+        _ remote: String, relativeTo directory: String? = nil,
+        for use: RemoteUse = .fetch, in repository: URL? = nil
+    ) async throws -> String {
+        var spelling = remote
         if Self.isURLOrSCPLike(remote) {
             try Self.requireTransport(for: remote)
-            try await Self.authorizeURL(remote)
-            return remote
+        } else {
+            if let directory, Self.isRelativePath(remote) {
+                // Joined in the shell's spelling of the directory, so a
+                // sandbox's path mapping applies to the result as it does
+                // to any path a script names.
+                var base = Shell.displayPath(for: directory)
+                while base.count > 1, base.hasSuffix("/") { base.removeLast() }
+                spelling = base.hasSuffix("/") ? base + remote : base + "/" + remote
+            }
+            spelling = Shell.resolve(spelling).path
         }
-        var spelling = remote
-        if let directory, Self.isRelativePath(remote) {
-            // Joined in the shell's spelling of the directory, so a
-            // sandbox's path mapping applies to the result as it does to
-            // any path a script names.
-            var base = Shell.displayPath(for: directory)
-            while base.count > 1, base.hasSuffix("/") { base.removeLast() }
-            spelling = base.hasSuffix("/") ? base + remote : base + "/" + remote
+        let source = spelling
+        let location = try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+            try Self.effectiveLocation(of: source, for: use, in: repository)
         }
-        let path = Shell.resolve(spelling)
-        try await Shell.authorize(path)
-        return path.path
+        try await Self.authorize(location: location)
+        return spelling
     }
 
     /// Whether git reads `path` as relative (`is_absolute_path`): on
@@ -153,11 +189,17 @@ extension GitClient {
         return String(scheme)
     }
 
-    /// Refuses, as git does, a URL whose scheme no transport handles;
-    /// libgit2 would take any `scheme://host` for SSH.
+    /// Refuses, as git does, a remote no transport handles: a URL whose
+    /// scheme has no helper, or `://` after something that isn't a scheme
+    /// at all, which git's own transports take and find no protocol for
+    /// (`get_protocol`). libgit2 would take either for SSH.
     static func requireTransport(for remote: String) throws {
-        if let scheme = urlScheme(of: remote), !transportSchemes.contains(scheme) {
-            throw NoRemoteHelperError(scheme: scheme)
+        guard let separator = remote.range(of: "://") else { return }
+        guard let scheme = urlScheme(of: remote) else {
+            throw UnsupportedTransportError.protocolNotSupported(String(remote[..<separator.lowerBound]))
+        }
+        guard transportSchemes.contains(scheme) else {
+            throw UnsupportedTransportError.noHelper(scheme: scheme)
         }
     }
 
@@ -319,15 +361,22 @@ extension GitClient {
     }
 }
 
-/// A URL whose scheme git has no transport for: git looks for a
-/// `git-remote-<scheme>` helper, finds none and gives up.
-public struct NoRemoteHelperError: Error, LocalizedError, Equatable {
-    public let scheme: String
+/// A remote git has no transport for.
+public enum UnsupportedTransportError: Error, LocalizedError, Equatable {
+    /// A URL whose scheme has no `git-remote-<scheme>` helper.
+    case noHelper(scheme: String)
+    /// `://` after something that isn't a URL scheme.
+    case protocolNotSupported(String)
 
     /// What git prints, `fatal:` and all.
     public var lines: [String] {
-        ["git: 'remote-\(scheme)' is not a git command. See 'git --help'.",
-         "fatal: remote helper '\(scheme)' aborted session"]
+        switch self {
+        case .noHelper(let scheme):
+            ["git: 'remote-\(scheme)' is not a git command. See 'git --help'.",
+             "fatal: remote helper '\(scheme)' aborted session"]
+        case .protocolNotSupported(let name):
+            ["fatal: protocol '\(name)' is not supported"]
+        }
     }
 
     public var errorDescription: String? { lines.joined(separator: "\n") }

@@ -80,7 +80,7 @@ struct Fetch: AsyncParsableCommand {
             } else {
                 try await client.fetch(remote: name, refspecs: refspecs, depth: depth, prune: prune)
             }
-        } catch let error as NoRemoteHelperError {
+        } catch let error as UnsupportedTransportError {
             throw CLIError(error)
         }
         // Progress and per-ref summaries are written by GitClient's

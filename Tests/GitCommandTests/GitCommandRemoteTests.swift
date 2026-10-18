@@ -509,6 +509,13 @@ struct GitCommandRemoteTests {
                 #expect(error.exitCode == 128)
             }
         }
+        do {
+            try await git(["fetch", "a_://host/repo"], in: clone)
+            Issue.record("expected git fetch to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == ["fatal: protocol 'a_' is not supported"])
+            #expect(error.exitCode == 128)
+        }
     }
 
     @Test("git refuses a bad push.default before anything else")

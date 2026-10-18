@@ -51,7 +51,7 @@ struct Push: AsyncParsableCommand {
         do {
             pushed = try await client.push(
                 remote: plan.remote, refspecs: plan.refspecs, setUpstream: upstream)
-        } catch let error as NoRemoteHelperError {
+        } catch let error as UnsupportedTransportError {
             throw CLIError(error)
         }
         // Like git, confirm each upstream recorded, for a URL or path too.

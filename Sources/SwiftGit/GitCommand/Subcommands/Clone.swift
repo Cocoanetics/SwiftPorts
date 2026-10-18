@@ -74,7 +74,7 @@ struct Clone: AsyncParsableCommand {
                 depth: depth,
                 singleBranch: singleBranch || depth != nil,
                 branch: branch)
-        } catch let error as NoRemoteHelperError {
+        } catch let error as UnsupportedTransportError {
             throw CLIError(error)
         }
 

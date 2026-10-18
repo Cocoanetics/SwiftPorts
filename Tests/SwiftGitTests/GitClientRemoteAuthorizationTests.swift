@@ -102,9 +102,18 @@ import ShellKit
             // A scheme no transport handles is refused, as git refuses
             // it, rather than taken for SSH.
             try await client.addRemote(name: "weird", remote: "foo://example.invalid/r.git")
-            await #expect(throws: NoRemoteHelperError(scheme: "foo")) {
+            await #expect(throws: UnsupportedTransportError.noHelper(scheme: "foo")) {
                 try await client.fetch(remote: "weird", refspecs: [], depth: nil)
             }
+
+            // A typed remote is judged after libgit2's insteadOf too: a
+            // scp-style `short:` and a path inside the sandbox both lead
+            // out to the blocked host.
+            #expect(await denial { try await client.fetch(remote: "short:repo.git", refspecs: [], depth: nil) }?
+                .reason == hostDenied)
+            try await client.configSet("url.https://example.invalid/.insteadOf", inside.path)
+            #expect(await denial { try await client.fetch(remote: inside.path, refspecs: [], depth: nil) }?
+                .reason == hostDenied)
         }
     }
 
