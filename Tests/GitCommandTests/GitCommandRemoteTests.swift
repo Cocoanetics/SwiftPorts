@@ -1298,6 +1298,154 @@ struct GitCommandRemoteTests {
         #expect(try systemGit(["log", "-1", "--format=%P"], in: empty).split(separator: " ").count == 2)
     }
 
+    // MARK: octopus merges
+
+    /// The clone of a remote whose `a` and `b` change the first and last
+    /// line of `f`, `x` its first line as `a` does, but differently, and
+    /// whose `main` the clone has gone past with a commit of its own.
+    private func makeOctopusRemoteAndClone() throws -> URL {
+        let (_, clone) = try makeRemoteAndClone()
+        try Data("1\n2\n3\n4\n5\n6\n7\n".utf8).write(to: clone.appendingPathComponent("f"))
+        try systemGit(["add", "f"], in: clone)
+        try systemGit(["commit", "-q", "-m", "f"], in: clone)
+        try systemGit(["push", "-q", "origin", "main"], in: clone)
+        for (branch, text) in [("a", "1a\n2\n3\n4\n5\n6\n7\n"), ("b", "1\n2\n3\n4\n5\n6\n7b\n"),
+                               ("x", "1x\n2\n3\n4\n5\n6\n7\n")] {
+            try systemGit(["switch", "-q", "-c", branch, "main"], in: clone)
+            try Data(text.utf8).write(to: clone.appendingPathComponent("f"))
+            try systemGit(["commit", "-q", "-am", branch], in: clone)
+            try systemGit(["push", "-q", "origin", branch], in: clone)
+        }
+        try systemGit(["switch", "-q", "main"], in: clone)
+        try commitFile("mine.txt", in: clone)
+        return clone
+    }
+
+    /// SwiftPorts' `git` as the system `git` sees it: exit status, stdout
+    /// and stderr, refusals included.
+    private func ours(_ args: [String], in dir: URL) async throws -> (status: Int32, stdout: String, stderr: String) {
+        let out = OutputSink(), err = OutputSink()
+        let shell = Shell(stdout: out, stderr: err,
+                          environment: Environment(variables: [:], workingDirectory: dir.path))
+        var status: Int32 = 0
+        var diagnostic = ""
+        try await shell.withCurrent {
+            do {
+                let parsed = try GitCommand.parseAsRoot(args)
+                if var command = parsed as? AsyncParsableCommand {
+                    try await command.run()
+                } else {
+                    var command = parsed
+                    try command.run()
+                }
+            } catch let error as CLIError {
+                status = error.exitCode
+                diagnostic = error.diagnostic
+            }
+        }
+        out.finish()
+        err.finish()
+        return (status, await out.readAllString(), await err.readAllString() + diagnostic)
+    }
+
+    /// The system `git`'s exit status, stdout and stderr for `args`.
+    private func theirs(_ args: [String], in dir: URL) throws -> (status: Int32, stdout: String, stderr: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + args
+        process.currentDirectoryURL = dir
+        let out = Pipe(), err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+        try process.run()
+        let stdout = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let stderr = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        return (process.terminationStatus, stdout, stderr)
+    }
+
+    /// What a merge leaves: HEAD's tree, parents and message, the status,
+    /// and the merge state for the commit that concludes it.
+    private func mergeState(of repo: URL) throws -> [String] {
+        let gitDir = repo.appendingPathComponent(".git")
+        return [try systemGit(["log", "-1", "--format=%T %P%n%B"], in: repo),
+                try systemGit(["status", "--porcelain"], in: repo)]
+            + ["MERGE_HEAD", "MERGE_MSG", "MERGE_MODE"].map {
+                (try? String(contentsOf: gitDir.appendingPathComponent($0), encoding: .utf8)) ?? "-"
+            }
+    }
+
+    /// Expects SwiftPorts' `git` to do in `repo` what the system `git`
+    /// does in a copy of it: the same output, exit status and result.
+    @discardableResult
+    private func expectLikeGit(
+        _ args: [String], in repo: URL, sourceLocation: SourceLocation = #_sourceLocation
+    ) async throws -> (status: Int32, stdout: String, stderr: String) {
+        let copy = try twin(of: repo)
+        let expected = try theirs(args, in: copy)
+        let actual = try await ours(args, in: repo)
+        #expect(actual.status == expected.status, "git \(args)", sourceLocation: sourceLocation)
+        #expect(actual.stdout == expected.stdout, "git \(args)", sourceLocation: sourceLocation)
+        #expect(actual.stderr == expected.stderr, "git \(args)", sourceLocation: sourceLocation)
+        #expect(try mergeState(of: repo) == mergeState(of: copy), "git \(args)", sourceLocation: sourceLocation)
+        return actual
+    }
+
+    @Test("git pull <remote> <a> <b> makes git's octopus merge")
+    func pullOctopus() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        let result = try await expectLikeGit(["pull", "--no-rebase", "origin", "a", "b"], in: clone)
+        #expect(result.stdout.contains("Merge made by the 'octopus' strategy."))
+        #expect(try systemGit(["log", "-1", "--format=%P"], in: clone).split(separator: " ").count == 3)
+        #expect(try systemGit(["log", "-1", "--format=%s"], in: clone).hasPrefix("Merge branches 'a' and 'b' of "))
+    }
+
+    @Test("git pull of several heads refuses as git does: rebasing, --ff-only, an unconfigured pull")
+    func pullOctopusRefusals() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        for args in [["pull", "--rebase", "origin", "a", "b"], ["pull", "--ff-only", "origin", "a", "b"],
+                     ["pull", "origin", "a", "b"]] {
+            let result = try await expectLikeGit(args, in: clone)
+            #expect(result.status == 128)
+        }
+    }
+
+    @Test("git pull of several heads stops at the last one's conflicts, or gives up on an earlier one's")
+    func pullOctopusConflicts() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        let gaveUp = try await expectLikeGit(["pull", "--no-rebase", "origin", "a", "x", "b"], in: clone)
+        #expect(gaveUp.status == 2)
+        #expect(gaveUp.stderr.hasSuffix("Merge with strategy octopus failed.\n"))
+        let stopped = try await expectLikeGit(["pull", "--no-rebase", "origin", "a", "b", "x"], in: clone)
+        #expect(stopped.status == 1)
+        #expect(try systemGit(["status", "--porcelain"], in: clone) == "UU f")
+    }
+
+    @Test("git merge <a> <b> merges both, fast-forwarding to the first when it can")
+    func mergeOctopus() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        try await expectLikeGit(["merge", "a", "b"], in: clone)
+        try systemGit(["reset", "-q", "--hard", "HEAD~1"], in: clone)
+        try systemGit(["reset", "-q", "--hard", "origin/main"], in: clone)
+        let result = try await expectLikeGit(["merge", "origin/a", "b"], in: clone)
+        #expect(result.stdout.hasPrefix("Fast-forwarding to: origin/a\n"))
+        #expect(try systemGit(["log", "-1", "--format=%s"], in: clone)
+                == "Merge branch 'b', remote-tracking branch 'origin/a'")
+    }
+
+    @Test("git merge of several heads reduces them, and refuses as git does")
+    func mergeOctopusReducesAndRefuses() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        // `main~1` is already merged: an ordinary merge of `a` is left.
+        try await expectLikeGit(["merge", "-q", "main~1", "a"], in: clone)
+        try systemGit(["reset", "-q", "--hard", "HEAD~1"], in: clone)
+        try await expectLikeGit(["merge", "--ff-only", "a", "b"], in: clone)
+        try await expectLikeGit(["merge", "a", "nope"], in: clone)
+        try await expectLikeGit(["merge", "a", "x", "b"], in: clone)
+        try Data("dirty\n".utf8).write(to: clone.appendingPathComponent("f"))
+        try await expectLikeGit(["merge", "a", "b"], in: clone)
+    }
+
     @Test("merge.suppressDest takes git's globs")
     func suppressDestGlobs() {
         for (pattern, branch, matches) in [

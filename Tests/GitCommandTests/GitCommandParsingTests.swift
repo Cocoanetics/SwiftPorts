@@ -534,7 +534,21 @@ struct GitCommandParsingTests {
     func mergeNoFF() throws {
         let cmd = try parse(["merge", "--no-ff", "feature"], as: Merge.self)
         #expect(cmd.noFF == true)
-        #expect(cmd.ref == "feature")
+        #expect(cmd.refs == ["feature"])
+    }
+
+    @Test("merge: several refs, -q")
+    func mergeSeveralRefs() throws {
+        let cmd = try parse(["merge", "-q", "a", "b", "c"], as: Merge.self)
+        #expect(cmd.quiet == true)
+        #expect(cmd.refs == ["a", "b", "c"])
+    }
+
+    @Test("merge: needs a ref")
+    func mergeNeedsRef() {
+        #expect(throws: (any Error).self) {
+            _ = try GitCommand.parseAsRoot(["merge"])
+        }
     }
 
     @Test("merge: --ff-only")

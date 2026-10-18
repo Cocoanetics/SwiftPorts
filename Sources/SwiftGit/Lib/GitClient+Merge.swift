@@ -41,6 +41,33 @@ extension GitClient {
         }
     }
 
+    /// The heads a merge of `heads` records, as `git merge` reduces
+    /// them: those HEAD or another head already has drop out.
+    public func mergeHeads(reducing heads: [String]) async throws -> MergeHeads {
+        try await withRepository { try $0.mergeHeads(reducing: heads) }
+    }
+
+    /// What `git merge`'s message calls `spec`: `branch 'a'`, `tag 'v1'`, …
+    public func mergeName(_ spec: String) async throws -> String {
+        try await withRepository { $0.mergeName(spec) }
+    }
+
+    /// Merge `heads` (at least two, as ``mergeHeads(reducing:)`` leaves
+    /// them) with git's octopus strategy.
+    public func octopusMerge(
+        heads: [String],
+        noFastForward: Bool = false,
+        message: String,
+        author: GitSignature? = nil
+    ) async throws -> OctopusMergeResult {
+        let env = shellEnvironment()
+        return try await withRepository {
+            try $0.octopusMerge(
+                heads: heads, noFastForward: noFastForward, message: message,
+                author: author.core, env: env)
+        }
+    }
+
     /// One ref a fetch recorded in `FETCH_HEAD`, as git writes the line
     /// (`<oid>\t[not-for-merge]\t<description>`).
     public struct FetchHeadEntry: Sendable, Equatable {
@@ -119,12 +146,29 @@ extension GitClient {
     /// than a configured remote is named as typed (`../other`), and the
     /// repository itself (`.`) not at all, as git names them.
     public func pullMergeMessage(for head: FetchHeadEntry, repository: String? = nil) async throws -> String {
-        var description = head.description
-        if let repository, !(try await remoteList()).contains(repository),
-           let of = description.range(of: "' of ") {
-            description = description[..<of.upperBound] + repository
+        try await pullMergeMessage(for: [head], repository: repository)
+    }
+
+    /// The merge commit message git writes for pulling `heads`: `Merge
+    /// branches 'a' and 'b' of <url>`, with ` into <branch>` and the
+    /// `repository` named as for one.
+    public func pullMergeMessage(for heads: [FetchHeadEntry], repository: String? = nil) async throws -> String {
+        var descriptions = heads.map(\.description)
+        if let repository, !(try await remoteList()).contains(repository) {
+            descriptions = descriptions.map { description in
+                guard let of = description.range(of: "' of ") else { return description }
+                return String(description[..<of.upperBound]) + repository
+            }
         }
-        let subject = "Merge " + Self.describingURLAsGit(description)
+        return try await mergeMessage(describing: descriptions)
+    }
+
+    /// The merge commit message git writes (`fmt-merge-msg`) for heads
+    /// that `FETCH_HEAD` or ``mergeName(_:)`` describe, with ` into
+    /// <branch>` unless `merge.suppressDest` (by default `main` and
+    /// `master`) matches the current branch.
+    public func mergeMessage(describing descriptions: [String]) async throws -> String {
+        let subject = Self.mergeTitle(descriptions.map(Self.describingURLAsGit))
         let branch = try await currentBranch() ?? "HEAD"
         var patterns = ["main", "master"]
         var configured = false
@@ -154,6 +198,63 @@ extension GitClient {
                 message: "There are no candidates for merging among the refs that you just fetched.")
         }
         return head
+    }
+
+    /// `Merge …` for heads that `FETCH_HEAD` describes, grouped as git's
+    /// `fmt-merge-msg` groups them: by where they came from (`of <url>`,
+    /// or nothing for this repository), each a commit named by itself in
+    /// a group of its own, groups in the order first seen and joined by
+    /// `; `; within one, branches, remote-tracking branches, tags and
+    /// other refs, each kind joined as `'a', 'b' and 'c'`.
+    static func mergeTitle(_ descriptions: [String]) -> String {
+        struct Group {
+            let source: String?
+            var branches: [String] = [], remoteBranches: [String] = [], tags: [String] = [], others: [String] = []
+        }
+        var groups: [Group] = []
+        for description in descriptions {
+            var line = Substring(description)
+            var source: String?
+            if let of = description.range(of: "' of ") {
+                line = description[..<description.index(after: of.lowerBound)]
+                source = String(description[of.upperBound...])
+            } else if !description.hasSuffix("'") && !description.hasSuffix(" (early part)") {
+                // A remote's HEAD: the description is the URL alone.
+                groups.append(Group(source: description))
+                continue
+            }
+            // A commit named by itself has a group of its own.
+            let isCommit = source == nil && line.hasPrefix("commit ")
+            var index = groups.firstIndex { $0.source == source && source != nil }
+            if source == nil, !isCommit {
+                index = groups.firstIndex { $0.source == nil && $0.others.isEmpty }
+            }
+            if index == nil || isCommit {
+                groups.append(Group(source: source))
+                index = groups.count - 1
+            }
+            for (prefix, keyPath) in [("branch ", \Group.branches), ("remote-tracking branch ", \Group.remoteBranches),
+                                      ("tag ", \Group.tags)] where line.hasPrefix(prefix) {
+                groups[index!][keyPath: keyPath].append(String(line.dropFirst(prefix.count)))
+                line = ""
+            }
+            if !line.isEmpty { groups[index!].others.append(String(line)) }
+        }
+        func joined(_ singular: String, _ plural: String, _ names: [String]) -> String? {
+            guard let last = names.last else { return nil }
+            if names.count == 1 { return singular + " " + last }
+            return plural + " " + names.dropLast().joined(separator: ", ") + " and " + last
+        }
+        let parts = groups.map { group -> String in
+            var kinds = [joined("branch", "branches", group.branches),
+                         joined("remote-tracking branch", "remote-tracking branches", group.remoteBranches),
+                         joined("tag", "tags", group.tags)].compactMap { $0 }
+            kinds += group.others
+            let text = kinds.joined(separator: ", ")
+            guard let source = group.source else { return text }
+            return text.isEmpty ? source : text + " of " + source
+        }
+        return "Merge " + parts.joined(separator: "; ")
     }
 
     /// A FETCH_HEAD description with its URL as git's fetch writes it:

@@ -425,8 +425,11 @@ let package = Package(
         // and `git push` need to apply them as git does. GitKit 2.5.0
         // pushes what git's rules allow and reports the rest as
         // `PushRejectedError`, which `git push` turns into git's verdict.
+        // GitKit's octopus merge (`octopusMerge`, `mergeHeads(reducing:)`,
+        // `mergeName`) is what `git merge <a> <b>…` and an octopus
+        // `git pull` run on; until it is released, its branch.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.5.0",
+                 branch: "feat/octopus-merge",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface

@@ -131,22 +131,34 @@ struct Pull: AsyncParsableCommand {
                 branch: branch, branchRemote: branchRemote, upstreamMerge: upstreamMerge,
                 remotes: remotes, rebasing: rebasing != .no)
         }
+        let current = try? await client.resolveOID("HEAD")
         if heads.count > 1 {
+            if current == nil {
+                throw CLIError.stderr("fatal: Cannot merge multiple branches into empty head.", exitCode: 128)
+            }
             if rebasing != .no {
                 throw CLIError.stderr("fatal: Cannot rebase onto multiple branches.", exitCode: 128)
             }
-            throw CLIError.stderr(
-                "fatal: merging more than one branch (an octopus merge) is not supported", exitCode: 128)
+            if fastForward == .only {
+                throw CLIError.stderr("fatal: Cannot fast-forward to multiple branches.", exitCode: 128)
+            }
         }
 
         // Whether HEAD can fast-forward to what was fetched, or already
-        // has it; an unborn branch takes it as it is.
+        // has it; an unborn branch takes it as it is. Several heads never
+        // fast-forward, as git sees it, and have diverged unless HEAD has
+        // them all.
         var canFastForward = true
         var divergent = false
-        if let current = try? await client.resolveOID("HEAD") {
-            let base = try? await client.mergeBase(current, head.oid)
-            canFastForward = base == current
-            divergent = !canFastForward && base != head.oid
+        if let current {
+            canFastForward = heads.count == 1
+            var upToDate = true
+            for each in heads {
+                let base = try? await client.mergeBase(current, each.oid)
+                if heads.count == 1 { canFastForward = base == current }
+                if base != each.oid { upToDate = false }
+            }
+            divergent = !canFastForward && !upToDate
         }
 
         // `--ff-only` outranks a rebase.
@@ -192,7 +204,15 @@ struct Pull: AsyncParsableCommand {
         }
         var mergeMessage = message
         if mergeMessage == nil {
-            mergeMessage = try await client.pullMergeMessage(for: head, repository: repository)
+            mergeMessage = try await client.pullMergeMessage(for: heads, repository: repository)
+        }
+        if heads.count > 1 {
+            // git's merge of `FETCH_HEAD`: the heads named by their
+            // object names, the message from all that were fetched.
+            let reduced = try await client.mergeHeads(reducing: heads.map(\.oid))
+            try await Merge.merge(heads: reduced, mode: mode, message: mergeMessage ?? "",
+                                  client: client, quiet: quiet)
+            return
         }
         let outcome: MergeOutcome
         do {
