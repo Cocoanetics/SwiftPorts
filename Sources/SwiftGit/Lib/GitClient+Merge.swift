@@ -169,56 +169,62 @@ extension GitClient {
         return String(prefix + url)
     }
 
-    /// wildmatch's named character classes, over ASCII as git has them.
-    static let characterClasses: [String: @Sendable (Character) -> Bool] = [
-        "alnum": { $0.isASCII && ($0.isLetter || $0.isNumber) },
-        "alpha": { $0.isASCII && $0.isLetter },
-        "blank": { $0 == " " || $0 == "\t" },
-        "cntrl": { $0.asciiValue.map { $0 < 32 || $0 == 127 } ?? false },
-        "digit": { $0.isASCII && $0.isNumber },
-        "graph": { $0.asciiValue.map { $0 > 32 && $0 < 127 } ?? false },
-        "lower": { $0.isASCII && $0.isLowercase },
-        "print": { $0.asciiValue.map { $0 >= 32 && $0 < 127 } ?? false },
-        "punct": { $0.isASCII && $0.isPunctuation || $0.isASCII && $0.isSymbol },
-        "space": { $0.isASCII && $0.isWhitespace },
-        "upper": { $0.isASCII && $0.isUppercase },
-        "xdigit": { $0.isHexDigit },
+    /// wildmatch's named character classes, over ASCII bytes as git has them.
+    static let characterClasses: [String: @Sendable (UInt8) -> Bool] = [
+        "alnum": { isASCIILetter($0) || (0x30...0x39).contains($0) },
+        "alpha": { isASCIILetter($0) },
+        "blank": { $0 == 0x20 || $0 == 0x09 },
+        "cntrl": { $0 < 32 || $0 == 127 },
+        "digit": { (0x30...0x39).contains($0) },
+        "graph": { $0 > 32 && $0 < 127 },
+        "lower": { (0x61...0x7a).contains($0) },
+        "print": { $0 >= 32 && $0 < 127 },
+        "punct": { $0 > 32 && $0 < 127 && !isASCIILetter($0) && !(0x30...0x39).contains($0) },
+        "space": { [0x20, 0x09, 0x0a, 0x0b, 0x0c, 0x0d].contains($0) },
+        "upper": { (0x41...0x5a).contains($0) },
+        "xdigit": { (0x30...0x39).contains($0) || (0x41...0x46).contains($0) || (0x61...0x66).contains($0) },
     ]
 
+    private static func isASCIILetter(_ byte: UInt8) -> Bool {
+        (0x41...0x5a).contains(byte) || (0x61...0x7a).contains(byte)
+    }
+
     /// Whether glob `pattern` matches `text`, as git's wildmatch does
-    /// for a branch name: `*`, `?`, bracket expressions (`[tw]`, `[a-z]`,
-    /// `[!x]`, `[^x]`, `[[:alpha:]]`) and `\\` escaping the next character.
+    /// for a branch name, over UTF-8 bytes: `*`, `?`, bracket expressions
+    /// (`[tw]`, `[a-z]`, `[!x]`, `[^x]`, `[[:alpha:]]`) and `\\`
+    /// escaping the next byte.
     static func glob(_ pattern: String, matches text: String) -> Bool {
-        let pattern = Array(pattern), text = Array(text)
+        let pattern = Array(pattern.utf8), text = Array(text.utf8)
+        let (star, question, open, close, backslash, colon, dash, bang, caret): (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8)
+            = (0x2a, 0x3f, 0x5b, 0x5d, 0x5c, 0x3a, 0x2d, 0x21, 0x5e)
         /// The end of the bracket expression opening at `p` and whether
-        /// it matches `c`, or `nil` when it never closes.
-        func bracket(_ p: Int, _ c: Character) -> (end: Int, matches: Bool)? {
+        /// it matches `c`, or `nil` when it is malformed (it then matches
+        /// nothing, as in wildmatch).
+        func bracket(_ p: Int, _ c: UInt8) -> (end: Int, matches: Bool)? {
             var i = p + 1
-            let negated = i < pattern.count && (pattern[i] == "!" || pattern[i] == "^")
+            let negated = i < pattern.count && (pattern[i] == bang || pattern[i] == caret)
             if negated { i += 1 }
             var matched = false
             var first = true
-            while i < pattern.count, pattern[i] != "]" || first {
+            while i < pattern.count, pattern[i] != close || first {
                 first = false
                 // A named class (`[:alpha:]`); one git doesn't know
                 // matches nothing.
-                if pattern[i] == "[", i + 1 < pattern.count, pattern[i + 1] == ":" {
-                    guard let close = (i + 2..<pattern.count).first(where: {
-                        pattern[$0] == ":" && $0 + 1 < pattern.count && pattern[$0 + 1] == "]"
-                    }) else { return nil }
-                    guard let test = Self.characterClasses[String(pattern[(i + 2)..<close])] else {
-                        return nil
-                    }
+                if pattern[i] == open, i + 1 < pattern.count, pattern[i + 1] == colon {
+                    guard let end = (i + 2..<pattern.count).first(where: {
+                        pattern[$0] == colon && $0 + 1 < pattern.count && pattern[$0 + 1] == close
+                    }), let test = Self.characterClasses[String(decoding: pattern[(i + 2)..<end], as: UTF8.self)]
+                    else { return nil }
                     if test(c) { matched = true }
-                    i = close + 2
+                    i = end + 2
                     continue
                 }
                 var low = pattern[i]
-                if low == "\\", i + 1 < pattern.count { i += 1; low = pattern[i] }
-                if i + 2 < pattern.count, pattern[i + 1] == "-", pattern[i + 2] != "]" {
+                if low == backslash, i + 1 < pattern.count { i += 1; low = pattern[i] }
+                if i + 2 < pattern.count, pattern[i + 1] == dash, pattern[i + 2] != close {
                     var high = pattern[i + 2]
                     i += 2
-                    if high == "\\", i + 1 < pattern.count { i += 1; high = pattern[i] }
+                    if high == backslash, i + 1 < pattern.count { i += 1; high = pattern[i] }
                     if low <= c && c <= high { matched = true }
                 } else if low == c {
                     matched = true
@@ -231,14 +237,12 @@ extension GitClient {
         func match(_ p: Int, _ t: Int) -> Bool {
             if p == pattern.count { return t == text.count }
             switch pattern[p] {
-            case "*": return (t...text.count).contains { match(p + 1, $0) }
-            case "?": return t < text.count && match(p + 1, t + 1)
-            case "[":
-                guard t < text.count else { return false }
-                // An unclosed bracket matches nothing, as in wildmatch.
-                guard let (end, matches) = bracket(p, text[t]) else { return false }
+            case star: return (t...text.count).contains { match(p + 1, $0) }
+            case question: return t < text.count && match(p + 1, t + 1)
+            case open:
+                guard t < text.count, let (end, matches) = bracket(p, text[t]) else { return false }
                 return matches && match(end, t + 1)
-            case "\\" where p + 1 < pattern.count:
+            case backslash where p + 1 < pattern.count:
                 return t < text.count && text[t] == pattern[p + 1] && match(p + 2, t + 1)
             case let c: return t < text.count && text[t] == c && match(p + 1, t + 1)
             }

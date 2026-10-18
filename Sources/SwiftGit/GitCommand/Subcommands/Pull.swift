@@ -317,11 +317,24 @@ struct Pull: AsyncParsableCommand {
         "invocation."
     ]
 
+    /// What starts a comment line in a commit message: `core.commentString`,
+    /// else `core.commentChar`, else `#`; with `auto`, the first of git's
+    /// candidates no line of `message` starts with.
+    static func commentString(for message: String, client: SwiftGit.GitClient) async throws -> String {
+        var configured = try await client.configGet("core.commentString")
+        if configured == nil { configured = try await client.configGet("core.commentChar") }
+        guard let configured, !configured.isEmpty else { return "#" }
+        guard configured == "auto" else { return configured }
+        let starts = Set(message.split(separator: "\n").compactMap { $0.drop { $0 == " " }.first })
+        return "#;@!$%^&|:".first { !starts.contains($0) }.map(String.init) ?? "#"
+    }
+
     /// `MERGE_MSG` for a merge stopped by conflicts, as git leaves it for
     /// the commit that concludes the merge.
     static func writeMergeMessage(_ message: String, conflicts: [String], client: SwiftGit.GitClient) async throws {
         guard let gitDir = try await client.gitDir() else { return }
-        let text = message + "\n\n# Conflicts:\n" + conflicts.map { "#\t\($0)\n" }.joined()
+        let comment = try await commentString(for: message, client: client)
+        let text = message + "\n\n\(comment) Conflicts:\n" + conflicts.map { "\(comment)\t\($0)\n" }.joined()
         try Data(text.utf8).write(to: URL(fileURLWithPath: gitDir).appendingPathComponent("MERGE_MSG"))
     }
 }

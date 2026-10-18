@@ -1183,6 +1183,7 @@ struct GitCommandRemoteTests {
         try Data("mine\n".utf8).write(to: clone.appendingPathComponent("file.txt"))
         try systemGit(["commit", "-q", "-am", "mine"], in: clone)
         try systemGit(["config", "pull.rebase", "false"], in: clone)
+        try systemGit(["config", "core.commentChar", ";"], in: clone)
 
         let theirs = try twin(of: clone)
         _ = try systemGitStatus(["pull", "-q"], in: theirs)
@@ -1233,6 +1234,7 @@ struct GitCommandRemoteTests {
             ("\\*", "x", false), ("[w", "w", false), ("main", "mainline", false),
             ("[[:alpha:]]ork", "work", true), ("[[:digit:]]ork", "work", false),
             ("[[:digit:][:lower:]]ork", "work", true), ("[[:bogus:]]ork", "work", false),
+            ("?", "é", false), ("??", "é", true), ("[[:alpha:]]", "é", false),
         ] {
             #expect(SwiftGit.GitClient.glob(pattern, matches: branch) == matches, "\(pattern) \(branch)")
         }
