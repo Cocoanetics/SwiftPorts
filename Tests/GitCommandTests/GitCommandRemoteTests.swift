@@ -8,7 +8,7 @@ import Testing
 import ArgumentParser
 import ShellKit
 import ShellCommandKit
-import SwiftGit
+@testable import SwiftGit
 @testable import GitCommand
 
 @Suite("git push / fetch / -q against a local remote")
@@ -912,22 +912,102 @@ struct GitCommandRemoteTests {
         return copy
     }
 
-    /// Runs `args` with SwiftPorts' `git` in `repo` and the system `git`
-    /// in a copy of it, and expects both to fail with the same words and
-    /// exit status.
-    private func expectSameRefusal(
-        _ args: [String], in repo: URL, sourceLocation: SourceLocation = #_sourceLocation
+    /// Whether the system `git` is 2.54 or later, whose words the
+    /// expected refusals are; older ones word some of them differently.
+    private func systemGitSpeaksLike254() throws -> Bool {
+        let version = try systemGit(["--version"], in: FileManager.default.temporaryDirectory)
+        let numbers = version.split(separator: " ").dropFirst(2).first?
+            .split(separator: ".").prefix(2).compactMap { Int($0) } ?? []
+        guard numbers.count == 2 else { return false }
+        return numbers[0] > 2 || (numbers[0] == 2 && numbers[1] >= 54)
+    }
+
+    /// Expects SwiftPorts' `git` to refuse `args` in `repo` with git
+    /// 2.54's `stderr` and exit `status` — and, with such a system `git`,
+    /// that it refuses the same in a copy of `repo`.
+    private func expectRefusal(
+        _ args: [String], in repo: URL, stderr expected: String, status: Int32,
+        sourceLocation: SourceLocation = #_sourceLocation
     ) async throws {
-        let theirs = try systemGitStatus(args, in: try twin(of: repo))
-        #expect(theirs.status != 0, "system git \(args) succeeded", sourceLocation: sourceLocation)
+        if try systemGitSpeaksLike254() {
+            let theirs = try systemGitStatus(args, in: try twin(of: repo))
+            #expect(theirs.stderr == expected, "system git \(args)", sourceLocation: sourceLocation)
+            #expect(theirs.status == status, "system git \(args)", sourceLocation: sourceLocation)
+        }
         do {
             try await git(args, in: repo)
             Issue.record("expected git \(args.joined(separator: " ")) to fail", sourceLocation: sourceLocation)
         } catch let error as CLIError {
-            #expect(error.lines.map { $0 + "\n" }.joined() == theirs.stderr, sourceLocation: sourceLocation)
-            #expect(error.exitCode == theirs.status, sourceLocation: sourceLocation)
+            #expect(error.lines.map { $0 + "\n" }.joined() == expected, sourceLocation: sourceLocation)
+            #expect(error.exitCode == status, sourceLocation: sourceLocation)
         }
     }
+
+    private func noTrackingInformation(_ branch: String, remote: String = "origin", rebasing: Bool = false) -> String {
+        """
+        There is no tracking information for the current branch.
+        Please specify which branch you want to \(rebasing ? "rebase against" : "merge with").
+        See git-pull(1) for details.
+
+            git pull <remote> <branch>
+
+        If you wish to set tracking information for this branch you can do so with:
+
+            git branch --set-upstream-to=\(remote)/<branch> \(branch)
+
+
+        """
+    }
+
+    private func notTheBranchRemote(_ remote: String) -> String {
+        """
+        You asked to pull from the remote '\(remote)', but did not specify
+        a branch. Because this is not the default configured remote
+        for your current branch, you must specify a branch on the command line.
+
+        """
+    }
+
+    private let notOnABranch = """
+        You are not currently on a branch.
+        Please specify which branch you want to merge with.
+        See git-pull(1) for details.
+
+            git pull <remote> <branch>
+
+
+        """
+
+    private let howToReconcile = """
+        hint: You have divergent branches and need to specify how to reconcile them.
+        hint: You can do so by running one of the following commands sometime before
+        hint: your next pull:
+        hint:
+        hint:   git config pull.rebase false  # merge
+        hint:   git config pull.rebase true   # rebase
+        hint:   git config pull.ff only       # fast-forward only
+        hint:
+        hint: You can replace "git config" with "git config --global" to set a default
+        hint: preference for all repositories. You can also pass --rebase, --no-rebase,
+        hint: or --ff-only on the command line to override the configured default per
+        hint: invocation.
+        fatal: Need to specify how to reconcile divergent branches.
+
+        """
+
+    /// With `advice.diverging` configured, which drops the line on how to
+    /// turn the hint off.
+    private let cannotFastForward = """
+        hint: Diverging branches can't be fast-forwarded, you need to either:
+        hint:
+        hint: \tgit merge --no-ff
+        hint:
+        hint: or:
+        hint:
+        hint: \tgit rebase
+        fatal: Not possible to fast-forward, aborting.
+
+        """
 
     /// The clone's `main` and the remote's `main` each with a commit the
     /// other lacks.
@@ -982,19 +1062,27 @@ struct GitCommandRemoteTests {
     func pullWithoutUpstream() async throws {
         let (_, clone) = try makeRemoteAndClone()
         try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
-        try await expectSameRefusal(["pull", "-q"], in: clone)
-        try await expectSameRefusal(["pull", "-q", "--rebase"], in: clone)
+        try await expectRefusal(["pull", "-q"], in: clone,
+                                stderr: noTrackingInformation("lonely"), status: 1)
+        try await expectRefusal(["pull", "-q", "--rebase"], in: clone,
+                                stderr: noTrackingInformation("lonely", rebasing: true), status: 1)
+        // An upstream branch without its remote is no upstream.
+        try systemGit(["config", "branch.lonely.merge", "refs/heads/main"], in: clone)
+        try await expectRefusal(["pull", "-q"], in: clone,
+                                stderr: noTrackingInformation("lonely"), status: 1)
         try systemGit(["switch", "-q", "--detach", "main"], in: clone)
-        try await expectSameRefusal(["pull", "-q"], in: clone)
+        try await expectRefusal(["pull", "-q"], in: clone, stderr: notOnABranch, status: 1)
     }
 
     @Test("git pull <remote> refuses a remote that isn't the branch's")
     func pullOtherRemoteWithoutBranch() async throws {
         let (remote, clone) = try makeRemoteAndClone()
         try systemGit(["remote", "add", "mirror", remote.path], in: clone)
-        try await expectSameRefusal(["pull", "-q", "mirror"], in: clone)
+        try await expectRefusal(["pull", "-q", "mirror"], in: clone,
+                                stderr: notTheBranchRemote("mirror"), status: 1)
         try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
-        try await expectSameRefusal(["pull", "-q", "origin"], in: clone)
+        try await expectRefusal(["pull", "-q", "origin"], in: clone,
+                                stderr: notTheBranchRemote("origin"), status: 1)
         // The upstream's remote, named, merges the upstream.
         try systemGit(["switch", "-q", "main"], in: clone)
         try await git(["pull", "-q", "origin"], in: clone)
@@ -1004,7 +1092,11 @@ struct GitCommandRemoteTests {
     func pullUpstreamNotFetched() async throws {
         let (_, clone) = try makeRemoteAndClone()
         try systemGit(["config", "branch.main.merge", "refs/heads/gone"], in: clone)
-        try await expectSameRefusal(["pull", "-q"], in: clone)
+        try await expectRefusal(["pull", "-q"], in: clone, stderr: """
+            Your configuration specifies to merge with the ref 'refs/heads/gone'
+            from the remote, but no such ref was fetched.
+
+            """, status: 1)
     }
 
     @Test("git pull <remote> <branch> merges it with git's message")
@@ -1037,11 +1129,12 @@ struct GitCommandRemoteTests {
     func pullDivergedFollowsConfig() async throws {
         // Without a say, git refuses; --ff-only and pull.ff=only refuse too.
         let (remote, clone) = try makeDiverged()
-        try await expectSameRefusal(["pull", "-q"], in: clone)
-        try await expectSameRefusal(["pull", "-q", "--ff-only"], in: clone)
+        try await expectRefusal(["pull", "-q"], in: clone, stderr: howToReconcile, status: 128)
+        try await expectRefusal(["pull", "-q", "--ff-only"], in: clone, stderr: cannotFastForward, status: 128)
         try systemGit(["config", "pull.ff", "only"], in: clone)
-        try await expectSameRefusal(["pull", "-q"], in: clone)
-        try await expectSameRefusal(["pull", "-q", "--rebase", "--ff-only"], in: clone)
+        try await expectRefusal(["pull", "-q"], in: clone, stderr: cannotFastForward, status: 128)
+        try await expectRefusal(["pull", "-q", "--rebase", "--ff-only"], in: clone,
+                                stderr: cannotFastForward, status: 128)
 
         // --rebase outranks pull.ff=only.
         try await git(["pull", "-q", "--rebase"], in: clone)
@@ -1071,10 +1164,12 @@ struct GitCommandRemoteTests {
 
         let (_, bad) = try makeDiverged()
         try systemGit(["config", "pull.rebase", "bogus"], in: bad)
-        try await expectSameRefusal(["pull", "-q"], in: bad)
+        try await expectRefusal(["pull", "-q"], in: bad,
+                                stderr: "fatal: invalid value for 'pull.rebase': 'bogus'\n", status: 128)
         try systemGit(["config", "--unset", "pull.rebase"], in: bad)
         try systemGit(["config", "pull.ff", "bogus"], in: bad)
-        try await expectSameRefusal(["pull", "-q"], in: bad)
+        try await expectRefusal(["pull", "-q"], in: bad,
+                                stderr: "fatal: invalid value for 'pull.ff': 'bogus'\n", status: 128)
     }
 
     @Test("git pull that conflicts leaves git's merge message")
@@ -1096,6 +1191,18 @@ struct GitCommandRemoteTests {
             try String(contentsOf: repo.appendingPathComponent(".git/MERGE_MSG"), encoding: .utf8)
         }
         #expect(try mergeMessage(clone) == mergeMessage(theirs))
+    }
+
+    @Test("merge.suppressDest takes git's globs")
+    func suppressDestGlobs() {
+        for (pattern, branch, matches) in [
+            ("main", "main", true), ("ma*", "main", true), ("m?in", "main", true),
+            ("[tw]ork", "work", true), ("[a-v]ork", "work", false), ("[!w]ork", "work", false),
+            ("[^t]ork", "work", true), ("w[]]rk", "w]rk", true), ("w\\ork", "work", true),
+            ("\\*", "x", false), ("[w", "w", false), ("main", "mainline", false),
+        ] {
+            #expect(SwiftGit.GitClient.glob(pattern, matches: branch) == matches, "\(pattern) \(branch)")
+        }
     }
 
     @Test("git clone -q prints nothing; a local clone ends on `done.`")

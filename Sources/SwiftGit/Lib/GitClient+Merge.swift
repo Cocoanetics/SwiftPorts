@@ -169,14 +169,48 @@ extension GitClient {
         return String(prefix + url)
     }
 
-    /// Whether glob `pattern` (`*`, `?`) matches `text`.
+    /// Whether glob `pattern` matches `text`, as git's wildmatch does
+    /// for a branch name: `*`, `?`, bracket expressions (`[tw]`, `[a-z]`,
+    /// `[!x]`, `[^x]`) and `\\` escaping the next character.
     static func glob(_ pattern: String, matches text: String) -> Bool {
         let pattern = Array(pattern), text = Array(text)
+        /// The end of the bracket expression opening at `p` and whether
+        /// it matches `c`, or `nil` when it never closes.
+        func bracket(_ p: Int, _ c: Character) -> (end: Int, matches: Bool)? {
+            var i = p + 1
+            let negated = i < pattern.count && (pattern[i] == "!" || pattern[i] == "^")
+            if negated { i += 1 }
+            var matched = false
+            var first = true
+            while i < pattern.count, pattern[i] != "]" || first {
+                first = false
+                var low = pattern[i]
+                if low == "\\", i + 1 < pattern.count { i += 1; low = pattern[i] }
+                if i + 2 < pattern.count, pattern[i + 1] == "-", pattern[i + 2] != "]" {
+                    var high = pattern[i + 2]
+                    i += 2
+                    if high == "\\", i + 1 < pattern.count { i += 1; high = pattern[i] }
+                    if low <= c && c <= high { matched = true }
+                } else if low == c {
+                    matched = true
+                }
+                i += 1
+            }
+            guard i < pattern.count else { return nil }
+            return (i + 1, matched != negated)
+        }
         func match(_ p: Int, _ t: Int) -> Bool {
             if p == pattern.count { return t == text.count }
             switch pattern[p] {
             case "*": return (t...text.count).contains { match(p + 1, $0) }
             case "?": return t < text.count && match(p + 1, t + 1)
+            case "[":
+                guard t < text.count else { return false }
+                // An unclosed bracket matches nothing, as in wildmatch.
+                guard let (end, matches) = bracket(p, text[t]) else { return false }
+                return matches && match(end, t + 1)
+            case "\\" where p + 1 < pattern.count:
+                return t < text.count && text[t] == pattern[p + 1] && match(p + 2, t + 1)
             case let c: return t < text.count && text[t] == c && match(p + 1, t + 1)
             }
         }

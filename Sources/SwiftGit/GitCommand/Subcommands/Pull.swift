@@ -105,11 +105,18 @@ struct Pull: AsyncParsableCommand {
             }
         }
 
-        let heads = fetched ? try await client.fetchHeadEntries().filter(\.isMerge) : []
+        // Without a refspec, git merges the upstream only: a branch with
+        // `branch.<name>.merge` but no `branch.<name>.remote` has none.
+        var upstreamMerge: String?
+        if let branch, branchRemote != nil {
+            upstreamMerge = try await client.configGet("branch.\(branch).merge")
+        }
+        let wantsMerge = fetched && (!refspecs.isEmpty || upstreamMerge != nil)
+        let heads = wantsMerge ? try await client.fetchHeadEntries().filter(\.isMerge) : []
         guard let head = heads.first else {
-            throw try await noMergeCandidates(
-                client: client, branch: branch, branchRemote: branchRemote, remotes: remotes,
-                rebasing: rebasing == .yes)
+            throw noMergeCandidates(
+                branch: branch, branchRemote: branchRemote, upstreamMerge: upstreamMerge,
+                remotes: remotes, rebasing: rebasing == .yes)
         }
         if heads.count > 1 {
             if rebasing == .yes {
@@ -217,9 +224,9 @@ struct Pull: AsyncParsableCommand {
 
     /// Why there's nothing to merge, in git's words (`die_no_merge_candidates`).
     private func noMergeCandidates(
-        client: SwiftGit.GitClient, branch: String?, branchRemote: String?, remotes: [String],
+        branch: String?, branchRemote: String?, upstreamMerge: String?, remotes: [String],
         rebasing: Bool
-    ) async throws -> CLIError {
+    ) -> CLIError {
         let which = rebasing
             ? "Please specify which branch you want to rebase against."
             : "Please specify which branch you want to merge with."
@@ -241,7 +248,7 @@ struct Pull: AsyncParsableCommand {
         } else if branch == nil {
             lines = ["You are not currently on a branch.", which, "See git-pull(1) for details.",
                      "", "    git pull <remote> <branch>", ""]
-        } else if let branch, let merge = try await client.configGet("branch.\(branch).merge") {
+        } else if let merge = upstreamMerge {
             lines = ["Your configuration specifies to merge with the ref '\(merge)'",
                      "from the remote, but no such ref was fetched."]
         } else {
