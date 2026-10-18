@@ -1625,6 +1625,12 @@ struct GitCommandRemoteTests {
         try FileManager.default.createDirectory(at: clone.appendingPathComponent("d"), withIntermediateDirectories: true)
         try Data("x\n".utf8).write(to: clone.appendingPathComponent("d/file"))
         try await expectLikeGit(["merge", "a", "d"], in: clone)
+        try systemGit(["clean", "-qfd"], in: clone)
+
+        // A merge waiting to be concluded stops another, and a pull.
+        try systemGit(["merge", "-q", "--no-commit", "--no-ff", "a"], in: clone)
+        try await expectLikeGit(["merge", "b", "x"], in: clone)
+        try await expectLikeGit(["pull", "origin", "b", "x"], in: clone)
     }
 
     @Test("merge titles group FETCH_HEAD's descriptions as fmt-merge-msg does")

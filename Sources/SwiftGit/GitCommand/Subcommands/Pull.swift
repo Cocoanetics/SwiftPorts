@@ -73,6 +73,17 @@ struct Pull: AsyncParsableCommand {
 
     private func pull() async throws {
         let client = CommandContext.gitClient(quiet: quiet)
+        // A merge waiting to be concluded stops a pull before it fetches.
+        if let gitDir = try await client.gitDir(),
+           FileManager.default.fileExists(atPath: gitDir + "/MERGE_HEAD") {
+            var advise = try await client.configBool("advice.resolveConflict") ?? true
+            if advise, let environment = Shell.current.environment["GIT_ADVICE"] {
+                advise = try SwiftGit.GitClient.parseGitBoolEnvironment(environment, name: "GIT_ADVICE")
+            }
+            throw CLIError.stderr(["error: You have not concluded your merge (MERGE_HEAD exists)."]
+                                  + (advise ? ["hint: Please, commit your changes before merging."] : [])
+                                  + ["fatal: Exiting because of unfinished merge."], exitCode: 128)
+        }
         // An unborn branch is a branch too.
         var branch = try await client.currentBranch()
         if branch == nil { branch = try await client.symbolicHeadBranch() }

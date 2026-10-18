@@ -46,6 +46,15 @@ struct Merge: AsyncParsableCommand {
         let mode: FastForwardMode = noFF ? .never : (ffOnly ? .onlyFastForward : .auto)
         let client = CommandContext.gitClient()
 
+        // git won't start a merge while another waits to be concluded.
+        if let gitDir = try await client.gitDir() {
+            for (file, operation) in [("MERGE_HEAD", "merge"), ("CHERRY_PICK_HEAD", "cherry-pick")]
+            where FileManager.default.fileExists(atPath: gitDir + "/" + file) {
+                throw CLIError.stderr(["fatal: You have not concluded your \(operation) (\(file) exists).",
+                                       "Please, commit your changes before you merge."], exitCode: 128)
+            }
+        }
+
         guard refs.count == 1, let ref = refs.first else {
             let heads: MergeHeads
             do {
@@ -151,11 +160,17 @@ struct Merge: AsyncParsableCommand {
                         error("error: Could not stat : No such file or directory")
                     }
                     error("ERROR: content conflict in \(path)")
-                case .addedOverDirectory(let path, let file):
+                case .addedOverDirectory(let path, let files):
                     Shell.print("Adding \(path)")
-                    error("error: '\(file)' appears as both a file and as a directory")
-                    error("error: \(file): cannot add to the index - missing --add option?")
-                    error("fatal: git update-index: --cacheinfo cannot add \(file)")
+                    for file in files {
+                        error("error: '\(file)' appears as both a file and as a directory")
+                        error("error: \(file): cannot add to the index - missing --add option?")
+                        error("fatal: git update-index: --cacheinfo cannot add \(file)")
+                    }
+                case .symlink(let path):
+                    error("ERROR: \(path): Not merging symbolic link changes.")
+                case .submodule(let path):
+                    error("ERROR: \(path): Not merging conflicting submodule changes.")
                 case .notHandled(let path, let base, let ours, let theirs):
                     error("ERROR: \(path): Not handling case \(base) -> \(ours) -> \(theirs)")
                 }
