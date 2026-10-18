@@ -914,6 +914,28 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "main"], in: other))
     }
 
+    @Test("a push refspec written without a value is refused as git refuses it")
+    func pushValuelessRefspec() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["config", "--add", "remote.origin.push", "refs/heads/main:refs/heads/main"], in: clone)
+        let config = clone.appendingPathComponent(".git/config")
+        let text = try String(contentsOf: config, encoding: .utf8) + "[remote \"origin\"]\n\tpush\n"
+        try text.write(to: config, atomically: true, encoding: .utf8)
+        let line = text.split(separator: "\n", omittingEmptySubsequences: false).count - 1
+        for args in [["push", "-f"], ["push"]] {
+            do {
+                try await git(args, in: clone)
+                Issue.record("expected \(args) to fail")
+            } catch let error as CLIError {
+                #expect(error.lines == [
+                    "error: missing value for 'remote.origin.push'",
+                    "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line \(line)"
+                ])
+                #expect(error.exitCode == 128)
+            }
+        }
+    }
+
     @Test("a full object ID for <expect> is taken as given; all zeros expects the ref absent")
     func pushLeaseFullObjectID() async throws {
         let (remote, clone) = try makeRemoteAndClone()

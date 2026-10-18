@@ -62,6 +62,14 @@ struct Push: AsyncParsableCommand {
             throw CLIError.stderr("fatal: bad repository ''", exitCode: 128)
         }
         let leases = try await Self.leases(from: leaseOptions, client: client)
+        // git reads every remote's config before pushing anywhere, and
+        // refuses a push refspec written without a value.
+        if let bare = try await client.valuelessRemotePush() {
+            throw CLIError.stderr([
+                "error: missing value for '\(bare.key)'",
+                "fatal: bad config variable '\(bare.key)' in file '\(bare.file)' at line \(bare.line)"
+            ], exitCode: 128)
+        }
         let plan = refspecs.isEmpty
             ? try await DefaultPush.plan(client: client, remote: remoteName, settings: settings)
             : DefaultPush.Plan(remote: remoteName ?? "origin", refspecs: refspecs, setUpstream: false)

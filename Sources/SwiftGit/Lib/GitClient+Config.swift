@@ -67,6 +67,74 @@ extension GitClient {
             .map(\.element.value)
     }
 
+    /// The first `remote.<name>.push` written without a value
+    /// (`[remote "origin"] push`), which git refuses to run with, as git
+    /// names it: the key, the file (relative to the work tree's top when
+    /// in it, as git reads it from there) and the line.
+    public func valuelessRemotePush() async throws -> (key: String, file: String, line: Int)? {
+        try await withRepository { _ in try Self.valuelessRemotePush(in: workingDirectory) }
+    }
+
+    static func valuelessRemotePush(in directory: URL) throws -> (key: String, file: String, line: Int)? {
+        var repo: OpaquePointer?
+        var config: OpaquePointer?
+        var iterator: UnsafeMutablePointer<git_config_iterator>?
+        defer {
+            git_config_iterator_free(iterator)
+            git_config_free(config)
+            git_repository_free(repo)
+        }
+        try check(git_repository_open_ext(&repo, directory.path, 0, nil))
+        try check(git_repository_config_snapshot(&config, repo))
+        try check(git_config_iterator_glob_new(&iterator, config, "^remote\\..*\\.push$"))
+        var found: [(key: String, path: String, level: Int)] = []
+        while true {
+            var entry: UnsafeMutablePointer<git_config_entry>?
+            let result = git_config_next(&entry, iterator)
+            if result == GIT_ITEROVER.rawValue { break }
+            try check(result)
+            guard let entry = entry?.pointee, entry.value == nil,
+                  let name = entry.name, let origin = entry.origin_path
+            else { continue }
+            found.append((String(cString: name), String(cString: origin), Int(entry.level.rawValue)))
+        }
+        // git reads the files lowest level first and stops at the first.
+        guard let first = found.min(by: { $0.level < $1.level }) else { return nil }
+        let line = valuelessLine(of: first.key, in: URL(fileURLWithPath: first.path)) ?? 0
+        var file = first.path
+        if let top = git_repository_workdir(repo).map({ String(cString: $0) }), file.hasPrefix(top) {
+            file = String(file.dropFirst(top.count))
+        }
+        return (first.key, file, line)
+    }
+
+    /// The line of `file` where `key` (`remote.origin.push`) is written
+    /// without a value, counting from 1.
+    private static func valuelessLine(of key: String, in file: URL) -> Int? {
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        let parts = key.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count >= 3 else { return nil }
+        let subsection = parts.dropFirst().dropLast().joined(separator: ".")
+        let variable = String(parts.last!)
+        var inSection = false
+        for (index, raw) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("[") {
+                // `[remote "origin"]`: the section ignores case, the
+                // subsection doesn't.
+                let header = line.dropFirst().prefix { $0 != "]" }
+                let pieces = header.split(separator: " ", maxSplits: 1)
+                inSection = pieces.first?.lowercased() == String(parts[0])
+                    && pieces.count == 2 && pieces[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"")) == subsection
+                continue
+            }
+            if inSection, !line.contains("="), line.lowercased() == variable {
+                return index + 1
+            }
+        }
+        return nil
+    }
+
     /// A boolean config value as git reads one (`true`/`yes`/`on`, any
     /// nonzero integer, a key without a value), or `nil` when unset.
     /// Anything else throws git's "bad boolean config value".
