@@ -51,20 +51,18 @@ struct Push: AsyncParsableCommand {
         }
     }
 
-    /// The local and remote branch a refspec like `main`, `+a:b` or
-    /// `refs/heads/a:refs/heads/b` pushes, or `nil` for anything else.
+    /// The local and remote branch of a refspec as GitKit reports it
+    /// pushed (`refs/heads/a:refs/heads/b`), or `nil` for anything else,
+    /// such as a tag, or a revision (`HEAD^`, an object ID) pushed to a
+    /// branch, which GitKit passes through as typed.
     static func branchNames(in refspec: String) -> (local: String, remote: String)? {
-        let body = refspec.hasPrefix("+") ? String(refspec.dropFirst()) : refspec
-        let parts = body.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-        func branch(_ ref: Substring) -> String? {
-            if ref.hasPrefix("refs/heads/") { return String(ref.dropFirst("refs/heads/".count)) }
-            if ref.isEmpty || ref == "HEAD" || ref.hasPrefix("refs/") { return nil }
-            return String(ref)
-        }
-        guard let local = parts.first.flatMap(branch),
-              let remote = branch(parts.count > 1 ? parts[1] : parts[0])
-        else { return nil }
-        return (local, remote)
+        let body = refspec.hasPrefix("+") ? refspec.dropFirst() : Substring(refspec)
+        let sides = body.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        let prefix = "refs/heads/"
+        let source = sides[0]
+        let destination = sides.count > 1 ? sides[1] : source
+        guard source.hasPrefix(prefix), destination.hasPrefix(prefix) else { return nil }
+        return (String(source.dropFirst(prefix.count)), String(destination.dropFirst(prefix.count)))
     }
 }
 
