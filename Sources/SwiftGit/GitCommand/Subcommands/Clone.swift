@@ -69,10 +69,10 @@ struct Clone: AsyncParsableCommand {
         }
     }
 
-    /// Whether `remote` is a local repository rather than a network
-    /// one — the same rule GitKit uses to mute transfer progress.
+    /// Whether `remote` is a local path, which git clones by copying
+    /// objects (ending on `done.`). A `file://` URL goes through the
+    /// regular transport, like any other URL.
     static func isLocal(_ remote: String) -> Bool {
-        if remote.hasPrefix("file://") { return true }
         if remote.contains("://") { return false }
         if remote.contains("@") && remote.contains(":") { return false }
         if remote.hasPrefix("/") { return true }

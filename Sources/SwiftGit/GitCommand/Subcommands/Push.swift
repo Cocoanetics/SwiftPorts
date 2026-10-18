@@ -43,8 +43,8 @@ struct Push: AsyncParsableCommand {
         let upstream = setUpstream || plan.setUpstream
         let pushed = try await client.push(
             remote: plan.remote, refspecs: plan.refspecs, setUpstream: upstream)
-        // Like git, confirm each upstream recorded for a configured remote.
-        guard upstream, !quiet, (try? await client.remoteExists(named: plan.remote)) == true else { return }
+        // Like git, confirm each upstream recorded, for a URL or path too.
+        guard upstream, !quiet else { return }
         for refspec in pushed {
             guard let (local, remoteBranch) = Self.branchNames(in: refspec) else { continue }
             Shell.print("branch '\(local)' set up to track '\(plan.remote)/\(remoteBranch)'.")
@@ -120,8 +120,12 @@ enum DefaultPush {
         }
         guard let branch else { throw detachedHead(remote: target) }
 
-        let autoSetup = ["true", "yes", "on", "1"].contains(
-            try await client.configGet("push.autoSetupRemote")?.lowercased() ?? "")
+        let autoSetup: Bool
+        do {
+            autoSetup = try await client.configBool("push.autoSetupRemote") ?? false
+        } catch let error as Libgit2Error {
+            throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)
+        }
         let local = "refs/heads/\(branch)"
         // git's get_upstream_ref: the branch's upstream, else, when
         // push.autoSetupRemote is about to record one, the branch itself.

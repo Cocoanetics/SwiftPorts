@@ -281,14 +281,7 @@ public struct GitClient: ForgeKit.GitClient {
         let keys = ["remote.\(remote).prune", "fetch.prune"]
         for key in keys {
             guard let value = try repository.configGet(key) else { continue }
-            var parsed: CInt = 0
-            let result = value.withCString { git_config_parse_bool(&parsed, $0) }
-            guard result == 0 else {
-                throw Libgit2Error(
-                    code: Int32(result), klass: 0,
-                    message: "bad boolean config value '\(value)' for '\(key)'")
-            }
-            return parsed != 0
+            return try Self.parseGitBool(value, key: key)
         }
         return false
     }

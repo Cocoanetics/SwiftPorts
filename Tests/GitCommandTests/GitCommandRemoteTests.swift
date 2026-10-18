@@ -168,6 +168,21 @@ struct GitCommandRemoteTests {
         #expect(auto.stdout == "branch 'auto' set up to track 'origin/auto'.\n")
         #expect(try systemGit(["config", "branch.auto.merge"], in: clone) == "refs/heads/auto")
 
+        // Any of git's boolean spellings, and git's refusal of a bad one.
+        try systemGit(["switch", "-q", "-c", "two"], in: clone)
+        try systemGit(["config", "push.autoSetupRemote", "2"], in: clone)
+        let two = try await git(["push"], in: clone)
+        #expect(two.stdout == "branch 'two' set up to track 'origin/two'.\n")
+        try systemGit(["switch", "-q", "-c", "bogus"], in: clone)
+        try systemGit(["config", "push.autoSetupRemote", "bogus"], in: clone)
+        do {
+            try await git(["push"], in: clone)
+            Issue.record("expected a bad push.autoSetupRemote to be refused")
+        } catch let error as CLIError {
+            #expect(error.lines == ["fatal: bad boolean config value 'bogus' for 'push.autosetupremote'"])
+            #expect(error.exitCode == 128)
+        }
+
         try systemGit(["switch", "-q", "-c", "current"], in: clone)
         try systemGit(["config", "--unset", "push.autoSetupRemote"], in: clone)
         try systemGit(["config", "push.default", "current"], in: clone)
@@ -320,9 +335,11 @@ struct GitCommandRemoteTests {
         let mirror = tmp("GitRemoteMirror")
         try systemGit(["init", "-q", "--bare", mirror.path], in: clone)
         try commitFile("two.txt", in: clone)
-        try await git(["push", mirror.path, "main"], in: clone)
+        let pushed = try await git(["push", "-u", mirror.path, "main"], in: clone)
         #expect(try systemGit(["rev-parse", "main"], in: mirror)
                 == systemGit(["rev-parse", "HEAD"], in: clone))
+        // git confirms the upstream for a URL or path as well.
+        #expect(pushed.stdout == "branch 'main' set up to track '\(mirror.path)/main'.\n")
 
         try await git(["fetch", remote.path, "main"], in: clone)
         #expect(try systemGit(["rev-parse", "FETCH_HEAD"], in: clone)
@@ -441,6 +458,9 @@ struct GitCommandRemoteTests {
 
         let loud = try await git(["clone", remote.path, "loud"], in: clone)
         #expect(loud.stderr == "Cloning into 'loud'...\ndone.\n")
+        // A file:// URL takes the regular transport: no `done.` line.
+        let url = try await git(["clone", "file://\(remote.path)", "viaurl"], in: clone)
+        #expect(url.stderr == "Cloning into 'viaurl'...\n")
     }
 }
 #endif

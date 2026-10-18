@@ -168,7 +168,7 @@ struct GitCommandParsingTests {
 
     @Test("clone: local and network remotes")
     func cloneLocality() {
-        #expect(Clone.isLocal("file:///tmp/r"))
+        #expect(!Clone.isLocal("file:///tmp/r"))  // the regular transport, as in git
         #expect(Clone.isLocal("/tmp/r"))
         #expect(!Clone.isLocal("https://github.com/o/r.git"))
         #expect(!Clone.isLocal("git@github.com:o/r.git"))
