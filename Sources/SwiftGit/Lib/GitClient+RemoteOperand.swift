@@ -15,6 +15,12 @@ extension GitClient {
         guard !remote.isEmpty else {
             throw Libgit2Error(code: -1, klass: 0, message: "bad repository ''")
         }
+        #if os(Windows)
+        // A fetch or push takes `C://x` for a URL with scheme `C`
+        // (transport_get checks is_url before any path); only a clone
+        // looks on disk first.
+        if Self.hasDrivePrefix(remote) { try Self.requireTransport(for: remote) }
+        #endif
         // A URL isn't a valid remote name, so the lookup throws for it.
         if (try? await remoteExists(named: remote)) == true { return remote }
         let top = try await withRepository { try $0.toplevel() ?? $0.gitDir() }
@@ -29,6 +35,7 @@ extension GitClient {
     /// process's.
     func remoteForLibgit2(_ remote: String, relativeTo directory: String? = nil) async throws -> String {
         if Self.isURLOrSCPLike(remote) {
+            try Self.requireTransport(for: remote)
             if let url = URL(string: remote) {
                 try await Shell.authorize(Self.authorizationURL(forRemote: url))
             }
@@ -54,18 +61,48 @@ extension GitClient {
     static func isRelativePath(_ path: String) -> Bool {
         if path.hasPrefix("/") { return false }
         #if os(Windows)
-        if path.hasPrefix("\\") || hasDriveLetter(path) { return false }
+        if path.hasPrefix("\\") || hasDrivePrefix(path) { return false }
         #endif
         return true
     }
 
     #if os(Windows)
-    /// git's `has_dos_drive_prefix`: an ASCII letter, then a colon.
-    static func hasDriveLetter(_ path: String) -> Bool {
-        guard let letter = path.first, letter.isASCII, letter.isLetter else { return false }
-        return path.dropFirst().first == ":"
+    /// git's `has_dos_drive_prefix`: one character, then a colon. Not
+    /// only a letter: `subst` can make a drive of `1:` or `ä:`.
+    static func hasDrivePrefix(_ path: String) -> Bool {
+        !path.unicodeScalars.isEmpty && path.unicodeScalars.dropFirst().first == ":"
     }
     #endif
+
+    /// The schemes git reaches a remote through: its own transports, and
+    /// the helpers it ships (`transport_get`).
+    static let transportSchemes: Set<String> = [
+        "file", "git", "ssh", "git+ssh", "ssh+git", "http", "https", "ftp", "ftps"
+    ]
+
+    /// `remote`'s scheme when git reads it as a URL (`is_url`): an
+    /// alphanumeric, then alphanumerics, `+`, `.` or `-`, up to the first
+    /// colon, which `//` follows.
+    static func urlScheme(of remote: String) -> String? {
+        guard let colon = remote.firstIndex(of: ":"), remote[colon...].hasPrefix("://") else { return nil }
+        let scheme = remote[..<colon]
+        func isSchemeCharacter(_ character: Character, first: Bool) -> Bool {
+            guard character.isASCII else { return false }
+            return character.isLetter || character.isNumber || (!first && "+.-".contains(character))
+        }
+        guard let head = scheme.first, isSchemeCharacter(head, first: true),
+              scheme.dropFirst().allSatisfy({ isSchemeCharacter($0, first: false) })
+        else { return nil }
+        return String(scheme)
+    }
+
+    /// Refuses, as git does, a URL whose scheme no transport handles;
+    /// libgit2 would take any `scheme://host` for SSH.
+    static func requireTransport(for remote: String) throws {
+        if let scheme = urlScheme(of: remote), !transportSchemes.contains(scheme) {
+            throw NoRemoteHelperError(scheme: scheme)
+        }
+    }
 
     /// Record `remote`, as typed, as the upstream remote of each branch
     /// in `pushed`. GitKit records where it pushed — for a path, the
@@ -94,7 +131,7 @@ extension GitClient {
     /// `git clone` finds on disk.
     public static func isURLOrSCPLike(_ remote: String) -> Bool {
         #if os(Windows)
-        if hasDriveLetter(remote) { return false }
+        if hasDrivePrefix(remote) { return false }
         #endif
         return remote.contains("://") || isSCPLike(remote)
     }
@@ -105,7 +142,7 @@ extension GitClient {
         guard !remote.contains("://"), let colon = remote.firstIndex(of: ":") else { return false }
         #if os(Windows)
         // `C:/repo` is a drive letter, not a host; `1:repo.git` is a host.
-        if hasDriveLetter(remote) { return false }
+        if hasDrivePrefix(remote) { return false }
         #endif
         return !remote[..<colon].contains("/")
     }
@@ -223,4 +260,18 @@ extension GitClient {
     public func remoteSetURL(name: String, remote: String) async throws {
         try await withRepository { try $0.remoteSetURL(name: name, remote: remote) }
     }
+}
+
+/// A URL whose scheme git has no transport for: git looks for a
+/// `git-remote-<scheme>` helper, finds none and gives up.
+public struct NoRemoteHelperError: Error, LocalizedError, Equatable {
+    public let scheme: String
+
+    /// What git prints, `fatal:` and all.
+    public var lines: [String] {
+        ["git: 'remote-\(scheme)' is not a git command. See 'git --help'.",
+         "fatal: remote helper '\(scheme)' aborted session"]
+    }
+
+    public var errorDescription: String? { lines.joined(separator: "\n") }
 }

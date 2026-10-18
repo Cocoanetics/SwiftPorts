@@ -1,4 +1,5 @@
 import ArgumentParser
+import SwiftGit
 
 struct Fetch: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -73,10 +74,14 @@ struct Fetch: AsyncParsableCommand {
         }
         // One fetch for every refspec, as git applies them; with none,
         // the remote's configured refspecs (or its HEAD).
-        if unshallow {
-            try await client.unshallow(remote: name, refspecs: refspecs, prune: prune)
-        } else {
-            try await client.fetch(remote: name, refspecs: refspecs, depth: depth, prune: prune)
+        do {
+            if unshallow {
+                try await client.unshallow(remote: name, refspecs: refspecs, prune: prune)
+            } else {
+                try await client.fetch(remote: name, refspecs: refspecs, depth: depth, prune: prune)
+            }
+        } catch let error as NoRemoteHelperError {
+            throw CLIError(error)
         }
         // Progress and per-ref summaries are written by GitClient's
         // libgit2 callbacks through the active shell stderr.

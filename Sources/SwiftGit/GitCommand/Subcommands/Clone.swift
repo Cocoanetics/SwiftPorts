@@ -67,12 +67,16 @@ struct Clone: AsyncParsableCommand {
         }
 
         // The remote as typed: a `URL` can't always hold a scp-style one.
-        try await CommandContext.gitClient(quiet: quiet).clone(
-            remote: url,
-            directory: dest,
-            depth: depth,
-            singleBranch: singleBranch || depth != nil,
-            branch: branch)
+        do {
+            try await CommandContext.gitClient(quiet: quiet).clone(
+                remote: url,
+                directory: dest,
+                depth: depth,
+                singleBranch: singleBranch || depth != nil,
+                branch: branch)
+        } catch let error as NoRemoteHelperError {
+            throw CLIError(error)
+        }
 
         // A local clone has no transfer progress (libgit2's local
         // transport skips it), so close out with `done.\n`, as real git

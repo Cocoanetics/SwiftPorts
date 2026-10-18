@@ -38,20 +38,38 @@ import Testing
     /// Which remotes are scp-style `host:path` (`url_is_local_not_ssh`).
     @Test func scpStyleFollowsGit() {
         #expect(GitClient.isSCPLike("git@host:repo.git"))
-        #expect(GitClient.isSCPLike("1:repo.git"))
         #expect(!GitClient.isSCPLike("/srv/team@host/repo:copy.git"))
         #expect(!GitClient.isSCPLike("ssh://host/repo.git"))
         #if os(Windows)
+        // git 2.54's drive prefix is any one character and a colon.
         #expect(!GitClient.isSCPLike("C:/repo.git"))
         #expect(!GitClient.isSCPLike(#"c:\repo.git"#))
+        #expect(!GitClient.isSCPLike("1:repo.git"))
+        #expect(!GitClient.isSCPLike("ä:repo.git"))
         // A drive path, even with `//` after the colon.
         #expect(!GitClient.isURLOrSCPLike("C://repos/repo.git"))
         #else
         #expect(GitClient.isSCPLike("C:/repo.git"))
+        #expect(GitClient.isSCPLike("1:repo.git"))
         #expect(GitClient.isURLOrSCPLike("C://repos/repo.git"))
         #endif
         #expect(GitClient.isURLOrSCPLike("https://host/repo.git"))
         #expect(!GitClient.isURLOrSCPLike("../repo.git"))
+    }
+
+    /// git's URL syntax (`is_url`), and the schemes it has a transport for.
+    @Test func urlSchemesFollowGit() throws {
+        #expect(GitClient.urlScheme(of: "https://host/r.git") == "https")
+        #expect(GitClient.urlScheme(of: "git+ssh://host/r.git") == "git+ssh")
+        #expect(GitClient.urlScheme(of: "C://repos/r.git") == "C")
+        #expect(GitClient.urlScheme(of: "git@host:r.git") == nil)
+        #expect(GitClient.urlScheme(of: "me@host:path://x") == nil)
+        #expect(GitClient.urlScheme(of: "+x://host/r") == nil)
+        try GitClient.requireTransport(for: "ssh://host/r.git")
+        try GitClient.requireTransport(for: "git@host:r.git")
+        #expect(throws: NoRemoteHelperError(scheme: "foo")) {
+            try GitClient.requireTransport(for: "foo://host/r.git")
+        }
     }
 
     /// Which `<repository>` paths are joined to the top of the work tree.

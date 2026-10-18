@@ -493,6 +493,24 @@ struct GitCommandRemoteTests {
         #expect(!Clone.isLocal("file:///srv/repo.git"))
     }
 
+    @Test("a URL whose scheme no transport handles is refused as git refuses it")
+    func unknownScheme() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        // Not taken for SSH, as libgit2 would.
+        for args in [["fetch", "foo://host/x"], ["push", "foo://host/x", "main"], ["clone", "-q", "foo://host/x"]] {
+            do {
+                try await git(args, in: clone)
+                Issue.record("expected git \(args[0]) to fail")
+            } catch let error as CLIError {
+                #expect(error.lines == [
+                    "git: 'remote-foo' is not a git command. See 'git --help'.",
+                    "fatal: remote helper 'foo' aborted session"
+                ])
+                #expect(error.exitCode == 128)
+            }
+        }
+    }
+
     @Test("git refuses a bad push.default before anything else")
     func pushSettingsComeFirst() async throws {
         let (_, clone) = try makeRemoteAndClone()

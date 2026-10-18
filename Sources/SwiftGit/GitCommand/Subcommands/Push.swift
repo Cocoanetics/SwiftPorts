@@ -47,8 +47,13 @@ struct Push: AsyncParsableCommand {
             ? try await DefaultPush.plan(client: client, remote: remoteName, settings: settings)
             : DefaultPush.Plan(remote: remoteName ?? "origin", refspecs: refspecs, setUpstream: false)
         let upstream = setUpstream || plan.setUpstream
-        let pushed = try await client.push(
-            remote: plan.remote, refspecs: plan.refspecs, setUpstream: upstream)
+        let pushed: [String]
+        do {
+            pushed = try await client.push(
+                remote: plan.remote, refspecs: plan.refspecs, setUpstream: upstream)
+        } catch let error as NoRemoteHelperError {
+            throw CLIError(error)
+        }
         // Like git, confirm each upstream recorded, for a URL or path too.
         guard upstream, !quiet else { return }
         for refspec in pushed {
