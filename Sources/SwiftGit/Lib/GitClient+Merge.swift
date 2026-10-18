@@ -87,7 +87,7 @@ extension GitClient {
     ) async throws -> MergeOutcome {
         let head = try await fetchForPull(remote: remote, branch: branch)
         var message = message
-        if message == nil { message = try await pullMergeMessage(for: head) }
+        if message == nil { message = try await pullMergeMessage(for: head, repository: remote) }
         return try await merge(
             ref: head.oid,
             fastForward: fastForward,
@@ -115,9 +115,16 @@ extension GitClient {
     /// The merge commit message git writes for pulling `head` into the
     /// current branch: `Merge branch 'x' of <url>`, with ` into <branch>`
     /// unless `merge.suppressDest` (by default `main` and `master`)
-    /// matches the branch.
-    public func pullMergeMessage(for head: FetchHeadEntry) async throws -> String {
-        let subject = "Merge " + Self.describingURLAsGit(head.description)
+    /// matches the branch. A `repository` that is a URL or path rather
+    /// than a configured remote is named as typed (`../other`), and the
+    /// repository itself (`.`) not at all, as git names them.
+    public func pullMergeMessage(for head: FetchHeadEntry, repository: String? = nil) async throws -> String {
+        var description = head.description
+        if let repository, !(try await remoteList()).contains(repository),
+           let of = description.range(of: "' of ") {
+            description = description[..<of.upperBound] + repository
+        }
+        let subject = "Merge " + Self.describingURLAsGit(description)
         let branch = try await currentBranch() ?? "HEAD"
         var patterns = ["main", "master"]
         var configured = false
@@ -166,6 +173,8 @@ extension GitClient {
         }
         while url.count > 1, url.hasSuffix("/") { url = url.dropLast() }
         if url.count > 5, url.hasSuffix(".git") { url = url.dropLast(4) }
+        // A local branch, pulled from `.`, is named without a source.
+        if url == ".", prefix.hasSuffix("' of ") { return String(prefix.dropLast(4)) }
         return String(prefix + url)
     }
 

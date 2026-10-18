@@ -1125,6 +1125,35 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "topic"], in: second))
     }
 
+    @Test("git pull names a repository typed as a path as git does")
+    func pullPathMergeMessage() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["switch", "-q", "-c", "side"], in: clone)
+        try commitFile("side.txt", in: clone)
+        try systemGit(["switch", "-q", "-c", "work", "main"], in: clone)
+        try commitFile("work.txt", in: clone)
+        try systemGit(["config", "pull.rebase", "false"], in: clone)
+
+        // From `.`, a local branch, named without a source.
+        let theirs = try twin(of: clone)
+        try systemGit(["pull", "-q", "--no-edit", ".", "side"], in: theirs)
+        try await git(["pull", "-q", ".", "side"], in: clone)
+        let local = try systemGit(["log", "-1", "--format=%s"], in: clone)
+        #expect(try local == systemGit(["log", "-1", "--format=%s"], in: theirs))
+        #expect(local == "Merge branch 'side' into work")
+
+        // A relative path, as typed, without trailing slashes, then
+        // without a trailing `.git` (which can leave a slash).
+        try systemGit(["reset", "-q", "--hard", "HEAD^"], in: clone)
+        try await git(["pull", "-q", "../\(clone.lastPathComponent)/.git/", "side"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%s"], in: clone)
+                == "Merge branch 'side' of ../\(clone.lastPathComponent)/ into work")
+        try systemGit(["reset", "-q", "--hard", "HEAD^"], in: clone)
+        try await git(["pull", "-q", "../\(clone.lastPathComponent)//", "side"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%s"], in: clone)
+                == "Merge branch 'side' of ../\(clone.lastPathComponent) into work")
+    }
+
     @Test("git pull of branches that diverged follows pull.rebase and pull.ff")
     func pullDivergedFollowsConfig() async throws {
         // Without a say, git refuses; --ff-only and pull.ff=only refuse too.
@@ -1183,6 +1212,8 @@ struct GitCommandRemoteTests {
         try Data("mine\n".utf8).write(to: clone.appendingPathComponent("file.txt"))
         try systemGit(["commit", "-q", "-am", "mine"], in: clone)
         try systemGit(["config", "pull.rebase", "false"], in: clone)
+        // Of git's two names for it, the one configured last counts.
+        try systemGit(["config", "core.commentString", "%"], in: clone)
         try systemGit(["config", "core.commentChar", ";"], in: clone)
 
         let theirs = try twin(of: clone)

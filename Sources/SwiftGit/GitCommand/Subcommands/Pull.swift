@@ -179,7 +179,9 @@ struct Pull: AsyncParsableCommand {
         default: mode = .auto
         }
         var mergeMessage = message
-        if mergeMessage == nil { mergeMessage = try await client.pullMergeMessage(for: head) }
+        if mergeMessage == nil {
+            mergeMessage = try await client.pullMergeMessage(for: head, repository: repository)
+        }
         let outcome: MergeOutcome
         do {
             outcome = try await client.merge(
@@ -317,12 +319,13 @@ struct Pull: AsyncParsableCommand {
         "invocation."
     ]
 
-    /// What starts a comment line in a commit message: `core.commentString`,
-    /// else `core.commentChar`, else `#`; with `auto`, the first of git's
+    /// What starts a comment line in a commit message: the last of
+    /// `core.commentChar` and `core.commentString` configured (git reads
+    /// them as one setting), else `#`; with `auto`, the first of git's
     /// candidates no line of `message` starts with.
     static func commentString(for message: String, client: SwiftGit.GitClient) async throws -> String {
-        var configured = try await client.configGet("core.commentString")
-        if configured == nil { configured = try await client.configGet("core.commentChar") }
+        let configured = try await client.configList()
+            .last { ["core.commentchar", "core.commentstring"].contains($0.name.lowercased()) }?.value
         guard let configured, !configured.isEmpty else { return "#" }
         guard configured == "auto" else { return configured }
         let starts = Set(message.split(separator: "\n").compactMap { $0.drop { $0 == " " }.first })
