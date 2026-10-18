@@ -54,10 +54,18 @@ extension GitClient {
     static func isRelativePath(_ path: String) -> Bool {
         if path.hasPrefix("/") { return false }
         #if os(Windows)
-        if path.hasPrefix("\\") || path.dropFirst().first == ":" { return false }
+        if path.hasPrefix("\\") || hasDriveLetter(path) { return false }
         #endif
         return true
     }
+
+    #if os(Windows)
+    /// git's `has_dos_drive_prefix`: an ASCII letter, then a colon.
+    static func hasDriveLetter(_ path: String) -> Bool {
+        guard let letter = path.first, letter.isASCII, letter.isLetter else { return false }
+        return path.dropFirst().first == ":"
+    }
+    #endif
 
     /// Record `remote`, as typed, as the upstream remote of each branch
     /// in `pushed`. GitKit records where it pushed — for a path, the
@@ -84,8 +92,8 @@ extension GitClient {
     public static func isSCPLike(_ remote: String) -> Bool {
         guard !remote.contains("://"), let colon = remote.firstIndex(of: ":") else { return false }
         #if os(Windows)
-        // `C:/repo` is a drive letter, not a host.
-        if remote.distance(from: remote.startIndex, to: colon) == 1 { return false }
+        // `C:/repo` is a drive letter, not a host; `1:repo.git` is a host.
+        if hasDriveLetter(remote) { return false }
         #endif
         return !remote[..<colon].contains("/")
     }

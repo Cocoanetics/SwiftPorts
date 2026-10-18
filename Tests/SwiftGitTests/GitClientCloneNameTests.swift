@@ -35,6 +35,20 @@ import Testing
         #endif
     }
 
+    /// Which remotes are scp-style `host:path` (`url_is_local_not_ssh`).
+    @Test func scpStyleFollowsGit() {
+        #expect(GitClient.isSCPLike("git@host:repo.git"))
+        #expect(GitClient.isSCPLike("1:repo.git"))
+        #expect(!GitClient.isSCPLike("/srv/team@host/repo:copy.git"))
+        #expect(!GitClient.isSCPLike("ssh://host/repo.git"))
+        #if os(Windows)
+        #expect(!GitClient.isSCPLike("C:/repo.git"))
+        #expect(!GitClient.isSCPLike(#"c:\repo.git"#))
+        #else
+        #expect(GitClient.isSCPLike("C:/repo.git"))
+        #endif
+    }
+
     /// Which `<repository>` paths are joined to the top of the work tree.
     @Test func relativePathsFollowGit() {
         #expect(GitClient.isRelativePath("../bare"))
