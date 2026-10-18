@@ -128,6 +128,14 @@ struct Push: AsyncParsableCommand {
                     leases.leases.append(.init(ref: ref, expectation: .absent))
                     continue
                 }
+                // A full object ID is taken as given, here or not (git's
+                // get_oid); all zeros expects the ref absent.
+                if [40, 64].contains(expect.count), expect.allSatisfy(\.isHexDigit) {
+                    leases.leases.append(.init(
+                        ref: ref,
+                        expectation: expect.allSatisfy { $0 == "0" } ? .absent : .object(expect.lowercased())))
+                    continue
+                }
                 guard let oid = try? await client.resolveOID(expect) else {
                     throw CLIError.stderr(
                         "error: cannot parse expected object name '\(expect)'", exitCode: 129)

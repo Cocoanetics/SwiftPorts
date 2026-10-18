@@ -914,6 +914,26 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "main"], in: other))
     }
 
+    @Test("a full object ID for <expect> is taken as given; all zeros expects the ref absent")
+    func pushLeaseFullObjectID() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        _ = try diverge(remote: remote, clone: clone)
+        let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        for expect in [String(repeating: "1", count: 40), String(repeating: "0", count: 40)] {
+            do {
+                try await git(["push", "-q", "--force-with-lease=main:\(expect)", "origin", "main"], in: clone)
+                Issue.record("expected a stale lease")
+            } catch let error as CLIError {
+                #expect(error.lines.dropFirst().first == " ! [rejected]        main -> main (stale info)")
+                #expect(error.lines.last == "error: failed to push some refs to '\(url)'")
+            }
+        }
+        // Absent, a new branch goes through.
+        try await git(["push", "-q", "--force-with-lease=newb:\(String(repeating: "0", count: 40))",
+                       "origin", "HEAD:newb"], in: clone)
+        #expect(try systemGit(["rev-parse", "newb"], in: remote) == systemGit(["rev-parse", "HEAD"], in: clone))
+    }
+
     // MARK: fetch
 
     @Test("git fetch with no arguments, or just the repository")
