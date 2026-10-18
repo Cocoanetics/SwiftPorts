@@ -758,6 +758,32 @@ struct GitCommandRemoteTests {
         }
     }
 
+    @Test("a typed remote insteadOf rewrites is shown rewritten, as git shows it")
+    func rewrittenOperandIsShownRewritten() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let twin = tmp("GitRemoteTwin")
+        try systemGit(["clone", "-q", remote.path, twin.path], in: clone)
+        let base = tmp("GitRemoteRewrite")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        for name in ["dst.git", "pdst.git", "twin-dst.git", "twin-pdst.git"] {
+            try systemGit(["init", "-q", "--bare", "-b", "main", base.appendingPathComponent(name).path], in: base)
+        }
+        for (repo, prefix) in [(clone, ""), (twin, "twin-")] {
+            try systemGit(["config", "url.\(base.path)/\(prefix).insteadOf", "alias:"], in: repo)
+            try systemGit(["config", "url.\(base.path)/\(prefix)p.pushInsteadOf", "palias:"], in: repo)
+        }
+        func same(_ args: [String]) async throws {
+            let expected = try systemGitStderr(args, in: twin)
+            let actual = try await gitStderr(args, in: clone)
+            #expect(expected.status == 0)
+            #expect(actual.status == expected.status)
+            #expect(actual.stderr == expected.stderr.replacingOccurrences(of: "/twin-", with: "/"))
+        }
+        try await same(["push", "alias:dst.git", "main"])
+        try await same(["fetch", "alias:dst.git", "main"])
+        try await same(["push", "palias:dst.git", "main"])
+    }
+
     @Test("under a path-mapped sandbox, a configured relative remote fetches from the mapped work tree")
     func fetchConfiguredRelativeRemoteUnderPathMapping() async throws {
         let (remote, clone) = try makeRemoteAndClone()
