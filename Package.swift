@@ -430,7 +430,7 @@ let package = Package(
         // relative remote opens from the top of the work tree, as in git,
         // and the gate authorizes exactly where libgit2 connects.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 branch: "remote-connection-location",
+                 from: "2.6.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
