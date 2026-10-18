@@ -1,6 +1,7 @@
 import ArgumentParser
 import ShellKit
 import Foundation
+import SwiftGit
 
 /// Exit non-zero with a custom stderr message — mirrors real git's
 /// behaviour where errors are always printed to stderr with a specific
@@ -33,6 +34,11 @@ public struct CLIError: Error, LocalizedError {
 }
 
 extension CLIError {
+    /// git's words, and exit status, for a URL no transport handles.
+    init(_ error: UnsupportedTransportError) {
+        self.init(lines: error.lines, exitCode: 128)
+    }
+
     /// Print every line to stderr and exit. Subcommands call this from
     /// `run()` via a top-level catch in `Entry.swift` so the exit-code
     /// path is uniform.

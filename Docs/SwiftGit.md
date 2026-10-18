@@ -68,9 +68,10 @@ let client = GitClient(
 |---|---|
 | `initRepository(bare:initialBranch:reinit:)` | `git init [--bare] [-b <branch>]` |
 | `clone(url:directory:depth:singleBranch:branch:)` | `git clone [--depth N] [--single-branch] [--branch <name>] <url> [<dir>]` |
-| `fetch(remote:refspec:depth:prune:)` / `unshallow(remote:refspec:prune:)` | `git fetch [--depth N\|--unshallow] [--[no-]prune] <remote> <refspec>` |
+| `fetch(remote:refspecs:depth:prune:)` / `unshallow(remote:refspecs:prune:)` | `git fetch [--depth N\|--unshallow] [--[no-]prune] <remote> [<refspec>…]`: one fetch, so a negative `^<ref>` excludes what the others match; no refspecs fetch what the remote is configured to fetch (else its `HEAD`); a relative path is relative to the top of the work tree, as in git. `fetch(remote:refspec:…)` takes one |
 | `pull(...)` / `pullRebase(...)` | `git pull` / `git pull --rebase` |
-| `push(remote:refspec:setUpstream:)` | `git push [-u] <remote> <refspec>` |
+| `push(remote:refspecs:setUpstream:)` → pushed refspecs | `git push [-u] <remote> [<refspec>…]`: one push, patterns, `:` (matching branches) and negative `^<ref>` included; no refspecs push `remote.<name>.push`; a relative path is relative to the top of the work tree, and `-u` records it as typed. `push(remote:refspec:setUpstream:)` takes one |
+| `quiet = true` (property) | `-q` / `--quiet` for `clone`, `fetch`, `pull` and `push`: no progress lines or per-ref summaries |
 | `add(paths:)` | `git add -A` (empty paths) / `git add -- <paths>` |
 | `commit(message:author:allowEmpty:)` | `git commit` |
 | `merge(ref:fastForward:message:author:)` / `mergeContinue(...)` | `git merge` (--ff / --no-ff / --ff-only) / `git merge --continue` |

@@ -56,8 +56,14 @@ struct Tier2EnvBridgeTests {
 
         // After the sandboxed call, libgit2's GLOBAL search path was
         // set to `sandbox.homeDirectory` (the bridge's fallback).
-        // Confirm by reading user.name at GLOBAL — should be empty.
-        let leaked = readUserNameAtGlobalLevel(repoAt: repoDir)
+        // Confirm by reading user.name at GLOBAL — should be empty. The
+        // read holds the bridge's lock: other suites' GitClient calls
+        // run in parallel and re-point the process-global option block.
+        let leaked = try await shell.withCurrent {
+            try Libgit2Sandboxing.shared.runIsolated(sandbox) {
+                readUserNameAtGlobalLevel(repoAt: repoDir)
+            }
+        }
         #expect(leaked == nil || leaked?.isEmpty == true,
                 Comment(rawValue:
                     "Default-secure isolation broken: GLOBAL config still " +
@@ -84,9 +90,9 @@ struct Tier2EnvBridgeTests {
         // home (the default-secure guarantee it proves). Restore
         // libgit2's defaults so this negative control observes the
         // HOST config search path again.
-        try Libgit2Sandboxing.shared.runIsolated(nil) {}
-
-        let leaked = readUserNameAtGlobalLevel(repoAt: repoDir)
+        let leaked = try Libgit2Sandboxing.shared.runIsolated(nil) {
+            readUserNameAtGlobalLevel(repoAt: repoDir)
+        }
         #expect(leaked == hostName,
                 "expected libgit2 to leak \(hostName) without Layer A; got \(leaked ?? "nil")")
 
@@ -118,12 +124,15 @@ struct Tier2EnvBridgeTests {
         }
 
         // After the sandbox-activated call, options have been
-        // applied. Read the GLOBAL config now and confirm the leak
-        // is closed. (The actor releases the lock at the end of
-        // runIsolated, so the option block remains pointed at
-        // scratchHome until the next runIsolated reapplies. That's
-        // fine for this test.)
-        let blocked = readUserNameAtGlobalLevel(repoAt: repoDir)
+        // applied. Read the GLOBAL config under the same sandbox, with
+        // the bridge's lock held, and confirm the leak is closed. (A
+        // read after the lock is released raced other suites'
+        // GitClient calls, which re-point the process-global block.)
+        let blocked = try await shell.withCurrent {
+            try Libgit2Sandboxing.shared.runIsolated(sandbox) {
+                readUserNameAtGlobalLevel(repoAt: repoDir)
+            }
+        }
         #expect(blocked == nil || blocked?.isEmpty == true,
                 "expected GLOBAL config to be empty under sandbox; got \(blocked ?? "nil")")
     }

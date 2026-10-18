@@ -26,6 +26,10 @@ struct Commit: AsyncParsableCommand {
           help: "Allow recording a commit that has the same tree as its parent.")
     var allowEmpty: Bool = false
 
+    @Flag(name: [.customShort("q"), .customLong("quiet")],
+          help: "Suppress the commit summary.")
+    var quiet: Bool = false
+
     func run() async throws {
         let parsedAuthor = try author.map { try Self.parseAuthor($0) }
         let client = CommandContext.gitClient()
@@ -53,6 +57,8 @@ struct Commit: AsyncParsableCommand {
                 ["On branch \(branch)", "nothing to commit, working tree clean"],
                 exitCode: 1)
         }
+
+        if quiet { return }
 
         // [<branch> [(root-commit) ]<short>] <subject>
         let branchTag = details.branchName ?? "detached HEAD"

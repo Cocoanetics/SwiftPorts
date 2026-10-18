@@ -1,4 +1,5 @@
 import Foundation
+import CGitKit
 import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` config operations
@@ -27,5 +28,64 @@ extension GitClient {
     /// Walk every config entry visible to the repo — matches `git config --list`.
     public func configList() async throws -> [(name: String, value: String)] {
         try await withRepository { try $0.configList() }
+    }
+
+    /// A boolean config value as git reads one (`true`/`yes`/`on`, any
+    /// nonzero integer, a key without a value), or `nil` when unset.
+    /// Anything else throws git's "bad boolean config value".
+    public func configBool(_ name: String) async throws -> Bool? {
+        try await withRepository { _ in
+            try Self.configEntry(name, in: workingDirectory).map { try Self.parseGitBool($0, key: name) }
+        }
+    }
+
+    /// The config entry `name` as written, `nil` when it isn't set:
+    /// `.some(nil)` for a key without a value (`[push] autoSetupRemote`),
+    /// which ``configGet(_:scope:)`` reads as empty. GitKit keeps its
+    /// repository handle to itself, so this opens its own.
+    static func configEntry(_ name: String, in directory: URL) throws -> String?? {
+        var repo: OpaquePointer?
+        var config: OpaquePointer?
+        var entry: UnsafeMutablePointer<git_config_entry>?
+        defer {
+            git_config_entry_free(entry)
+            git_config_free(config)
+            git_repository_free(repo)
+        }
+        try check(git_repository_open_ext(&repo, directory.path, 0, nil))
+        try check(git_repository_config_snapshot(&config, repo))
+        let result = git_config_get_entry(&entry, config, name)
+        if result == GIT_ENOTFOUND.rawValue { return nil }
+        try check(result)
+        return .some(entry?.pointee.value.map { String(cString: $0) })
+    }
+
+    /// Throws libgit2's error for a call that failed with `result`.
+    static func check(_ result: CInt) throws {
+        guard result < 0 else { return }
+        let last = git_error_last()
+        throw Libgit2Error(
+            code: result, klass: last?.pointee.klass ?? 0,
+            message: last?.pointee.message.map { String(cString: $0) } ?? "unknown error")
+    }
+
+    /// git's boolean parsing (`git_config_parse_bool`) and its error,
+    /// which names the key the way git spells it (section and variable
+    /// lowercased: `push.autosetupremote`). A key without a value is
+    /// true; an empty value is false.
+    static func parseGitBool(_ value: String?, key: String) throws -> Bool {
+        guard let value else { return true }
+        var parsed: CInt = 0
+        let result = value.withCString { git_config_parse_bool(&parsed, $0) }
+        guard result == 0 else {
+            var canonical = key.lowercased()
+            if let first = key.firstIndex(of: "."), let last = key.lastIndex(of: "."), first < last {
+                canonical = key[..<first].lowercased() + key[first..<last] + key[last...].lowercased()
+            }
+            throw Libgit2Error(
+                code: Int32(result), klass: 0,
+                message: "bad boolean config value '\(value)' for '\(canonical)'")
+        }
+        return parsed != 0
     }
 }

@@ -57,19 +57,30 @@ struct GitCommandParsingTests {
         }
     }
 
-    @Test("fetch: defaults to origin")
+    @Test("fetch: no arguments")
     func fetchDefaultRemote() throws {
-        let cmd = try parse(["fetch", "main"], as: Fetch.self)
-        #expect(cmd.remote == "origin")
-        #expect(cmd.refspec == "main")
+        let cmd = try parse(["fetch"], as: Fetch.self)
+        #expect(cmd.remote == nil)
+        #expect(cmd.arguments.isEmpty)
         #expect(cmd.prune == nil)
+        #expect(cmd.quiet == false)
     }
 
-    @Test("fetch: --remote overrides default")
+    @Test("fetch: repository, then refspecs, as in git")
+    func fetchPositional() throws {
+        let cmd = try parse(["fetch", "-q", "upstream", "main", "dev"], as: Fetch.self)
+        let split = RemoteArguments.split(cmd.arguments, remote: cmd.remote)
+        #expect(split.remote == "upstream")
+        #expect(split.refspecs == ["main", "dev"])
+        #expect(cmd.quiet == true)
+    }
+
+    @Test("fetch: --remote keeps every argument a refspec")
     func fetchExplicit() throws {
         let cmd = try parse(["fetch", "--remote", "upstream", "main"], as: Fetch.self)
-        #expect(cmd.remote == "upstream")
-        #expect(cmd.refspec == "main")
+        let split = RemoteArguments.split(cmd.arguments, remote: cmd.remote)
+        #expect(split.remote == "upstream")
+        #expect(split.refspecs == ["main"])
     }
 
     @Test("fetch: depth and unshallow flags")
@@ -118,29 +129,50 @@ struct GitCommandParsingTests {
         #expect(split.paths.isEmpty)
     }
 
-    @Test("push: bare refspec defaults to origin")
+    @Test("push: no arguments")
     func pushDefault() throws {
-        let cmd = try parse(["push", "main"], as: Push.self)
-        #expect(cmd.remote == "origin")
-        #expect(cmd.refspec == "main")
+        let cmd = try parse(["push"], as: Push.self)
+        #expect(cmd.remote == nil)
+        #expect(cmd.arguments.isEmpty)
         #expect(cmd.setUpstream == false)
+        #expect(cmd.quiet == false)
     }
 
-    @Test("push: -u sets upstream flag")
-    func pushSetUpstreamShort() throws {
-        let cmd = try parse(["push", "-u", "main"], as: Push.self)
+    @Test("push: repository, then refspecs, as in git (#123)")
+    func pushPositional() throws {
+        let cmd = try parse(["push", "-u", "-q", "origin", "main", "dev"], as: Push.self)
+        let split = RemoteArguments.split(cmd.arguments, remote: cmd.remote)
+        #expect(split.remote == "origin")
+        #expect(split.refspecs == ["main", "dev"])
         #expect(cmd.setUpstream == true)
-        #expect(cmd.remote == "origin")
-        #expect(cmd.refspec == "main")
+        #expect(cmd.quiet == true)
     }
 
     @Test("push: --set-upstream + --remote long form")
     func pushSetUpstreamLong() throws {
         let cmd = try parse(
             ["push", "--set-upstream", "--remote", "upstream", "main"], as: Push.self)
+        let split = RemoteArguments.split(cmd.arguments, remote: cmd.remote)
         #expect(cmd.setUpstream == true)
-        #expect(cmd.remote == "upstream")
-        #expect(cmd.refspec == "main")
+        #expect(split.remote == "upstream")
+        #expect(split.refspecs == ["main"])
+    }
+
+    @Test("commit, pull and clone take -q / --quiet (#123)")
+    func quietFlags() throws {
+        #expect(try parse(["commit", "-q", "-m", "msg"], as: Commit.self).quiet)
+        #expect(try parse(["commit", "--quiet", "-m", "msg"], as: Commit.self).quiet)
+        #expect(try parse(["pull", "-q"], as: Pull.self).quiet)
+        #expect(try parse(["clone", "-q", "https://github.com/o/r.git"], as: Clone.self).quiet)
+    }
+
+    @Test("clone: local and network remotes")
+    func cloneLocality() {
+        #expect(!Clone.isLocal("file:///tmp/r"))  // the regular transport, as in git
+        #expect(Clone.isLocal("/tmp/r"))
+        #expect(!Clone.isLocal("https://github.com/o/r.git"))
+        #expect(!Clone.isLocal("git@github.com:o/r.git"))
+        #expect(!Clone.isLocal("ssh://host/r.git"))
     }
 
     @Test("remote add: name + URL")

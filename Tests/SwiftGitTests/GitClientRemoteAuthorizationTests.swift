@@ -58,6 +58,69 @@ import ShellKit
         #expect(denial?.reason == "host 'example.invalid' is not in the sandbox allowlist")
     }
 
+    /// A configured remote is judged like a typed one, by where libgit2
+    /// connects: its URL after `insteadOf`, a push's push URL, a path as
+    /// the process reads it. Before, only typed remotes were gated.
+    @Test func configuredRemotesAreJudgedByWhereTheyConnect() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitClientRemoteAuthorizationTests-\(UUID().uuidString)")
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitClientRemoteAuthorizationTests-outside-\(UUID().uuidString)")
+        defer { [root, outside].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let repo = root.appendingPathComponent("repo")
+        try Repository.initialize(at: repo, initialBranch: "main")
+        let inside = root.appendingPathComponent("inside.git")
+        try Repository.initialize(at: inside, bare: true, initialBranch: "main")
+        try Repository.initialize(at: outside, bare: true, initialBranch: "main")
+        let shell = Shell(environment: Environment(workingDirectory: repo.path), sandbox: Sandbox.rooted(at: root))
+
+        try await shell.withCurrent {
+            let client = GitClient(workingDirectory: repo)
+            try await client.addRemote(name: "web", remote: "https://example.invalid/owner/repo.git")
+            try await client.addRemote(name: "mirror", remote: inside.path)
+            try await client.configSet("remote.mirror.pushurl", "https://example.invalid/mirror.git")
+            try await client.addRemote(name: "short", remote: "short:repo.git")
+            try await client.configSet("url.https://example.invalid/.insteadOf", "short:")
+            try await client.addRemote(name: "outside", remote: outside.path)
+
+            func denial(_ body: () async throws -> Void) async -> Sandbox.Denial? {
+                do { try await body() } catch let denial as Sandbox.Denial { return denial } catch {}
+                return nil
+            }
+            let hostDenied = "host 'example.invalid' is not in the sandbox allowlist"
+            #expect(await denial { try await client.fetch(remote: "web", refspecs: [], depth: nil) }?.reason
+                    == hostDenied)
+            #expect(await denial { try await client.fetch(remote: "short", refspecs: [], depth: nil) }?.reason
+                    == hostDenied)
+            // The mirror fetches from inside the sandbox, but pushes out.
+            #expect(await denial { try await client.fetch(remote: "mirror", refspecs: [], depth: nil) } == nil)
+            #expect(await denial {
+                try await client.push(remote: "mirror", refspecs: ["HEAD:refs/heads/x"], setUpstream: false)
+            }?.reason == hostDenied)
+            #expect(await denial { try await client.fetch(remote: "outside", refspecs: [], depth: nil) } != nil)
+
+            // A scheme no transport handles is refused, as git refuses
+            // it, rather than taken for SSH.
+            try await client.addRemote(name: "weird", remote: "foo://example.invalid/r.git")
+            await #expect(throws: UnsupportedTransportError.noHelper(scheme: "foo")) {
+                try await client.fetch(remote: "weird", refspecs: [], depth: nil)
+            }
+
+            // A typed remote is judged after libgit2's insteadOf too: a
+            // scp-style `short:` and a path inside the sandbox both lead
+            // out to the blocked host.
+            #expect(await denial { try await client.fetch(remote: "short:repo.git", refspecs: [], depth: nil) }?
+                .reason == hostDenied)
+            try await client.configSet("url.https://example.invalid/.insteadOf", inside.path)
+            #expect(await denial { try await client.fetch(remote: inside.path, refspecs: [], depth: nil) }?
+                .reason == hostDenied)
+            // git rewrites a relative path as typed, before reading it as one.
+            try await client.configSet("url.https://example.invalid/alias/.insteadOf", "../alias")
+            #expect(await denial { try await client.fetch(remote: "../alias", refspecs: [], depth: nil) }?
+                .reason == hostDenied)
+        }
+    }
+
     @Test func cloneOfBracketedIPv6RemoteIsJudgedByHost() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitClientRemoteAuthorizationTests-\(UUID().uuidString)")

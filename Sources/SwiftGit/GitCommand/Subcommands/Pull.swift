@@ -33,6 +33,10 @@ struct Pull: AsyncParsableCommand {
             help: "Merge commit message (3-way merges only).")
     var message: String?
 
+    @Flag(name: [.customShort("q"), .customLong("quiet")],
+          help: "Suppress progress and the merge summary; conflicts are still reported.")
+    var quiet: Bool = false
+
     @Argument(help: "Remote name. Defaults to `origin`.")
     var remote: String = "origin"
 
@@ -50,15 +54,27 @@ struct Pull: AsyncParsableCommand {
     }
 
     func run() async throws {
-        let client = CommandContext.gitClient()
+        do {
+            try await pull()
+        } catch let error as UnsupportedTransportError {
+            throw CLIError(error)
+        }
+    }
+
+    private func pull() async throws {
+        let client = CommandContext.gitClient(quiet: quiet)
 
         if rebase {
             // pull --rebase: fetch then rebase against <remote>/<branch>.
             let outcome = try await client.pullRebase(
                 remote: remote, branch: branch, author: nil) { current, total in
-                Rebase.emitProgress(current: current, total: total)
+                if !quiet { Rebase.emitProgress(current: current, total: total) }
             }
-            try Rebase.printOutcome(outcome)
+            if quiet, case .conflict = outcome {
+                try Rebase.printOutcome(outcome)
+            } else if !quiet {
+                try Rebase.printOutcome(outcome)
+            }
             return
         }
 
@@ -74,6 +90,10 @@ struct Pull: AsyncParsableCommand {
                 "fatal: Not possible to fast-forward, aborting.", exitCode: 128)
         }
 
-        try Merge.printOutcome(outcome)
+        if quiet, case .conflicts = outcome {
+            try Merge.printOutcome(outcome)
+        } else if !quiet {
+            try Merge.printOutcome(outcome)
+        }
     }
 }

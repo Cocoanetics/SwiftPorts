@@ -31,6 +31,8 @@ import CGitKit
 public struct GitClient: ForgeKit.GitClient {
     public let workingDirectory: URL
     public let credentials: CredentialProvider?
+    /// Drop libgit2's progress lines and per-ref summaries — `-q`.
+    public var quiet = false
 
     public init(
         workingDirectory: URL = Shell.currentDirectory,
@@ -105,11 +107,25 @@ public struct GitClient: ForgeKit.GitClient {
         depth: Int?,
         prune: Bool? = nil
     ) async throws {
+        try await fetch(remote: remote, refspecs: [refspec], depth: depth, prune: prune)
+    }
+
+    /// `git fetch <remote> [<refspec>…]`: every refspec in one fetch, as
+    /// git applies them, so a negative refspec excludes what the others
+    /// match. No refspecs fetch what the remote is configured to fetch,
+    /// or, with nothing configured (and for a URL or path), its `HEAD`
+    /// into `FETCH_HEAD`.
+    public func fetch(
+        remote: String,
+        refspecs: [String],
+        depth: Int?,
+        prune: Bool? = nil
+    ) async throws {
         let progress = shellProgressSink()
+        let remote = try await resolveRemoteOperand(remote)
         try await withRepository { repository in
-            let shouldPrune = try resolvedFetchPrune(
-                prune, remote: remote, repository: repository)
-            try repository.fetch(remote: remote, refspec: refspec, depth: depth,
+            let shouldPrune = try resolvedFetchPrune(prune, remote: remote)
+            try repository.fetch(remote: remote, refspecs: refspecs, depth: depth,
                                  prune: shouldPrune,
                                  credentials: credentials, progress: progress)
         }
@@ -120,16 +136,26 @@ public struct GitClient: ForgeKit.GitClient {
         refspec: String,
         prune: Bool? = nil
     ) async throws {
+        try await unshallow(remote: remote, refspecs: [refspec], prune: prune)
+    }
+
+    /// `git fetch --unshallow <remote> [<refspec>…]`, the refspecs applied
+    /// together as for ``fetch(remote:refspecs:depth:prune:)``.
+    public func unshallow(
+        remote: String,
+        refspecs: [String],
+        prune: Bool? = nil
+    ) async throws {
         let progress = shellProgressSink()
+        let remote = try await resolveRemoteOperand(remote)
         try await withRepository { repository in
-            let shouldPrune = try resolvedFetchPrune(
-                prune, remote: remote, repository: repository)
+            let shouldPrune = try resolvedFetchPrune(prune, remote: remote)
             try repository.unshallow(
-                remote: remote, refspec: refspec,
+                remote: remote, refspecs: refspecs,
                 credentials: credentials, progress: progress)
             if shouldPrune {
                 try repository.fetch(
-                    remote: remote, refspec: refspec, prune: true,
+                    remote: remote, refspecs: refspecs, prune: true,
                     credentials: credentials, progress: progress)
             }
         }
@@ -140,10 +166,27 @@ public struct GitClient: ForgeKit.GitClient {
     }
 
     public func push(remote: String, refspec: String, setUpstream: Bool) async throws {
+        try await push(remote: remote, refspecs: [refspec], setUpstream: setUpstream)
+    }
+
+    /// `git push <remote> [<refspec>…]`: one push for every refspec, git's
+    /// patterns, matching (`:`) and negative refspecs included. No
+    /// refspecs push the remote's `remote.<name>.push` refspecs.
+    ///
+    /// - Returns: The refspecs pushed, one per ref and fully qualified;
+    ///   empty when there was nothing to send.
+    @discardableResult
+    public func push(remote: String, refspecs: [String], setUpstream: Bool) async throws -> [String] {
         let progress = shellProgressSink()
-        try await withRepository {
-            try $0.push(remote: remote, refspec: refspec, setUpstream: setUpstream,
-                        credentials: credentials, progress: progress)
+        let location = try await resolveRemoteOperand(remote, for: .push)
+        return try await withRepository { repository in
+            let pushed = try repository.push(
+                remote: location, refspecs: refspecs, setUpstream: setUpstream,
+                credentials: credentials, progress: progress)
+            if setUpstream, location != remote {
+                try Self.recordUpstreamRemote(remote, of: pushed, pushedTo: location, in: repository)
+            }
+            return pushed
         }
     }
 
@@ -217,6 +260,7 @@ public struct GitClient: ForgeKit.GitClient {
     /// eagerly (the task-local `Shell.current`) so callbacks firing on
     /// libgit2's threads still hit the right shell.
     internal func shellProgressSink() -> @Sendable (String) -> Void {
+        guard !quiet else { return { _ in } }
         let stderr = Shell.current.stderr
         return { stderr.write(Data($0.utf8)) }
     }
@@ -230,24 +274,13 @@ public struct GitClient: ForgeKit.GitClient {
     /// Resolve `git fetch`'s tri-state pruning setting: an explicit option
     /// wins, followed by the per-remote setting, the global fetch setting,
     /// and finally Git's default of disabled pruning.
-    private func resolvedFetchPrune(
-        _ explicit: Bool?,
-        remote: String,
-        repository: Repository
-    ) throws -> Bool {
+    private func resolvedFetchPrune(_ explicit: Bool?, remote: String) throws -> Bool {
         if let explicit { return explicit }
 
         let keys = ["remote.\(remote).prune", "fetch.prune"]
         for key in keys {
-            guard let value = try repository.configGet(key) else { continue }
-            var parsed: CInt = 0
-            let result = value.withCString { git_config_parse_bool(&parsed, $0) }
-            guard result == 0 else {
-                throw Libgit2Error(
-                    code: Int32(result), klass: 0,
-                    message: "bad boolean config value '\(value)' for '\(key)'")
-            }
-            return parsed != 0
+            guard let entry = try Self.configEntry(key, in: workingDirectory) else { continue }
+            return try Self.parseGitBool(entry, key: key)
         }
         return false
     }
