@@ -920,9 +920,10 @@ struct GitCommandRemoteTests {
         try systemGit(["config", "--add", "remote.origin.push", "refs/heads/main:refs/heads/main"], in: clone)
         let config = clone.appendingPathComponent(".git/config")
         let original = try String(contentsOf: config, encoding: .utf8)
-        // As `[remote "origin"]`, and in the older `[remote.origin]`.
+        // As `[remote "origin"]`, with a tab, and in the older
+        // `[remote.origin]`.
         for (header, args) in [("[remote \"origin\"]", ["push", "-f"]), ("[remote \"origin\"]", ["push"]),
-                               ("[remote.origin]", ["push", "-f"])] {
+                               ("[remote.origin]", ["push", "-f"]), ("[remote\t\"origin\"]", ["push", "-f"])] {
             let text = original + "\(header)\n\tpush\n"
             try text.write(to: config, atomically: true, encoding: .utf8)
             let line = text.split(separator: "\n", omittingEmptySubsequences: false).count - 1

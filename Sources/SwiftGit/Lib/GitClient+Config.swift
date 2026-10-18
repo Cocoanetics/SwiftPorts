@@ -123,10 +123,12 @@ extension GitClient {
                 // `[remote "origin"]`: the section ignores case, the
                 // subsection doesn't.
                 let header = line.dropFirst().prefix { $0 != "]" }
-                let pieces = header.split(separator: " ", maxSplits: 1)
+                // Spaces and tabs both separate a section from its
+                // subsection.
+                let pieces = header.split(maxSplits: 1, whereSeparator: { $0 == " " || $0 == "\t" })
                 if pieces.count == 2 {
                     inSection = pieces[0].lowercased() == String(parts[0])
-                        && pieces[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"")) == subsection
+                        && pieces[1].trimmingCharacters(in: CharacterSet(charactersIn: " \t\"")) == subsection
                 } else if let dot = header.firstIndex(of: ".") {
                     // The older `[remote.origin]`, which git reads with
                     // the subsection lowercased.
