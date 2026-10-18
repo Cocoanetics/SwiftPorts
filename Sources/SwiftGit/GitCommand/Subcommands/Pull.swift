@@ -268,11 +268,15 @@ struct Pull: AsyncParsableCommand {
     /// hold, as git's merge checks it (`merge_name`, natural place).
     static func isTagOutsideItsPlace(_ head: SwiftGit.GitClient.FetchHeadEntry,
                                      client: SwiftGit.GitClient) async throws -> Bool {
-        guard head.description.hasPrefix("tag '"),
-              let end = head.description.dropFirst(5).firstIndex(of: "'"),
+        // The name runs to the quote before ` of ` (a ref name holds no
+        // space, but may hold a quote: `tag 'v'1' of …`), or to the last.
+        let description = head.description
+        guard description.hasPrefix("tag '"),
+              let end = description.range(of: "' of ")?.lowerBound ?? description.lastIndex(of: "'"),
+              end > description.index(description.startIndex, offsetBy: 4),
               (try? await client.objectMetadata(of: head.oid))?.kind == .tag
         else { return false }
-        let name = head.description[head.description.index(head.description.startIndex, offsetBy: 5)..<end]
+        let name = description[description.index(description.startIndex, offsetBy: 5)..<end]
         return (try? await client.resolveOID("refs/tags/\(name)")) != head.oid
     }
 

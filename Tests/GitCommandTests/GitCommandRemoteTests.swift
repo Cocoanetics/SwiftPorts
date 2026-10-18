@@ -1381,7 +1381,8 @@ struct GitCommandRemoteTests {
         try systemGit(["clone", "-q", remote.path, other.path], in: clone)
         try commitFile("two.txt", in: other)
         try systemGit(["tag", "-a", "v1", "-m", "Release one"], in: other)
-        try systemGit(["push", "-q", "origin", "main", "v1"], in: other)
+        try systemGit(["tag", "-a", "v'1", "-m", "Quoted"], in: other)
+        try systemGit(["push", "-q", "origin", "main", "v1", "v'1"], in: other)
         let tip = try systemGit(["rev-parse", "main"], in: remote)
         try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
         let start = try systemGit(["rev-parse", "HEAD"], in: clone)
@@ -1391,9 +1392,11 @@ struct GitCommandRemoteTests {
         #expect(try systemGit(["log", "-1", "--format=%B"], in: clone).hasSuffix("Release one"))
 
         for args in [["pull", "-q", "--no-rebase", "--ff", "origin", "v1"],
-                     ["pull", "-q", "--no-rebase", "origin", "tag", "v1"]] {
+                     ["pull", "-q", "--no-rebase", "origin", "tag", "v1"],
+                     ["pull", "-q", "--no-rebase", "origin", "tag", "v'1"]] {
             try systemGit(["reset", "-q", "--hard", start], in: clone)
             try? systemGit(["tag", "-d", "v1"], in: clone)
+            try? systemGit(["tag", "-d", "v'1"], in: clone)
             try await git(args, in: clone)
             #expect(try systemGit(["rev-parse", "HEAD"], in: clone) == tip, "\(args)")
         }
