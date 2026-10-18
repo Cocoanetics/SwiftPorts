@@ -101,9 +101,12 @@ extension GitClient {
         // git reads the files lowest level first and stops at the first.
         guard let first = found.min(by: { $0.level < $1.level }) else { return nil }
         let line = valuelessLine(of: first.key, in: URL(fileURLWithPath: first.path)) ?? 0
+        // Relative to where git reads it from: the work tree's top, or a
+        // bare repository's own directory.
         var file = first.path
-        if let top = git_repository_workdir(repo).map({ String(cString: $0) }), file.hasPrefix(top) {
-            file = String(file.dropFirst(top.count))
+        let base = (git_repository_workdir(repo) ?? git_repository_path(repo)).map { String(cString: $0) }
+        if let base, file.hasPrefix(base) {
+            file = String(file.dropFirst(base.count))
         }
         return (first.key, file, line)
     }
@@ -139,8 +142,10 @@ extension GitClient {
         let subsection = parts.dropFirst().dropLast().joined(separator: ".")
         let variable = String(parts.last!)
         var inSection = false
-        for (index, raw) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-            let line = raw.trimmingCharacters(in: .whitespaces)
+        // Swift reads `\r\n` as one Character: split on any newline.
+        for (index, raw) in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).enumerated() {
+            // A CRLF file's lines end in `\r` as well.
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.hasPrefix("[") {
                 // `[remote "origin"]`: the section ignores case, the
                 // subsection doesn't.

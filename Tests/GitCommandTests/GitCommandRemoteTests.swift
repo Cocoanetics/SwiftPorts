@@ -953,6 +953,41 @@ struct GitCommandRemoteTests {
         }
     }
 
+    @Test("a bare push key is found in a CRLF config too")
+    func pushValuelessRefspecCRLF() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let config = clone.appendingPathComponent(".git/config")
+        let text = (try String(contentsOf: config, encoding: .utf8) + "[remote \"origin\"]\n\tpush\n")
+            .replacingOccurrences(of: "\n", with: "\r\n")
+        try text.write(to: config, atomically: true, encoding: .utf8)
+        let line = text.components(separatedBy: "\r\n").count - 1
+        do {
+            try await git(["push", "-f"], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.last
+                    == "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line \(line)")
+        }
+    }
+
+    @Test("an empty refspec, typed or configured, is refused as git refuses it")
+    func pushEmptyRefspec() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        for args in [["push", "origin", ""]] {
+            await #expect(throws: CLIError.self) { try await git(args, in: clone) }
+        }
+        try systemGit(["config", "--add", "remote.origin.push", ""], in: clone)
+        for args in [["push"], ["push", "-f"]] {
+            do {
+                try await git(args, in: clone)
+                Issue.record("expected \(args) to fail")
+            } catch let error as CLIError {
+                #expect(error.lines == ["fatal: invalid refspec ''"])
+                #expect(error.exitCode == 128)
+            }
+        }
+    }
+
     @Test("a full object ID for <expect> is taken as given; all zeros expects the ref absent")
     func pushLeaseFullObjectID() async throws {
         let (remote, clone) = try makeRemoteAndClone()

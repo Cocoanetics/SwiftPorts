@@ -75,12 +75,17 @@ struct Push: AsyncParsableCommand {
             : DefaultPush.Plan(remote: remoteName ?? "origin", refspecs: refspecs, setUpstream: false)
         let upstream = setUpstream || plan.setUpstream
         var pushRefspecs = plan.refspecs
+        // What the remote is configured to push, when that's what goes.
+        let configured = pushRefspecs.isEmpty
+            ? try await client.configGetAll("remote.\(plan.remote).push") : []
+        // git refuses an empty refspec, typed or configured.
+        if (pushRefspecs + configured).contains("") {
+            throw CLIError.stderr("fatal: invalid refspec ''", exitCode: 128)
+        }
         if force {
             // `--force` forces the configured refspecs too, so they're
             // read here rather than left to the push.
-            if pushRefspecs.isEmpty {
-                pushRefspecs = try await client.configGetAll("remote.\(plan.remote).push")
-            }
+            if pushRefspecs.isEmpty { pushRefspecs = configured }
             pushRefspecs = pushRefspecs.map(Self.forced)
         }
         do {
@@ -161,9 +166,9 @@ struct Push: AsyncParsableCommand {
     }
 
     /// `refspec` forced, as `--force` forces it: a negative refspec has
-    /// nothing to force.
+    /// nothing to force, and an empty one stays the invalid one it is.
     static func forced(_ refspec: String) -> String {
-        refspec.hasPrefix("+") || refspec.hasPrefix("^") ? refspec : "+\(refspec)"
+        refspec.isEmpty || refspec.hasPrefix("+") || refspec.hasPrefix("^") ? refspec : "+\(refspec)"
     }
 
     /// Like git, confirm each upstream `-u` recorded, for a URL or path too.
