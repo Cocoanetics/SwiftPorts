@@ -944,13 +944,16 @@ struct GitCommandRemoteTests {
         let (remote, clone) = try makeRemoteAndClone()
         _ = try diverge(remote: remote, clone: clone)
         let url = try systemGit(["config", "remote.origin.url"], in: clone)
-        // A SHA-256 length is no object ID in this (SHA-1) repository.
-        do {
-            try await git(["push", "--force-with-lease=main:\(String(repeating: "1", count: 64))", "origin", "main"],
-                          in: clone)
-            Issue.record("expected a usage error")
-        } catch let error as CLIError {
-            #expect(error.exitCode == 129)
+        // A SHA-256 length is no object ID in this (SHA-1) repository, nor
+        // are full-width digits.
+        for bad in [String(repeating: "1", count: 64), String(repeating: "\u{FF11}", count: 40)] {
+            do {
+                try await git(["push", "--force-with-lease=main:\(bad)", "origin", "main"], in: clone)
+                Issue.record("expected a usage error")
+            } catch let error as CLIError {
+                #expect(error.lines == ["error: cannot parse expected object name '\(bad)'"])
+                #expect(error.exitCode == 129)
+            }
         }
         for expect in [String(repeating: "1", count: 40), String(repeating: "0", count: 40)] {
             do {

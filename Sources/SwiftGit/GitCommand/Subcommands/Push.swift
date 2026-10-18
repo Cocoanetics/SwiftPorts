@@ -139,7 +139,12 @@ struct Push: AsyncParsableCommand {
                 // A full object ID is taken as given, here or not (git's
                 // get_oid); all zeros expects the ref absent. Object IDs
                 // are SHA-1 ones: the libgit2 GitKit builds has no SHA-256.
-                if expect.count == 40, expect.allSatisfy(\.isHexDigit) {
+                // ASCII hex only: Swift's `isHexDigit` takes full-width
+                // digits too.
+                if expect.utf8.count == 40, expect.utf8.allSatisfy({ byte in
+                    (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
+                        || (UInt8(ascii: "a")...UInt8(ascii: "f")).contains(byte | 0x20)
+                }) {
                     leases.leases.append(.init(
                         ref: ref,
                         expectation: expect.allSatisfy { $0 == "0" } ? .absent : .object(expect.lowercased())))
