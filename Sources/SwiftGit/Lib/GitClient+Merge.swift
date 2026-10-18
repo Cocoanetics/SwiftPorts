@@ -174,17 +174,24 @@ extension GitClient {
     /// branches 'a' and 'b' of <url>`, with ` into <branch>` and the
     /// `repository` named as for one.
     public func pullMergeMessage(for heads: [FetchHeadEntry], repository: String? = nil) async throws -> String {
-        var descriptions = heads.map(\.description)
-        if let repository, !(try await remoteList()).contains(repository) {
-            descriptions = descriptions.map { description in
-                // A remote's HEAD is described by the URL alone.
-                guard let of = description.range(of: "' of ") else {
-                    return Self.isBareSource(description) ? repository : description
-                }
-                return String(description[..<of.upperBound]) + repository
+        let descriptions = heads.map(\.description)
+        // The source the fetch wrote: a remote's URL as configured, else
+        // the repository as given.
+        var known: [String] = []
+        let remotes = try await remoteList()
+        if let repository {
+            if remotes.contains(repository), let url = try await configGet("remote.\(repository).url") {
+                known.append(url)
+            } else {
+                known.append(repository)
             }
         }
-        return try await mergeMessage(describing: descriptions, objects: heads.map(\.oid))
+        var entries = Self.titleEntries(fetchedFrom: descriptions, knownSources: known)
+        // A URL or path rather than a configured remote is named as typed.
+        if let repository, !remotes.contains(repository) {
+            entries = entries.map { MergeTitleEntry(name: $0.name, source: repository) }
+        }
+        return try await mergeMessage(entries: entries, objects: heads.map(\.oid))
     }
 
     /// The merge commit message git writes (`fmt-merge-msg`) for heads
@@ -193,8 +200,17 @@ extension GitClient {
     /// `master`) matches the current branch. With the heads' `objects`,
     /// annotated tags' messages follow.
     public func mergeMessage(describing descriptions: [String], objects: [String] = []) async throws -> String {
-        let origins = descriptions.map(Self.describingURLAsGit)
-        let subject = Self.mergeTitle(origins)
+        try await mergeMessage(entries: descriptions.map { MergeTitleEntry(name: $0, source: nil) }, objects: objects)
+    }
+
+    /// The merge commit message for heads `entries` names, as
+    /// ``mergeMessage(describing:objects:)``.
+    func mergeMessage(entries: [MergeTitleEntry], objects: [String] = []) async throws -> String {
+        let entries = entries.map(Self.normalizingSource)
+        let origins = entries.map { entry in
+            [entry.name, entry.source].compactMap { $0 }.joined(separator: " of ")
+        }
+        let subject = Self.mergeTitle(entries)
         let branch = try await currentBranch() ?? "HEAD"
         var patterns = ["main", "master"]
         var configured = false
@@ -273,7 +289,7 @@ extension GitClient {
     /// a group of its own, groups in the order first seen and joined by
     /// `; `; within one, branches, remote-tracking branches, tags and
     /// other refs (as commits), each kind joined as `'a', 'b' and 'c'`.
-    static func mergeTitle(_ descriptions: [String]) -> String {
+    static func mergeTitle(_ entries: [MergeTitleEntry]) -> String {
         struct Group {
             let source: String?
             /// Whether the source's own HEAD is among the heads.
@@ -281,28 +297,22 @@ extension GitClient {
             var branches: [String] = [], remoteBranches: [String] = [], tags: [String] = [], commits: [String] = []
         }
         var groups: [Group] = []
-        for description in descriptions {
-            var line = Substring(description)
-            var source: String?
-            if let of = description.range(of: "' of ") {
-                line = description[..<description.index(after: of.lowerBound)]
-                source = String(description[of.upperBound...])
-            } else if isBareSource(description) {
-                // A remote's HEAD: the description is the URL alone; it
-                // leads its source's group as `HEAD`, or names it alone.
-                if let index = groups.firstIndex(where: { $0.source == description }) {
+        for entry in entries {
+            let source = entry.source
+            guard let name = entry.name else {
+                // A source's own HEAD leads its group as `HEAD`, or names
+                // the source alone.
+                if let index = groups.firstIndex(where: { $0.source == source && $0.commits.isEmpty }) {
                     groups[index].head = true
                 } else {
-                    groups.append(Group(source: description, head: true))
+                    groups.append(Group(source: source, head: true))
                 }
                 continue
             }
+            var line = Substring(name)
             // A commit named by itself has a group of its own.
             let isCommit = source == nil && line.hasPrefix("commit ")
-            var index = groups.firstIndex { $0.source == source && source != nil }
-            if source == nil, !isCommit {
-                index = groups.firstIndex { $0.source == nil && $0.commits.isEmpty }
-            }
+            var index = groups.firstIndex { $0.source == source && (source != nil || $0.commits.isEmpty) }
             if index == nil || isCommit {
                 groups.append(Group(source: source))
                 index = groups.count - 1
@@ -325,47 +335,62 @@ extension GitClient {
                          joined("remote-tracking branch", "remote-tracking branches", group.remoteBranches),
                          joined("tag", "tags", group.tags),
                          joined("commit", "commits", group.commits)].compactMap { $0 }
-            guard let source = group.source else { return kinds.joined(separator: ", ") }
             if group.head {
-                if kinds.isEmpty { return source }
+                if kinds.isEmpty { return group.source ?? "HEAD" }
                 kinds.insert("HEAD", at: 0)
             }
+            guard let source = group.source else { return kinds.joined(separator: ", ") }
             return kinds.joined(separator: ", ") + " of " + source
         }
         return "Merge " + parts.joined(separator: "; ")
     }
 
-    /// Whether a FETCH_HEAD description is a source alone (a remote's
-    /// HEAD), not a quoted ref: `branch 'a'`, `tag 'v1'`,
-    /// `remote-tracking branch 'origin/a'`, `commit '…'` or another ref
-    /// (`'refs/x' of <url>`), each maybe ` of <url>` — told apart by how
-    /// they begin, as a URL may end in anything.
-    static func isBareSource(_ description: String) -> Bool {
-        let kinds = ["branch '", "tag '", "remote-tracking branch '", "commit '"]
-        if kinds.contains(where: description.hasPrefix) { return false }
-        return !(description.hasPrefix("'") && description.contains("' of "))
+    /// One head as a merge message names it: `name` (`branch 'a'`,
+    /// `tag 'v1'`, …), `nil` for a source's own HEAD; and where it came
+    /// from, `nil` for this repository.
+    public struct MergeTitleEntry: Sendable, Equatable {
+        public var name: String?
+        public var source: String?
+        public init(name: String?, source: String?) {
+            self.name = name
+            self.source = source
+        }
     }
 
-    /// A FETCH_HEAD description with its URL as git's fetch writes it:
-    /// without trailing slashes, then without a trailing `.git`
-    /// (`branch 'x' of ../other.git` becomes `branch 'x' of ../other`).
-    /// The URL follows `' of `, as no ref name holds a space, or is the
-    /// whole description for a remote's `HEAD`.
-    static func describingURLAsGit(_ description: String) -> String {
-        let prefix: Substring
-        var url: Substring
-        if let of = description.range(of: "' of ") {
-            prefix = description[..<of.upperBound]
-            url = description[of.upperBound...]
-        } else {
-            prefix = ""
-            url = Substring(description)
+    /// FETCH_HEAD's descriptions from one fetch, split into what each
+    /// names and the source they share: `<name> of <source>`, or the
+    /// source alone for its HEAD. The source is one of `knownSources`
+    /// that fits every description, else the longest that does, read off
+    /// the descriptions themselves (a ref name holds no space, so a name
+    /// ends at the first `' of `); a URL or path may hold anything.
+    static func titleEntries(fetchedFrom descriptions: [String], knownSources: [String] = []) -> [MergeTitleEntry] {
+        func fits(_ source: String) -> Bool {
+            descriptions.allSatisfy { $0 == source || $0.hasSuffix("' of " + source) }
         }
+        var source = knownSources.first(where: fits)
+        if source == nil {
+            var candidates: [String] = descriptions.compactMap { description in
+                description.range(of: "' of ").map { String(description[$0.upperBound...]) }
+            }
+            // A lone description is its source only when it names nothing.
+            if descriptions.count > 1 || candidates.isEmpty { candidates += descriptions }
+            source = candidates.filter(fits).max { $0.count < $1.count }
+        }
+        return descriptions.map { description in
+            guard let source else { return MergeTitleEntry(name: description, source: nil) }
+            if description == source { return MergeTitleEntry(name: nil, source: source) }
+            return MergeTitleEntry(name: String(description.dropLast(source.count + 4)), source: source)
+        }
+    }
+
+    /// `entry` with its source as git's fetch writes it: without trailing
+    /// slashes, then without a trailing `.git`; this repository (`.`) is
+    /// no source at all.
+    static func normalizingSource(_ entry: MergeTitleEntry) -> MergeTitleEntry {
+        guard var url = entry.source.map({ Substring($0) }) else { return entry }
         while url.count > 1, url.hasSuffix("/") { url = url.dropLast() }
         if url.count > 5, url.hasSuffix(".git") { url = url.dropLast(4) }
-        // A local branch, pulled from `.`, is named without a source.
-        if url == ".", prefix.hasSuffix("' of ") { return String(prefix.dropLast(4)) }
-        return String(prefix + url)
+        return MergeTitleEntry(name: entry.name, source: url == "." ? nil : String(url))
     }
 
     /// wildmatch's named character classes, over ASCII bytes as git has them.

@@ -1374,6 +1374,31 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "feature"], in: remote))
     }
 
+    @Test("an annotated tag outside refs/tags is merged with --no-ff; `tag <name>` fast-forwards")
+    func pullAnnotatedTagFastForward() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["tag", "-a", "v1", "-m", "Release one"], in: other)
+        try systemGit(["push", "-q", "origin", "main", "v1"], in: other)
+        let tip = try systemGit(["rev-parse", "main"], in: remote)
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        let start = try systemGit(["rev-parse", "HEAD"], in: clone)
+
+        try await git(["pull", "-q", "--no-rebase", "origin", "v1"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%P"], in: clone) == "\(start) \(tip)")
+        #expect(try systemGit(["log", "-1", "--format=%B"], in: clone).hasSuffix("Release one"))
+
+        for args in [["pull", "-q", "--no-rebase", "--ff", "origin", "v1"],
+                     ["pull", "-q", "--no-rebase", "origin", "tag", "v1"]] {
+            try systemGit(["reset", "-q", "--hard", start], in: clone)
+            try? systemGit(["tag", "-d", "v1"], in: clone)
+            try await git(args, in: clone)
+            #expect(try systemGit(["rev-parse", "HEAD"], in: clone) == tip, "\(args)")
+        }
+    }
+
     @Test("which upstreams fetch refspecs cover")
     func refspecCoverage() {
         #expect(Pull.refspecs(["+refs/heads/*:refs/remotes/origin/*"], fetch: "refs/heads/feature"))
@@ -1635,15 +1660,25 @@ struct GitCommandRemoteTests {
 
     @Test("merge titles group FETCH_HEAD's descriptions as fmt-merge-msg does")
     func mergeTitles() {
-        let title = SwiftGit.GitClient.mergeTitle
-        // A remote's HEAD leads its source's group, whatever its URL ends in.
+        func title(_ descriptions: [String], known: [String] = []) -> String {
+            SwiftGit.GitClient.mergeTitle(SwiftGit.GitClient.titleEntries(fetchedFrom: descriptions, knownSources: known)
+                .map(SwiftGit.GitClient.normalizingSource))
+        }
+        // A remote's HEAD leads its source's group, whatever its URL holds.
         #expect(title(["/tmp/r'", "branch 'a' of /tmp/r'"]) == "Merge HEAD, branch 'a' of /tmp/r'")
         #expect(title(["branch 'a' of /tmp/r'", "/tmp/r'"]) == "Merge HEAD, branch 'a' of /tmp/r'")
+        #expect(title(["branch 'repo", "branch 'a' of branch 'repo"]) == "Merge HEAD, branch 'a' of branch 'repo")
+        #expect(title(["x' of y", "branch 'a' of x' of y"]) == "Merge HEAD, branch 'a' of x' of y")
+        #expect(title(["branch 'repo"], known: ["branch 'repo"]) == "Merge branch 'repo")
         #expect(title(["/tmp/r'"]) == "Merge /tmp/r'")
+        // This repository's HEAD, and its branches, have no source.
+        #expect(title([".", "branch 'la' of .", "branch 'lb' of ."]) == "Merge HEAD, branches 'la' and 'lb'")
         // Any other ref is named as a commit.
         #expect(title(["'refs/x' of u", "branch 'a' of u"]) == "Merge branch 'a', commit 'refs/x' of u")
-        #expect(title(["branch 'a'", "commit '1234567'", "tag 'v1'"]) == "Merge branch 'a', tag 'v1'; commit '1234567'")
-        #expect(title(["branch 'z' (early part)", "branch 'a'"]) == "Merge branches 'z' (early part) and 'a'")
+        let local = SwiftGit.GitClient.mergeTitle(["branch 'a'", "commit '1234567'", "tag 'v1'"].map {
+            SwiftGit.GitClient.MergeTitleEntry(name: $0, source: nil)
+        })
+        #expect(local == "Merge branch 'a', tag 'v1'; commit '1234567'")
     }
 
     @Test("merge.suppressDest takes git's globs")
