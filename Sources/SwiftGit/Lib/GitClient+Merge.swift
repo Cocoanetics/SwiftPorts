@@ -180,10 +180,16 @@ extension GitClient {
         var known: [String] = []
         let remotes = try await remoteList()
         if let repository {
+            let source: String
             if remotes.contains(repository), let url = try await configGet("remote.\(repository).url") {
-                known.append(url)
+                source = url
             } else {
-                known.append(repository)
+                source = repository
+            }
+            // As given, and as git's fetch writes it into FETCH_HEAD.
+            known.append(source)
+            if let written = Self.normalizingSource(MergeTitleEntry(name: nil, source: source)).source {
+                known.append(written)
             }
         }
         var entries = Self.titleEntries(fetchedFrom: descriptions, knownSources: known)
@@ -191,7 +197,25 @@ extension GitClient {
         if let repository, !remotes.contains(repository) {
             entries = entries.map { MergeTitleEntry(name: $0.name, source: repository) }
         }
+        // git's fmt-merge-msg reads each FETCH_HEAD line as git's fetch
+        // writes it, cut at its first ` of ` whatever the URL holds.
+        entries = entries.map { entry in
+            let source = Self.normalizingSource(MergeTitleEntry(name: nil, source: entry.source)).source ?? "."
+            return Self.fmtMergeMsgEntry([entry.name, source].compactMap { $0 }.joined(separator: " of "))
+        }
         return try await mergeMessage(entries: entries, objects: heads.map(\.oid))
+    }
+
+    /// A FETCH_HEAD description as git's fmt-merge-msg reads it: what it
+    /// names before the first ` of `, and the source after, or, with no
+    /// ` of `, the source's own HEAD; `.` is this repository.
+    static func fmtMergeMsgEntry(_ description: String) -> MergeTitleEntry {
+        // This repository (`.`) is no source at all.
+        func source(_ text: Substring) -> String? { text == "." ? nil : String(text) }
+        guard let of = description.range(of: " of ") else {
+            return MergeTitleEntry(name: nil, source: source(Substring(description)))
+        }
+        return MergeTitleEntry(name: String(description[..<of.lowerBound]), source: source(description[of.upperBound...]))
     }
 
     /// The merge commit message git writes (`fmt-merge-msg`) for heads
@@ -206,7 +230,6 @@ extension GitClient {
     /// The merge commit message for heads `entries` names, as
     /// ``mergeMessage(describing:objects:)``.
     func mergeMessage(entries: [MergeTitleEntry], objects: [String] = []) async throws -> String {
-        let entries = entries.map(Self.normalizingSource)
         let origins = entries.map { entry in
             [entry.name, entry.source].compactMap { $0 }.joined(separator: " of ")
         }

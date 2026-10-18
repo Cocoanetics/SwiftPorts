@@ -1691,6 +1691,18 @@ struct GitCommandRemoteTests {
         #expect(try systemGit(["rev-parse", "HEAD"], in: clone) == systemGit(["rev-parse", "origin/a"], in: clone))
     }
 
+    @Test("git pull reads FETCH_HEAD as git does, a URL holding ` of ` included")
+    func pullOctopusOddURL() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        let remote = try systemGit(["remote", "get-url", "origin"], in: clone)
+        let odd = tmp("x' of y").path + ".git"
+        try systemGit(["clone", "-q", "--bare", remote, odd], in: clone)
+        try systemGit(["symbolic-ref", "HEAD", "refs/heads/b"], in: URL(fileURLWithPath: odd))
+        try systemGit(["remote", "add", "odd", odd], in: clone)
+        // git's fmt-merge-msg cuts every line at its first ` of `.
+        try await expectLikeGit(["pull", "-q", "--no-rebase", "odd", "HEAD", "a"], in: clone)
+    }
+
     @Test("git pull of several heads refuses as git does: rebasing, --ff-only, an unconfigured pull")
     func pullOctopusRefusals() async throws {
         let clone = try makeOctopusRemoteAndClone()
