@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import ShellKit
 import SwiftGit
 
 struct Pull: AsyncParsableCommand {
@@ -7,18 +8,27 @@ struct Pull: AsyncParsableCommand {
         commandName: "pull",
         abstract: "Fetch from and integrate with another repository or branch.",
         discussion: """
-            `pull` is `fetch` followed by `merge`. Today this command
-            mirrors the FF/`--no-ff`/`--ff-only` behaviour of `merge`
-            against the just-fetched `<remote>/<branch>` ref.
+            `git pull [<repository> [<refspec>…]]`, as in git: `fetch` with
+            the same arguments, then a merge (or rebase) of what the fetch
+            marked for merging in `FETCH_HEAD`. Without a repository it
+            fetches from the current branch's remote, else the only remote,
+            else `origin`; without a refspec it merges the branch's upstream
+            (`branch.<name>.merge`), which needs the repository, if named,
+            to be the branch's remote. Whether to rebase comes from
+            `--rebase`/`--no-rebase`, else `branch.<name>.rebase`, else
+            `pull.rebase` (`merges` and `interactive` rebase as `true`
+            does); how to merge from `--ff`/`--no-ff`/`--ff-only`, else
+            `pull.ff`. With neither configured, branches that have diverged
+            are refused, as git refuses them.
             """
     )
 
-    @Flag(name: [.customShort("r"), .customLong("rebase")],
+    @Flag(name: [.customShort("r"), .long], inversion: .prefixedNo,
           help: "Rebase the current branch onto the upstream instead of merging.")
-    var rebase: Bool = false
+    var rebase: Bool?
 
     @Flag(name: .customLong("ff"),
-          help: "Allow fast-forward (the default; ignored with --rebase).")
+          help: "Fast-forward when possible, else merge.")
     var ff: Bool = false
 
     @Flag(name: .customLong("no-ff"),
@@ -26,7 +36,7 @@ struct Pull: AsyncParsableCommand {
     var noFF: Bool = false
 
     @Flag(name: .customLong("ff-only"),
-          help: "Refuse to merge unless fast-forward is possible (ignored with --rebase).")
+          help: "Refuse to merge unless fast-forward is possible.")
     var ffOnly: Bool = false
 
     @Option(name: [.customShort("m"), .customLong("message")],
@@ -37,21 +47,21 @@ struct Pull: AsyncParsableCommand {
           help: "Suppress progress and the merge summary; conflicts are still reported.")
     var quiet: Bool = false
 
-    @Argument(help: "Remote name. Defaults to `origin`.")
-    var remote: String = "origin"
-
-    @Argument(help: "Branch name. Defaults to the current branch.")
-    var branch: String?
+    @Argument(help: "The remote, then the refspecs to fetch and merge (e.g. `origin main`).")
+    var arguments: [String] = []
 
     func validate() throws {
         let count = [ff, noFF, ffOnly].filter { $0 }.count
         if count > 1 {
             throw ValidationError("only one of --ff / --no-ff / --ff-only may be set")
         }
-        if rebase && (noFF || ffOnly) {
-            throw ValidationError("--rebase is incompatible with --no-ff / --ff-only")
-        }
     }
+
+    /// git's `--ff`, `--no-ff` and `--ff-only` (and `pull.ff`).
+    enum FastForward { case allow, never, only }
+
+    /// git's rebase choice (`--rebase`, `pull.rebase`).
+    enum RebaseChoice { case no, yes }
 
     func run() async throws {
         do {
@@ -63,37 +73,238 @@ struct Pull: AsyncParsableCommand {
 
     private func pull() async throws {
         let client = CommandContext.gitClient(quiet: quiet)
+        let branch = try await client.currentBranch()
 
-        if rebase {
-            // pull --rebase: fetch then rebase against <remote>/<branch>.
-            let outcome = try await client.pullRebase(
-                remote: remote, branch: branch, author: nil) { current, total in
+        // git reads `pull.ff` unless the command line says, and lets a
+        // command-line `--rebase`/`--no-rebase` turn its `only` into `--ff`.
+        var fastForward: FastForward? = ff ? .allow : noFF ? .never : ffOnly ? .only : nil
+        if fastForward == nil {
+            fastForward = try await Self.configuredFastForward(client: client)
+            if rebase != nil, fastForward == .only { fastForward = .allow }
+        }
+        let configuredRebase = rebase == nil ? try await Self.configuredRebase(client: client, branch: branch) : nil
+        var rebasing = rebase.map { $0 ? RebaseChoice.yes : .no } ?? configuredRebase ?? .no
+        let rebaseUnspecified = rebase == nil && configuredRebase == nil
+
+        // Fetch, as `git fetch [<repository> [<refspec>…]]` would.
+        let repository = arguments.first
+        let refspecs = Array(arguments.dropFirst())
+        var branchRemote: String?
+        if let branch { branchRemote = try await client.configGet("branch.\(branch).remote") }
+        let remotes = try await client.remoteList()
+        var fetched = true
+        if let repository {
+            if repository.isEmpty { throw CLIError.stderr("fatal: bad repository ''", exitCode: 128) }
+            try await client.fetch(remote: repository, refspecs: refspecs, depth: nil)
+        } else {
+            let fallback = RemoteArguments.defaultRemote(branchRemote: branchRemote, remotes: remotes)
+            if fallback.isUsable {
+                try await client.fetch(remote: fallback.name, refspecs: [], depth: nil)
+            } else {
+                fetched = false
+            }
+        }
+
+        let heads = fetched ? try await client.fetchHeadEntries().filter(\.isMerge) : []
+        guard let head = heads.first else {
+            throw try await noMergeCandidates(
+                client: client, branch: branch, branchRemote: branchRemote, remotes: remotes,
+                rebasing: rebasing == .yes)
+        }
+        if heads.count > 1 {
+            if rebasing == .yes {
+                throw CLIError.stderr("fatal: Cannot rebase onto multiple branches.", exitCode: 128)
+            }
+            throw CLIError.stderr(
+                "fatal: merging more than one branch (an octopus merge) is not supported", exitCode: 128)
+        }
+
+        // Whether HEAD can fast-forward to what was fetched, or already
+        // has it; an unborn branch takes it as it is.
+        var canFastForward = true
+        var divergent = false
+        if let current = try? await client.resolveOID("HEAD") {
+            let base = try? await client.mergeBase(current, head.oid)
+            canFastForward = base == current
+            divergent = !canFastForward && base != head.oid
+        }
+
+        // `--ff-only` outranks a rebase.
+        if fastForward == .only {
+            if divergent { throw try await Self.notPossibleToFastForward(client: client) }
+            rebasing = .no
+        }
+        if fastForward == nil, rebaseUnspecified, divergent {
+            throw CLIError.stderr(Self.reconcileHint.map { "hint: \($0)".trimmingTrailingSpace }
+                                  + ["fatal: Need to specify how to reconcile divergent branches."],
+                                  exitCode: 128)
+        }
+
+        if rebasing == .yes, !canFastForward {
+            let outcome = try await client.rebase(upstream: head.oid, author: nil) { current, total in
                 if !quiet { Rebase.emitProgress(current: current, total: total) }
             }
-            if quiet, case .conflict = outcome {
+            if !quiet {
                 try Rebase.printOutcome(outcome)
-            } else if !quiet {
+            } else if case .conflict = outcome {
                 try Rebase.printOutcome(outcome)
             }
             return
         }
 
-        let mode: FastForwardMode = noFF ? .never : (ffOnly ? .onlyFastForward : .auto)
+        // A rebase that can fast-forward does, as git does it.
+        let mode: FastForwardMode
+        switch rebasing == .yes ? .only : fastForward {
+        case .never?: mode = .never
+        case .only?: mode = .onlyFastForward
+        default: mode = .auto
+        }
+        var mergeMessage = message
+        if mergeMessage == nil { mergeMessage = try await client.pullMergeMessage(for: head) }
         let outcome: MergeOutcome
         do {
-            outcome = try await client.pull(
-                remote: remote, branch: branch,
-                fastForward: mode, message: message, author: nil)
+            outcome = try await client.merge(
+                ref: head.oid, fastForward: mode, message: mergeMessage, author: nil)
         } catch let err as Libgit2Error
             where err.message.contains("Not possible to fast-forward") {
-            throw CLIError.stderr(
-                "fatal: Not possible to fast-forward, aborting.", exitCode: 128)
+            throw try await Self.notPossibleToFastForward(client: client)
+        }
+        if case .conflicts(let paths) = outcome {
+            try await Self.writeMergeMessage(mergeMessage ?? "", conflicts: paths, client: client)
         }
 
-        if quiet, case .conflicts = outcome {
+        if !quiet {
             try Merge.printOutcome(outcome)
-        } else if !quiet {
+        } else if case .conflicts = outcome {
             try Merge.printOutcome(outcome)
         }
     }
+
+    /// `pull.ff`: a boolean (`true` is `--ff`, `false` `--no-ff`) or
+    /// `only`; `nil` when unset.
+    static func configuredFastForward(client: SwiftGit.GitClient) async throws -> FastForward? {
+        guard let value = try await client.configGet("pull.ff") else { return nil }
+        if value == "only" { return .only }
+        guard let flag = gitBool(value) else {
+            throw CLIError.stderr("fatal: invalid value for 'pull.ff': '\(value)'", exitCode: 128)
+        }
+        return flag ? .allow : .never
+    }
+
+    /// `branch.<name>.rebase`, else `pull.rebase`: a boolean, `merges`
+    /// or `interactive` (each also by its initial); `nil` when neither
+    /// is set.
+    static func configuredRebase(client: SwiftGit.GitClient, branch: String?) async throws -> RebaseChoice? {
+        let keys = (branch.map { ["branch.\($0).rebase"] } ?? []) + ["pull.rebase"]
+        for key in keys {
+            guard let value = try await client.configGet(key) else { continue }
+            if let flag = gitBool(value) { return flag ? .yes : .no }
+            if ["merges", "m", "interactive", "i"].contains(value) { return .yes }
+            throw CLIError.stderr("fatal: invalid value for '\(key)': '\(value)'", exitCode: 128)
+        }
+        return nil
+    }
+
+    /// A config value as git reads a boolean (`git_parse_maybe_bool`),
+    /// or `nil` when it is none.
+    static func gitBool(_ value: String) -> Bool? {
+        switch value.lowercased() {
+        case "true", "yes", "on": return true
+        case "false", "no", "off", "": return false
+        default: return Int(value).map { $0 != 0 }
+        }
+    }
+
+    /// Why there's nothing to merge, in git's words (`die_no_merge_candidates`).
+    private func noMergeCandidates(
+        client: SwiftGit.GitClient, branch: String?, branchRemote: String?, remotes: [String],
+        rebasing: Bool
+    ) async throws -> CLIError {
+        let which = rebasing
+            ? "Please specify which branch you want to rebase against."
+            : "Please specify which branch you want to merge with."
+        let lines: [String]
+        if arguments.count > 1 {
+            lines = [
+                rebasing
+                    ? "There is no candidate for rebasing against among the refs that you just fetched."
+                    : "There are no candidates for merging among the refs that you just fetched.",
+                "Generally this means that you provided a wildcard refspec which had no",
+                "matches on the remote end."
+            ]
+        } else if let repository = arguments.first, branch != nil, branchRemote != repository {
+            lines = [
+                "You asked to pull from the remote '\(repository)', but did not specify",
+                "a branch. Because this is not the default configured remote",
+                "for your current branch, you must specify a branch on the command line."
+            ]
+        } else if branch == nil {
+            lines = ["You are not currently on a branch.", which, "See git-pull(1) for details.",
+                     "", "    git pull <remote> <branch>", ""]
+        } else if let branch, let merge = try await client.configGet("branch.\(branch).merge") {
+            lines = ["Your configuration specifies to merge with the ref '\(merge)'",
+                     "from the remote, but no such ref was fetched."]
+        } else {
+            let remote = remotes.count == 1 ? remotes[0] : "<remote>"
+            lines = ["There is no tracking information for the current branch.", which,
+                     "See git-pull(1) for details.", "", "    git pull <remote> <branch>", "",
+                     "If you wish to set tracking information for this branch you can do so with:",
+                     "", "    git branch --set-upstream-to=\(remote)/<branch> \(branch ?? "")", ""]
+        }
+        return CLIError.stderr(lines, exitCode: 1)
+    }
+
+    /// git's refusal to fast-forward branches that have diverged, with
+    /// its hint unless `advice.diverging` or `GIT_ADVICE` turns it off.
+    /// Like git, it says how to turn the hint off unless
+    /// `advice.diverging` is configured.
+    static func notPossibleToFastForward(client: SwiftGit.GitClient) async throws -> CLIError {
+        var lines: [String] = []
+        let configured = try await client.configBool("advice.diverging")
+        var advise = configured ?? true
+        if advise, let environment = Shell.current.environment["GIT_ADVICE"] {
+            advise = try SwiftGit.GitClient.parseGitBoolEnvironment(environment, name: "GIT_ADVICE")
+        }
+        if advise {
+            var hint = [
+                "Diverging branches can't be fast-forwarded, you need to either:", "",
+                "\tgit merge --no-ff", "", "or:", "", "\tgit rebase"
+            ]
+            if configured == nil {
+                hint += ["", "Disable this message with \"git config set advice.diverging false\""]
+            }
+            lines = hint.map { "hint: \($0)".trimmingTrailingSpace }
+        }
+        return CLIError.stderr(lines + ["fatal: Not possible to fast-forward, aborting."], exitCode: 128)
+    }
+
+    /// git's advice on a pull that doesn't say how to reconcile
+    /// branches that have diverged, which no switch turns off.
+    static let reconcileHint = [
+        "You have divergent branches and need to specify how to reconcile them.",
+        "You can do so by running one of the following commands sometime before",
+        "your next pull:",
+        "",
+        "  git config pull.rebase false  # merge",
+        "  git config pull.rebase true   # rebase",
+        "  git config pull.ff only       # fast-forward only",
+        "",
+        "You can replace \"git config\" with \"git config --global\" to set a default",
+        "preference for all repositories. You can also pass --rebase, --no-rebase,",
+        "or --ff-only on the command line to override the configured default per",
+        "invocation."
+    ]
+
+    /// `MERGE_MSG` for a merge stopped by conflicts, as git leaves it for
+    /// the commit that concludes the merge.
+    static func writeMergeMessage(_ message: String, conflicts: [String], client: SwiftGit.GitClient) async throws {
+        guard let gitDir = try await client.gitDir() else { return }
+        let text = message + "\n\n# Conflicts:\n" + conflicts.map { "#\t\($0)\n" }.joined()
+        try Data(text.utf8).write(to: URL(fileURLWithPath: gitDir).appendingPathComponent("MERGE_MSG"))
+    }
+}
+
+private extension String {
+    /// `hint:` with nothing after it is written without the space.
+    var trimmingTrailingSpace: String { hasSuffix(" ") ? String(dropLast()) : self }
 }

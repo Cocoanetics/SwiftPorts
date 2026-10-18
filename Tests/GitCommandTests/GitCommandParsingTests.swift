@@ -550,18 +550,16 @@ struct GitCommandParsingTests {
         }
     }
 
-    @Test("pull: defaults remote to origin")
+    @Test("pull: no repository by default")
     func pullDefaults() throws {
         let cmd = try parse(["pull"], as: Pull.self)
-        #expect(cmd.remote == "origin")
-        #expect(cmd.branch == nil)
+        #expect(cmd.arguments.isEmpty)
     }
 
-    @Test("pull: explicit remote + branch")
+    @Test("pull: explicit remote + refspecs")
     func pullExplicit() throws {
-        let cmd = try parse(["pull", "upstream", "main"], as: Pull.self)
-        #expect(cmd.remote == "upstream")
-        #expect(cmd.branch == "main")
+        let cmd = try parse(["pull", "upstream", "main", "dev"], as: Pull.self)
+        #expect(cmd.arguments == ["upstream", "main", "dev"])
     }
 
     @Test("pull: --no-ff carried through")
@@ -646,11 +644,17 @@ struct GitCommandParsingTests {
         #expect(cmd.rebase == true)
     }
 
-    @Test("pull: --rebase + --no-ff rejected")
-    func pullRebaseFFExclusive() {
-        #expect(throws: (any Error).self) {
-            _ = try GitCommand.parseAsRoot(["pull", "--rebase", "--no-ff"])
-        }
+    @Test("pull: --no-rebase")
+    func pullNoRebase() throws {
+        let cmd = try parse(["pull", "--no-rebase"], as: Pull.self)
+        #expect(cmd.rebase == false)
+        #expect(try parse(["pull"], as: Pull.self).rebase == nil)
+    }
+
+    @Test("pull: --rebase takes --no-ff and --ff-only, as git does")
+    func pullRebaseWithFF() throws {
+        #expect(try parse(["pull", "--rebase", "--no-ff"], as: Pull.self).noFF)
+        #expect(try parse(["pull", "--rebase", "--ff-only"], as: Pull.self).ffOnly)
     }
 
     @Test("reset: --soft <commit>")
