@@ -223,18 +223,23 @@ extension GitClient {
             ? subject : subject + " into " + branch
         // Annotated tags' messages follow, as fmt_merge_msg_sigs adds
         // them (signatures left out): one alone, several each under a
-        // comment naming it.
+        // comment naming it, an empty message too.
         var tags: [(origin: String, message: String)] = []
         for (origin, object) in zip(origins, objects) where origin.hasPrefix("tag '") {
-            if let message = try await annotatedTagMessage(object), !message.isEmpty {
-                tags.append((origin, message))
-            }
+            if let message = try await annotatedTagMessage(object) { tags.append((origin, message)) }
         }
-        guard tags.count > 1 else { return tags.first.map { title + "\n\n" + $0.message } ?? title }
+        guard tags.count > 1 else {
+            guard let message = tags.first?.message, !message.isEmpty else { return title }
+            return title + "\n\n" + message
+        }
         let commentSetting = try await configList()
             .last { ["core.commentchar", "core.commentstring"].contains($0.name.lowercased()) }?.value
         let comment = commentSetting.flatMap { $0.isEmpty || $0.lowercased() == "auto" ? nil : $0 } ?? "#"
-        return title + tags.map { "\n\n\(comment) \($0.origin)\n\($0.message)" }.joined()
+        // Sections a blank line apart, each its comment then its message.
+        let sections = tags.map { "\(comment) \($0.origin)\n" + ($0.message.isEmpty ? "" : $0.message + "\n") }
+        var text = title + "\n\n" + sections.joined(separator: "\n")
+        while text.hasSuffix("\n") { text.removeLast() }
+        return text
     }
 
     /// The message of annotated tag object `oid`, without a signature

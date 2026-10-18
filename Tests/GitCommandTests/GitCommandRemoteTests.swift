@@ -1734,6 +1734,13 @@ struct GitCommandRemoteTests {
         try systemGit(["tag", "-a", "ta", "-m", "tag A", "a"], in: clone)
         try await expectLikeGit(["merge", "ta", "b"], in: clone)
         #expect(try systemGit(["log", "-1", "--format=%B"], in: clone) == "Merge branch 'b', tag 'ta'\n\ntag A")
+
+        // With several, each tag has its section, an empty one too.
+        try systemGit(["reset", "-q", "--hard", "origin/main"], in: clone)
+        try systemGit(["tag", "-a", "te", "-m", "", "b"], in: clone)
+        try await expectLikeGit(["merge", "te", "ta"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%B"], in: clone)
+                == "Merge tags 'te' and 'ta'\n\n# tag 'te'\n\n# tag 'ta'\ntag A")
     }
 
     @Test("git merge of several heads reduces them, and refuses as git does")
