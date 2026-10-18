@@ -1305,6 +1305,9 @@ struct GitCommandRemoteTests {
     /// whose `main` the clone has gone past with a commit of its own.
     private func makeOctopusRemoteAndClone() throws -> URL {
         let (_, clone) = try makeRemoteAndClone()
+        // No background gc or maintenance racing the copies of the clone.
+        try systemGit(["config", "gc.auto", "0"], in: clone)
+        try systemGit(["config", "maintenance.auto", "false"], in: clone)
         try Data("1\n2\n3\n4\n5\n6\n7\n".utf8).write(to: clone.appendingPathComponent("f"))
         try systemGit(["add", "f"], in: clone)
         try systemGit(["commit", "-q", "-m", "f"], in: clone)
@@ -1376,11 +1379,14 @@ struct GitCommandRemoteTests {
     }
 
     /// Expects SwiftPorts' `git` to do in `repo` what the system `git`
-    /// does in a copy of it: the same output, exit status and result.
+    /// does in a copy of it: the same output, exit status and result. An
+    /// older system `git` (before 2.54) isn't compared against: it words
+    /// some refusals differently and leaves a failed octopus half merged.
     @discardableResult
     private func expectLikeGit(
         _ args: [String], in repo: URL, sourceLocation: SourceLocation = #_sourceLocation
     ) async throws -> (status: Int32, stdout: String, stderr: String) {
+        guard try systemGitSpeaksLike254() else { return try await ours(args, in: repo) }
         let copy = try twin(of: repo)
         let expected = try theirs(args, in: copy)
         let actual = try await ours(args, in: repo)
@@ -1444,6 +1450,17 @@ struct GitCommandRemoteTests {
         try await expectLikeGit(["merge", "a", "x", "b"], in: clone)
         try Data("dirty\n".utf8).write(to: clone.appendingPathComponent("f"))
         try await expectLikeGit(["merge", "a", "b"], in: clone)
+        try systemGit(["checkout", "-q", "--", "f"], in: clone)
+        // An untracked file where a head's file goes, and untracked files
+        // where it puts a file over a directory.
+        try systemGit(["switch", "-q", "-c", "d", "origin/main"], in: clone)
+        try Data("d\n".utf8).write(to: clone.appendingPathComponent("d"))
+        try systemGit(["add", "d"], in: clone)
+        try systemGit(["commit", "-q", "-m", "d"], in: clone)
+        try systemGit(["switch", "-q", "main"], in: clone)
+        try FileManager.default.createDirectory(at: clone.appendingPathComponent("d"), withIntermediateDirectories: true)
+        try Data("x\n".utf8).write(to: clone.appendingPathComponent("d/file"))
+        try await expectLikeGit(["merge", "a", "d"], in: clone)
     }
 
     @Test("merge.suppressDest takes git's globs")

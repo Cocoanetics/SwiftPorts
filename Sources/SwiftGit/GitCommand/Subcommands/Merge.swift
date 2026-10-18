@@ -176,6 +176,9 @@ struct Merge: AsyncParsableCommand {
                 throw CLIError.stderr(
                     ["error: Untracked working tree file '\(path)' would be overwritten by merge.", failed],
                     exitCode: 2)
+            case .untrackedFilesInDirectory(let path):
+                throw CLIError.stderr(["error: Updating '\(path)' would lose untracked files in it", failed],
+                                      exitCode: 2)
             case .noCommonCommit(let head):
                 Shell.print("Unable to find common commit with \(head)")
                 throw CLIError.stderr(failed, exitCode: 2)
