@@ -101,7 +101,7 @@ struct Pull: AsyncParsableCommand {
 
         // Fetch, as `git fetch [<repository> [<refspec>…]]` would.
         let repository = arguments.first
-        var refspecs = Self.normalizingTagRefspecs(Array(arguments.dropFirst()))
+        var refspecs = try Self.normalizingTagRefspecs(Array(arguments.dropFirst()))
         var branchRemote: String?
         if let branch { branchRemote = try await client.configGet("branch.\(branch).remote") }
         let remotes = try await client.remoteList()
@@ -311,12 +311,16 @@ struct Pull: AsyncParsableCommand {
     }
 
     /// git fetch's `tag <name>`, which is one refspec,
-    /// `refs/tags/<name>:refs/tags/<name>`.
-    static func normalizingTagRefspecs(_ arguments: [String]) -> [String] {
+    /// `refs/tags/<name>:refs/tags/<name>`; a `tag` without a name is
+    /// refused as git fetch refuses it.
+    static func normalizingTagRefspecs(_ arguments: [String]) throws -> [String] {
         var result: [String] = []
         var index = arguments.startIndex
         while index < arguments.endIndex {
-            if arguments[index] == "tag", index + 1 < arguments.endIndex {
+            if arguments[index] == "tag" {
+                guard index + 1 < arguments.endIndex else {
+                    throw CLIError.stderr("fatal: you need to specify a tag name", exitCode: 1)
+                }
                 let name = arguments[index + 1]
                 result.append("refs/tags/\(name):refs/tags/\(name)")
                 index += 2
@@ -332,11 +336,15 @@ struct Pull: AsyncParsableCommand {
     /// hold, as git's merge checks it (`merge_name`, natural place).
     static func isTagOutsideItsPlace(_ head: SwiftGit.GitClient.FetchHeadEntry,
                                      client: SwiftGit.GitClient) async throws -> Bool {
-        guard head.description.hasPrefix("tag '"),
-              let end = head.description.dropFirst(5).firstIndex(of: "'"),
+        // The name runs to the quote before ` of ` (a ref name holds no
+        // space, but may hold a quote: `tag 'v'1' of …`), or to the last.
+        let description = head.description
+        guard description.hasPrefix("tag '"),
+              let end = description.range(of: "' of ")?.lowerBound ?? description.lastIndex(of: "'"),
+              end > description.index(description.startIndex, offsetBy: 4),
               (try? await client.objectMetadata(of: head.oid))?.kind == .tag
         else { return false }
-        let name = head.description[head.description.index(head.description.startIndex, offsetBy: 5)..<end]
+        let name = description[description.index(description.startIndex, offsetBy: 5)..<end]
         return (try? await client.resolveOID("refs/tags/\(name)")) != head.oid
     }
 
