@@ -92,26 +92,38 @@ struct Pull: AsyncParsableCommand {
         var branchRemote: String?
         if let branch { branchRemote = try await client.configGet("branch.\(branch).remote") }
         let remotes = try await client.remoteList()
-        var fetched = true
+        // The remote fetched from, `nil` when there's none to fetch from.
+        var fetchedFrom: String?
         if let repository {
             if repository.isEmpty { throw CLIError.stderr("fatal: bad repository ''", exitCode: 128) }
             try await client.fetch(remote: repository, refspecs: refspecs, depth: nil)
+            fetchedFrom = repository
         } else {
             let fallback = RemoteArguments.defaultRemote(branchRemote: branchRemote, remotes: remotes)
             if fallback.isUsable {
                 try await client.fetch(remote: fallback.name, refspecs: [], depth: nil)
-            } else {
-                fetched = false
+                fetchedFrom = fallback.name
             }
         }
 
-        // Without a refspec, git merges the upstream only: a branch with
-        // `branch.<name>.merge` but no `branch.<name>.remote` has none.
+        // What git's fetch marks for merging (get_ref_map): the refspecs
+        // given; else, from a remote with `remote.<name>.fetch`, the
+        // branch's upstream when it's the branch's remote — a branch with
+        // `branch.<name>.merge` but no `branch.<name>.remote` has none;
+        // else (a URL or path too) the remote's HEAD.
         var upstreamMerge: String?
         if let branch, branchRemote != nil {
             upstreamMerge = try await client.configGet("branch.\(branch).merge")
         }
-        let wantsMerge = fetched && (!refspecs.isEmpty || upstreamMerge != nil)
+        var wantsMerge = false
+        if let fetchedFrom {
+            var mapped = false
+            if remotes.contains(fetchedFrom) {
+                mapped = try await client.configGet("remote.\(fetchedFrom).fetch") != nil
+            }
+            wantsMerge = !refspecs.isEmpty || !mapped
+                || (upstreamMerge != nil && fetchedFrom == branchRemote)
+        }
         let heads = wantsMerge ? try await client.fetchHeadEntries().filter(\.isMerge) : []
         guard let head = heads.first else {
             throw noMergeCandidates(
@@ -192,7 +204,7 @@ struct Pull: AsyncParsableCommand {
     static func configuredFastForward(client: SwiftGit.GitClient) async throws -> FastForward? {
         guard let value = try await client.configGet("pull.ff") else { return nil }
         if value == "only" { return .only }
-        guard let flag = gitBool(value) else {
+        guard let flag = try await gitBool(value, key: "pull.ff", client: client) else {
             throw CLIError.stderr("fatal: invalid value for 'pull.ff': '\(value)'", exitCode: 128)
         }
         return flag ? .allow : .never
@@ -205,19 +217,22 @@ struct Pull: AsyncParsableCommand {
         let keys = (branch.map { ["branch.\($0).rebase"] } ?? []) + ["pull.rebase"]
         for key in keys {
             guard let value = try await client.configGet(key) else { continue }
-            if let flag = gitBool(value) { return flag ? .yes : .no }
+            if let flag = try await gitBool(value, key: key, client: client) { return flag ? .yes : .no }
             if ["merges", "m", "interactive", "i"].contains(value) { return .yes }
             throw CLIError.stderr("fatal: invalid value for '\(key)': '\(value)'", exitCode: 128)
         }
         return nil
     }
 
-    /// A config value as git reads a boolean (`git_parse_maybe_bool`),
-    /// or `nil` when it is none.
-    static func gitBool(_ value: String) -> Bool? {
+    /// Config `value` of `key` as git reads a boolean
+    /// (`git_parse_maybe_bool`), or `nil` when it is none. A key written
+    /// without a value (`[pull] rebase`) is true, an empty one false.
+    static func gitBool(_ value: String, key: String, client: SwiftGit.GitClient) async throws -> Bool? {
         switch value.lowercased() {
         case "true", "yes", "on": return true
-        case "false", "no", "off", "": return false
+        case "false", "no", "off": return false
+        // `configGet` reads both as empty; `configBool` tells them apart.
+        case "": return try await client.configBool(key)
         default: return Int(value).map { $0 != 0 }
         }
     }

@@ -1193,6 +1193,37 @@ struct GitCommandRemoteTests {
         #expect(try mergeMessage(clone) == mergeMessage(theirs))
     }
 
+    @Test("git pull <remote> without a fetch refspec merges the remote's HEAD")
+    func pullUnmappedRemote() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try systemGit(["remote", "add", "nomap", remote.path], in: clone)
+        try systemGit(["config", "--unset-all", "remote.nomap.fetch"], in: clone)
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        try await git(["pull", "-q", "nomap"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+    }
+
+    @Test("a valueless pull.rebase is true, an empty one false")
+    func pullValuelessBoolean() async throws {
+        let (remote, clone) = try makeDiverged()
+        let config = clone.appendingPathComponent(".git/config")
+        let text = try String(contentsOf: config, encoding: .utf8)
+        try (text + "[pull]\n\trebase\n").write(to: config, atomically: true, encoding: .utf8)
+        try await git(["pull", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD^"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+
+        let (_, empty) = try makeDiverged()
+        try systemGit(["config", "pull.rebase", ""], in: empty)
+        try await git(["pull", "-q"], in: empty)
+        #expect(try systemGit(["log", "-1", "--format=%P"], in: empty).split(separator: " ").count == 2)
+    }
+
     @Test("merge.suppressDest takes git's globs")
     func suppressDestGlobs() {
         for (pattern, branch, matches) in [
@@ -1200,6 +1231,8 @@ struct GitCommandRemoteTests {
             ("[tw]ork", "work", true), ("[a-v]ork", "work", false), ("[!w]ork", "work", false),
             ("[^t]ork", "work", true), ("w[]]rk", "w]rk", true), ("w\\ork", "work", true),
             ("\\*", "x", false), ("[w", "w", false), ("main", "mainline", false),
+            ("[[:alpha:]]ork", "work", true), ("[[:digit:]]ork", "work", false),
+            ("[[:digit:][:lower:]]ork", "work", true), ("[[:bogus:]]ork", "work", false),
         ] {
             #expect(SwiftGit.GitClient.glob(pattern, matches: branch) == matches, "\(pattern) \(branch)")
         }

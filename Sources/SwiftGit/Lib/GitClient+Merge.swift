@@ -169,9 +169,25 @@ extension GitClient {
         return String(prefix + url)
     }
 
+    /// wildmatch's named character classes, over ASCII as git has them.
+    static let characterClasses: [String: @Sendable (Character) -> Bool] = [
+        "alnum": { $0.isASCII && ($0.isLetter || $0.isNumber) },
+        "alpha": { $0.isASCII && $0.isLetter },
+        "blank": { $0 == " " || $0 == "\t" },
+        "cntrl": { $0.asciiValue.map { $0 < 32 || $0 == 127 } ?? false },
+        "digit": { $0.isASCII && $0.isNumber },
+        "graph": { $0.asciiValue.map { $0 > 32 && $0 < 127 } ?? false },
+        "lower": { $0.isASCII && $0.isLowercase },
+        "print": { $0.asciiValue.map { $0 >= 32 && $0 < 127 } ?? false },
+        "punct": { $0.isASCII && $0.isPunctuation || $0.isASCII && $0.isSymbol },
+        "space": { $0.isASCII && $0.isWhitespace },
+        "upper": { $0.isASCII && $0.isUppercase },
+        "xdigit": { $0.isHexDigit },
+    ]
+
     /// Whether glob `pattern` matches `text`, as git's wildmatch does
     /// for a branch name: `*`, `?`, bracket expressions (`[tw]`, `[a-z]`,
-    /// `[!x]`, `[^x]`) and `\\` escaping the next character.
+    /// `[!x]`, `[^x]`, `[[:alpha:]]`) and `\\` escaping the next character.
     static func glob(_ pattern: String, matches text: String) -> Bool {
         let pattern = Array(pattern), text = Array(text)
         /// The end of the bracket expression opening at `p` and whether
@@ -184,6 +200,19 @@ extension GitClient {
             var first = true
             while i < pattern.count, pattern[i] != "]" || first {
                 first = false
+                // A named class (`[:alpha:]`); one git doesn't know
+                // matches nothing.
+                if pattern[i] == "[", i + 1 < pattern.count, pattern[i + 1] == ":" {
+                    guard let close = (i + 2..<pattern.count).first(where: {
+                        pattern[$0] == ":" && $0 + 1 < pattern.count && pattern[$0 + 1] == "]"
+                    }) else { return nil }
+                    guard let test = Self.characterClasses[String(pattern[(i + 2)..<close])] else {
+                        return nil
+                    }
+                    if test(c) { matched = true }
+                    i = close + 2
+                    continue
+                }
                 var low = pattern[i]
                 if low == "\\", i + 1 < pattern.count { i += 1; low = pattern[i] }
                 if i + 2 < pattern.count, pattern[i + 1] == "-", pattern[i + 2] != "]" {
