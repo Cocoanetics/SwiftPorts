@@ -1374,6 +1374,31 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "feature"], in: remote))
     }
 
+    @Test("an annotated tag outside refs/tags is merged with --no-ff; `tag <name>` fast-forwards")
+    func pullAnnotatedTagFastForward() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["tag", "-a", "v1", "-m", "Release one"], in: other)
+        try systemGit(["push", "-q", "origin", "main", "v1"], in: other)
+        let tip = try systemGit(["rev-parse", "main"], in: remote)
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        let start = try systemGit(["rev-parse", "HEAD"], in: clone)
+
+        try await git(["pull", "-q", "--no-rebase", "origin", "v1"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%P"], in: clone) == "\(start) \(tip)")
+        #expect(try systemGit(["log", "-1", "--format=%B"], in: clone).hasSuffix("Release one"))
+
+        for args in [["pull", "-q", "--no-rebase", "--ff", "origin", "v1"],
+                     ["pull", "-q", "--no-rebase", "origin", "tag", "v1"]] {
+            try systemGit(["reset", "-q", "--hard", start], in: clone)
+            try? systemGit(["tag", "-d", "v1"], in: clone)
+            try await git(args, in: clone)
+            #expect(try systemGit(["rev-parse", "HEAD"], in: clone) == tip, "\(args)")
+        }
+    }
+
     @Test("which upstreams fetch refspecs cover")
     func refspecCoverage() {
         #expect(Pull.refspecs(["+refs/heads/*:refs/remotes/origin/*"], fetch: "refs/heads/feature"))

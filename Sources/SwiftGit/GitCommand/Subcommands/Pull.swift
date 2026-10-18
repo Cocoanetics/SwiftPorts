@@ -90,7 +90,7 @@ struct Pull: AsyncParsableCommand {
 
         // Fetch, as `git fetch [<repository> [<refspec>…]]` would.
         let repository = arguments.first
-        var refspecs = Array(arguments.dropFirst())
+        var refspecs = Self.normalizingTagRefspecs(Array(arguments.dropFirst()))
         var branchRemote: String?
         if let branch { branchRemote = try await client.configGet("branch.\(branch).remote") }
         let remotes = try await client.remoteList()
@@ -207,6 +207,14 @@ struct Pull: AsyncParsableCommand {
             return
         }
 
+        // An annotated tag fetched outside its natural place
+        // (`refs/tags/<name>`) is merged with --no-ff unless told
+        // otherwise, as git merges one.
+        if rebasing == .no, fastForward == nil,
+           try await Self.isTagOutsideItsPlace(head, client: client) {
+            fastForward = .never
+        }
+
         // A rebase that can fast-forward does, as git does it.
         let mode: FastForwardMode
         switch rebasing != .no ? .only : fastForward {
@@ -236,6 +244,36 @@ struct Pull: AsyncParsableCommand {
         } else if case .conflicts = outcome {
             try Merge.printOutcome(outcome)
         }
+    }
+
+    /// git fetch's `tag <name>`, which is one refspec,
+    /// `refs/tags/<name>:refs/tags/<name>`.
+    static func normalizingTagRefspecs(_ arguments: [String]) -> [String] {
+        var result: [String] = []
+        var index = arguments.startIndex
+        while index < arguments.endIndex {
+            if arguments[index] == "tag", index + 1 < arguments.endIndex {
+                let name = arguments[index + 1]
+                result.append("refs/tags/\(name):refs/tags/\(name)")
+                index += 2
+            } else {
+                result.append(arguments[index])
+                index += 1
+            }
+        }
+        return result
+    }
+
+    /// Whether `head` is an annotated tag that `refs/tags/<name>` doesn't
+    /// hold, as git's merge checks it (`merge_name`, natural place).
+    static func isTagOutsideItsPlace(_ head: SwiftGit.GitClient.FetchHeadEntry,
+                                     client: SwiftGit.GitClient) async throws -> Bool {
+        guard head.description.hasPrefix("tag '"),
+              let end = head.description.dropFirst(5).firstIndex(of: "'"),
+              (try? await client.objectMetadata(of: head.oid))?.kind == .tag
+        else { return false }
+        let name = head.description[head.description.index(head.description.startIndex, offsetBy: 5)..<end]
+        return (try? await client.resolveOID("refs/tags/\(name)")) != head.oid
     }
 
     /// Whether fetch refspecs `refspecs` fetch remote ref `ref`
