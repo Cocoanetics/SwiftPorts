@@ -5,11 +5,12 @@ struct Fetch: AsyncParsableCommand {
         commandName: "fetch",
         abstract: "Download objects and refs from a remote.",
         discussion: """
-            `git fetch [<repository> [<refspec>…]]`, as in git. Without a
-            repository it fetches from the current branch's upstream remote
-            (else `origin`); without a refspec, the remote's configured
-            ones. `--remote <name>` names the remote instead, leaving every
-            argument a refspec.
+            `git fetch [<repository> [<refspec>…]]`, as in git: the repository
+            is a remote's name, a URL or a path. Without one it fetches from
+            the current branch's upstream remote (else `origin`); without a
+            refspec, every refspec configured for the remote (a URL's
+            `HEAD`). `--remote <name>` names the remote instead, leaving
+            every argument a refspec.
             """
     )
 
@@ -59,8 +60,14 @@ struct Fetch: AsyncParsableCommand {
             name = "origin"
         }
         if refspecs.isEmpty {
-            refspecs = [try await client.configGet("remote.\(name).fetch")
-                        ?? "+refs/heads/*:refs/remotes/\(name)/*"]
+            if (try? await client.remoteExists(named: name)) == true {
+                let key = "remote.\(name).fetch"
+                let configured = try await client.configList().filter { $0.name == key }.map(\.value)
+                refspecs = configured.isEmpty ? ["+refs/heads/*:refs/remotes/\(name)/*"] : configured
+            } else {
+                // A URL or path: its HEAD, into FETCH_HEAD.
+                refspecs = ["HEAD"]
+            }
         }
         for refspec in refspecs {
             if unshallow {

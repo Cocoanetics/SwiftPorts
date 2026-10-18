@@ -108,6 +108,7 @@ public struct GitClient: ForgeKit.GitClient {
         prune: Bool? = nil
     ) async throws {
         let progress = shellProgressSink()
+        let remote = try await resolveRemoteOperand(remote)
         try await withRepository { repository in
             let shouldPrune = try resolvedFetchPrune(
                 prune, remote: remote, repository: repository)
@@ -123,6 +124,7 @@ public struct GitClient: ForgeKit.GitClient {
         prune: Bool? = nil
     ) async throws {
         let progress = shellProgressSink()
+        let remote = try await resolveRemoteOperand(remote)
         try await withRepository { repository in
             let shouldPrune = try resolvedFetchPrune(
                 prune, remote: remote, repository: repository)
@@ -143,6 +145,7 @@ public struct GitClient: ForgeKit.GitClient {
 
     public func push(remote: String, refspec: String, setUpstream: Bool) async throws {
         let progress = shellProgressSink()
+        let remote = try await resolveRemoteOperand(remote)
         try await withRepository {
             try $0.push(remote: remote, refspec: refspec, setUpstream: setUpstream,
                         credentials: credentials, progress: progress)

@@ -109,29 +109,100 @@ struct GitCommandRemoteTests {
         #expect(try systemGit(["rev-parse", "dev"], in: remote) == head)
     }
 
-    @Test("git push <repository> pushes the current branch")
+    @Test("git push <repository> pushes the current branch to its upstream")
     func pushRepositoryOnly() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        try commitFile("two.txt", in: clone)
+        try await git(["push", "origin"], in: clone)
+        #expect(try systemGit(["rev-parse", "main"], in: remote)
+                == systemGit(["rev-parse", "HEAD"], in: clone))
+    }
+
+    @Test("git push -u <repository> <branch> records and reports the upstream")
+    func pushSetsUpstream() async throws {
         let (remote, clone) = try makeRemoteAndClone()
         try systemGit(["switch", "-q", "-c", "feature"], in: clone)
         try commitFile("feature.txt", in: clone)
-        try await git(["push", "-u", "origin"], in: clone)
+        let output = try await git(["push", "-u", "origin", "feature"], in: clone)
         #expect(try systemGit(["rev-parse", "feature"], in: remote)
                 == systemGit(["rev-parse", "HEAD"], in: clone))
         #expect(try systemGit(["config", "branch.feature.remote"], in: clone) == "origin")
+        #expect(output.stdout == "branch 'feature' set up to track 'origin/feature'.\n")
     }
 
-    @Test("git push without an upstream says how to set one")
+    @Test("git push [origin] without an upstream refuses, as push.default=simple does")
     func pushWithoutUpstream() async throws {
-        let (_, clone) = try makeRemoteAndClone()
+        let (remote, clone) = try makeRemoteAndClone()
         try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        for args in [["push"], ["push", "origin"], ["push", "-u", "origin"]] {
+            do {
+                try await git(args, in: clone)
+                Issue.record("expected git \(args.joined(separator: " ")) to fail")
+            } catch let error as CLIError {
+                #expect(error.lines.first == "fatal: The current branch lonely has no upstream branch.")
+                #expect(error.lines.contains("    git push --set-upstream origin lonely"))
+                #expect(error.exitCode == 128)
+            }
+        }
+        #expect(throws: Failure.self) { try systemGit(["rev-parse", "--verify", "lonely"], in: remote) }
+    }
+
+    @Test("git push to another remote pushes the branch under its own name")
+    func pushTriangular() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherBare")
+        try systemGit(["init", "-q", "--bare", other.path], in: clone)
+        try systemGit(["remote", "add", "other", other.path], in: clone)
+        try systemGit(["switch", "-q", "-c", "topic"], in: clone)
+        try await git(["push", "other"], in: clone)
+        #expect(try systemGit(["rev-parse", "topic"], in: other)
+                == systemGit(["rev-parse", "HEAD"], in: clone))
+    }
+
+    @Test("push.autoSetupRemote and push.default=current")
+    func pushConfiguredDefaults() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        try systemGit(["switch", "-q", "-c", "auto"], in: clone)
+        try systemGit(["config", "push.autoSetupRemote", "true"], in: clone)
+        let auto = try await git(["push"], in: clone)
+        #expect(auto.stdout == "branch 'auto' set up to track 'origin/auto'.\n")
+        #expect(try systemGit(["config", "branch.auto.merge"], in: clone) == "refs/heads/auto")
+
+        try systemGit(["switch", "-q", "-c", "current"], in: clone)
+        try systemGit(["config", "--unset", "push.autoSetupRemote"], in: clone)
+        try systemGit(["config", "push.default", "current"], in: clone)
+        try await git(["push"], in: clone)
+        #expect(try systemGit(["rev-parse", "current"], in: remote)
+                == systemGit(["rev-parse", "HEAD"], in: clone))
+    }
+
+    @Test("git push refuses an upstream of a different name")
+    func pushUpstreamNameMismatch() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["switch", "-q", "-c", "feature", "--track", "origin/main"], in: clone)
         do {
             try await git(["push"], in: clone)
             Issue.record("expected git push to fail")
         } catch let error as CLIError {
-            #expect(error.lines.first == "fatal: The current branch lonely has no upstream branch.")
-            #expect(error.lines.contains("    git push --set-upstream origin lonely"))
-            #expect(error.exitCode == 128)
+            #expect(error.lines.first == "fatal: The upstream branch of your current branch does not match")
+            #expect(error.lines.contains("    git push origin HEAD:main"))
         }
+    }
+
+    @Test("git fetch and push take a URL or path for <repository>")
+    func fetchAndPushAPath() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let mirror = tmp("GitRemoteMirror")
+        try systemGit(["init", "-q", "--bare", mirror.path], in: clone)
+        try commitFile("two.txt", in: clone)
+        try await git(["push", mirror.path, "main"], in: clone)
+        #expect(try systemGit(["rev-parse", "main"], in: mirror)
+                == systemGit(["rev-parse", "HEAD"], in: clone))
+
+        try await git(["fetch", remote.path, "main"], in: clone)
+        #expect(try systemGit(["rev-parse", "FETCH_HEAD"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+        #expect(try systemGit(["remote"], in: clone) == "origin")
     }
 
     // MARK: fetch
@@ -153,6 +224,18 @@ struct GitCommandRemoteTests {
         try await git(["fetch", "origin"], in: clone)
         #expect(try systemGit(["rev-parse", "origin/main"], in: clone)
                 == systemGit(["rev-parse", "HEAD"], in: other))
+    }
+
+    @Test("git fetch applies every configured refspec")
+    func fetchEveryConfiguredRefspec() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["config", "--add", "remote.origin.fetch",
+                       "+refs/heads/main:refs/remotes/mirror/main"], in: clone)
+        try systemGit(["update-ref", "-d", "refs/remotes/origin/main"], in: clone)
+        try await git(["fetch"], in: clone)
+        let main = try systemGit(["rev-parse", "main"], in: clone)
+        #expect(try systemGit(["rev-parse", "refs/remotes/origin/main"], in: clone) == main)
+        #expect(try systemGit(["rev-parse", "refs/remotes/mirror/main"], in: clone) == main)
     }
 
     // MARK: -q
