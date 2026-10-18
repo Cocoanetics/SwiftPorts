@@ -1083,6 +1083,8 @@ struct GitCommandRemoteTests {
         try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
         try await expectRefusal(["pull", "-q", "origin"], in: clone,
                                 stderr: notTheBranchRemote("origin"), status: 1)
+        // An empty repository fetches nothing.
+        try await expectRefusal(["pull", "-q", ""], in: clone, stderr: notTheBranchRemote(""), status: 1)
         // The upstream's remote, named, merges the upstream.
         try systemGit(["switch", "-q", "main"], in: clone)
         try await git(["pull", "-q", "origin"], in: clone)
@@ -1319,6 +1321,8 @@ struct GitCommandRemoteTests {
         try systemGit(["push", "-q", "origin", "main"], in: other)
         try systemGit(["remote", "add", "blank", remote.path], in: clone)
         try systemGit(["config", "remote.blank.fetch", ""], in: clone)
+        // Another remote's mapping, its name differing in case only, isn't blank's.
+        try systemGit(["remote", "add", "Blank", remote.path], in: clone)
         try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
         try commitFile("mine.txt", in: clone)
         try systemGit(["config", "pull.rebase", "false"], in: clone)

@@ -96,9 +96,9 @@ struct Pull: AsyncParsableCommand {
         let remotes = try await client.remoteList()
         // The remote to fetch from, `nil` when there's none.
         var fetchFrom = repository
-        if let repository, repository.isEmpty {
-            throw CLIError.stderr("fatal: bad repository ''", exitCode: 128)
-        }
+        // An empty repository is no remote: git's fetch does nothing,
+        // and there is nothing to merge.
+        if repository == "" { fetchFrom = nil }
         if repository == nil {
             let fallback = RemoteArguments.defaultRemote(branchRemote: branchRemote, remotes: remotes)
             if fallback.isUsable { fetchFrom = fallback.name }
@@ -124,9 +124,15 @@ struct Pull: AsyncParsableCommand {
             var firstIsExact = false
             var mappings: [String] = []
             if remotes.contains(fetchFrom) {
-                let key = "remote.\(fetchFrom).fetch".lowercased()
-                let values = try await client.configList().filter { $0.name.lowercased() == key }.map(\.value)
-                    .filter { !$0.isEmpty }
+                // Section and key in any case, the remote's name as is.
+                let values = try await client.configList().filter { entry in
+                    let name = entry.name
+                    guard name.count == "remote..fetch".count + fetchFrom.count,
+                          name.lowercased().hasPrefix("remote."), name.lowercased().hasSuffix(".fetch")
+                    else { return false }
+                    return name.dropFirst(7).dropLast(6) == fetchFrom
+                }.map(\.value).filter { !$0.isEmpty }
+                let key = "remote.\(fetchFrom).fetch"
                 mapped = !values.isEmpty
                 mappings = values
                 if !mapped { blank = try await client.configGet(key) != nil }
