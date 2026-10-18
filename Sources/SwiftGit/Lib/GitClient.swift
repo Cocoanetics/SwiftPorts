@@ -180,12 +180,21 @@ public struct GitClient: ForgeKit.GitClient {
         let progress = shellProgressSink()
         let location = try await resolveRemoteOperand(remote, for: .push)
         return try await withRepository { repository in
-            let pushed = try repository.push(
-                remote: location, refspecs: refspecs, setUpstream: setUpstream,
-                credentials: credentials, progress: progress)
-            if setUpstream, location != remote {
+            func recordUpstreams(of pushed: [String]) throws {
+                guard setUpstream, location != remote else { return }
                 try Self.recordUpstreamRemote(remote, of: pushed, pushedTo: location, in: repository)
             }
+            let pushed: [String]
+            do {
+                pushed = try repository.push(
+                    remote: location, refspecs: refspecs, setUpstream: setUpstream,
+                    credentials: credentials, progress: progress)
+            } catch let rejected as PushRejectedError {
+                // The refs that went through got their upstream all the same.
+                try recordUpstreams(of: rejected.pushed)
+                throw rejected
+            }
+            try recordUpstreams(of: pushed)
             return pushed
         }
     }

@@ -370,6 +370,29 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "main"], in: other))
     }
 
+    @Test("-u to a path records it as typed for the refs a partly refused push sent")
+    func pushRejectedSetsTypedUpstream() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let mirror = tmp("GitRemoteMirror")
+        try systemGit(["init", "-q", "--bare", "-b", "main", mirror.path], in: clone)
+        try systemGit(["push", "-q", mirror.path, "main"], in: clone)
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", mirror.path, other.path], in: clone)
+        try commitFile("theirs.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try commitFile("mine.txt", in: clone)
+        try systemGit(["branch", "dev"], in: clone)
+
+        let relative = "../\(mirror.lastPathComponent)"
+        await #expect(throws: CLIError.self) {
+            try await git(["push", "-u", relative, "main", "dev"], in: clone)
+        }
+        #expect(try systemGit(["rev-parse", "dev"], in: mirror)
+                == systemGit(["rev-parse", "dev"], in: clone))
+        #expect(try systemGit(["config", "branch.dev.remote"], in: clone) == relative)
+        #expect(try systemGit(["config", "branch.main.remote"], in: clone) == "origin")
+    }
+
     @Test("a push refused before it starts reads as git's")
     func pushRefusedUpFront() async throws {
         let (_, clone) = try makeRemoteAndClone()
