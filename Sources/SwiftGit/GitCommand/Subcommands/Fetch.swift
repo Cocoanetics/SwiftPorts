@@ -8,7 +8,8 @@ struct Fetch: AsyncParsableCommand {
             `git fetch [<repository> [<refspec>…]]`, as in git: the repository
             is a remote's name, a URL or a path. Without one it fetches from
             the current branch's remote, else the only remote configured,
-            else `origin`. The refspecs are fetched together, so a negative
+            else `origin` if that is configured (else there is nothing to
+            fetch). The refspecs are fetched together, so a negative
             `^<ref>` excludes what the others match; without any, it fetches
             what `remote.<name>.fetch` says, and with nothing configured
             (and for a URL or path) the remote's `HEAD`, into `FETCH_HEAD`.
@@ -61,7 +62,12 @@ struct Fetch: AsyncParsableCommand {
             if let branch = try await client.currentBranch() {
                 branchRemote = try await client.configGet("branch.\(branch).remote")
             }
-            name = try await RemoteArguments.defaultRemote(client: client, branchRemote: branchRemote)
+            let fallback = try await RemoteArguments.defaultRemote(
+                client: client, branchRemote: branchRemote)
+            // Without a configured remote to fall back on, git has
+            // nothing to fetch, and says nothing.
+            guard fallback.isUsable else { return }
+            name = fallback.name
         }
         // One fetch for every refspec, as git applies them; with none,
         // the remote's configured refspecs (or its HEAD).

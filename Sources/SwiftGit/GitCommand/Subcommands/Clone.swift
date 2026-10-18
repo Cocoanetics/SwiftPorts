@@ -42,7 +42,21 @@ struct Clone: AsyncParsableCommand {
             throw CLIError.stderr("fatal: repository '' does not exist", exitCode: 128)
         }
         let dest = directory.map { Shell.resolve($0) }
-        let displayName = directory ?? SwiftGit.GitClient.humanishName(of: url)
+        guard var displayName = directory ?? SwiftGit.GitClient.humanishName(of: url) else {
+            throw CLIError.stderr([
+                "fatal: No directory name could be guessed.",
+                "Please specify a directory on the command line"
+            ], exitCode: 128)
+        }
+        // git names the directory without trailing separators.
+        #if os(Windows)
+        let separators: Set<Character> = ["/", "\\"]
+        #else
+        let separators: Set<Character> = ["/"]
+        #endif
+        while displayName.count > 1, let last = displayName.last, separators.contains(last) {
+            displayName.removeLast()
+        }
 
         // Real git emits this header to stderr before the network work
         // starts; we follow the same convention so callers piping the

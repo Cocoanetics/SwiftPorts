@@ -347,6 +347,83 @@ struct GitCommandRemoteTests {
         #expect(try systemGit(["remote"], in: clone) == "origin")
     }
 
+    @Test("a relative path is relative to the top of the work tree; -u records it as typed")
+    func pushRelativePath() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let mirror = tmp("GitRemoteMirror")
+        try systemGit(["init", "-q", "--bare", "-b", "main", mirror.path], in: clone)
+        let sub = clone.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        // A sibling of the work tree, so not of `sub`.
+        let relative = "../\(mirror.lastPathComponent)"
+        let pushed = try await git(["push", "-u", relative, "main"], in: sub)
+        #expect(try systemGit(["rev-parse", "main"], in: mirror)
+                == systemGit(["rev-parse", "HEAD"], in: clone))
+        #expect(try systemGit(["config", "branch.main.remote"], in: clone) == relative)
+        #expect(pushed.stdout == "branch 'main' set up to track '\(relative)/main'.\n")
+
+        // The upstream as recorded still works, from anywhere in the tree.
+        try commitFile("two.txt", in: clone)
+        try await git(["push", "-q"], in: sub)
+        #expect(try systemGit(["rev-parse", "main"], in: mirror)
+                == systemGit(["rev-parse", "HEAD"], in: clone))
+        try await git(["fetch", "-q"], in: sub)
+        #expect(try systemGit(["rev-parse", "FETCH_HEAD"], in: clone)
+                == systemGit(["rev-parse", "HEAD"], in: clone))
+    }
+
+    @Test("without a configured remote, git push refuses and git fetch does nothing")
+    func noConfiguredRemote() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        try systemGit(["remote", "remove", "origin"], in: clone)
+        // A repository in ./origin is never taken for the missing remote.
+        let decoy = clone.appendingPathComponent("origin")
+        try systemGit(["clone", "-q", "--bare", remote.path, decoy.path], in: clone)
+        try commitFile("two.txt", in: clone)
+        for mode in ["current", "matching"] {
+            try systemGit(["config", "push.default", mode], in: clone)
+            do {
+                try await git(["push"], in: clone)
+                Issue.record("expected git push to fail with push.default=\(mode)")
+            } catch let error as CLIError {
+                #expect(error.lines.first == "fatal: No configured push destination.")
+                #expect(error.lines.contains("    git push <name>"))
+                #expect(error.exitCode == 128)
+            }
+        }
+        #expect(try systemGit(["rev-parse", "main"], in: decoy)
+                != systemGit(["rev-parse", "HEAD"], in: clone))
+
+        let fetched = try await git(["fetch"], in: clone)
+        #expect(fetched.stdout.isEmpty && fetched.stderr.isEmpty)
+        #expect(!FileManager.default.fileExists(
+            atPath: clone.appendingPathComponent(".git/FETCH_HEAD").path))
+    }
+
+    @Test("git refuses a bad push.default before anything else")
+    func pushSettingsComeFirst() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["config", "push.default", "bogus"], in: clone)
+        // Even with refspecs that leave push.default unused.
+        for args in [["push"], ["push", "origin", "main"]] {
+            do {
+                try await git(args, in: clone)
+                Issue.record("expected git \(args.joined(separator: " ")) to fail")
+            } catch let error as CLIError {
+                #expect(error.lines.first == "error: malformed value for push.default: bogus")
+                #expect(error.exitCode == 128)
+            }
+        }
+        try systemGit(["config", "--unset", "push.default"], in: clone)
+        try systemGit(["config", "push.autoSetupRemote", "bogus"], in: clone)
+        do {
+            try await git(["push", "origin", "main"], in: clone)
+            Issue.record("expected git push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == ["fatal: bad boolean config value 'bogus' for 'push.autosetupremote'"])
+        }
+    }
+
     // MARK: fetch
 
     @Test("git fetch with no arguments, or just the repository")
@@ -385,7 +462,21 @@ struct GitCommandRemoteTests {
         try await git(["clone", "-q", spaced.path], in: clone)
         #expect(FileManager.default.fileExists(
             atPath: clone.appendingPathComponent("project/file.txt").path))
-        #expect(GitClient.humanishName(of: "git@host:org/repo.git/") == "repo")
+
+        // git's refusal when no name can be guessed, and its spelling of
+        // a directory given with a trailing slash.
+        do {
+            try await git(["clone", "host:.git"], in: clone)
+            Issue.record("expected git clone to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == [
+                "fatal: No directory name could be guessed.",
+                "Please specify a directory on the command line"
+            ])
+            #expect(error.exitCode == 128)
+        }
+        let named = try await git(["clone", spaced.path, "named/"], in: clone)
+        #expect(named.stderr.hasPrefix("Cloning into 'named'...\n"))
     }
 
     @Test("git fetch applies every configured refspec")

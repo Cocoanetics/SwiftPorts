@@ -180,10 +180,15 @@ public struct GitClient: ForgeKit.GitClient {
     @discardableResult
     public func push(remote: String, refspecs: [String], setUpstream: Bool) async throws -> [String] {
         let progress = shellProgressSink()
-        let remote = try await resolveRemoteOperand(remote)
-        return try await withRepository {
-            try $0.push(remote: remote, refspecs: refspecs, setUpstream: setUpstream,
-                        credentials: credentials, progress: progress)
+        let location = try await resolveRemoteOperand(remote)
+        return try await withRepository { repository in
+            let pushed = try repository.push(
+                remote: location, refspecs: refspecs, setUpstream: setUpstream,
+                credentials: credentials, progress: progress)
+            if setUpstream, location != remote {
+                try Self.recordUpstreamRemote(remote, of: pushed, pushedTo: location, in: repository)
+            }
+            return pushed
         }
     }
 

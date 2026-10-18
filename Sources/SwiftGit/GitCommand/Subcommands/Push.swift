@@ -12,7 +12,8 @@ struct Push: AsyncParsableCommand {
             one push, patterns, `:` (matching branches) and negative `^<ref>`
             included. Without a repository it pushes to the current branch's
             `branch.<name>.pushRemote`, else `remote.pushDefault`, else the
-            branch's remote. Without a refspec it pushes what
+            branch's remote, else the only remote configured, else `origin`
+            if that is configured. Without a refspec it pushes what
             `remote.<name>.push` says, else what `push.default` (`simple`
             unless configured) says. `--remote <name>` names the remote
             instead, leaving every argument a refspec.
@@ -36,9 +37,10 @@ struct Push: AsyncParsableCommand {
 
     func run() async throws {
         let client = CommandContext.gitClient(quiet: quiet)
+        let settings = try await DefaultPush.Settings(client: client)
         let (remoteName, refspecs) = RemoteArguments.split(arguments, remote: remote)
         let plan = refspecs.isEmpty
-            ? try await DefaultPush.plan(client: client, remote: remoteName)
+            ? try await DefaultPush.plan(client: client, remote: remoteName, settings: settings)
             : DefaultPush.Plan(remote: remoteName ?? "origin", refspecs: refspecs, setUpstream: false)
         let upstream = setUpstream || plan.setUpstream
         let pushed = try await client.push(
@@ -69,10 +71,11 @@ struct Push: AsyncParsableCommand {
 /// What `git push [<repository>]` pushes without a refspec, decided the
 /// way git decides it: the remote is the one named, else the current
 /// branch's `branch.<name>.pushRemote`, else `remote.pushDefault`, else
-/// the branch's own remote. The refspecs are that remote's
-/// `remote.<name>.push`, else what `push.default` (`simple` unless
-/// configured) and `push.autoSetupRemote` make of the current branch,
-/// with git's refusals.
+/// the branch's own remote, else the only remote, else `origin`. The
+/// refspecs are that remote's `remote.<name>.push`, else what
+/// `push.default` (`simple` unless configured) and
+/// `push.autoSetupRemote` make of the current branch, with git's
+/// refusals.
 enum DefaultPush {
     struct Plan {
         let remote: String
@@ -82,7 +85,38 @@ enum DefaultPush {
         let setUpstream: Bool
     }
 
-    static func plan(client: SwiftGit.GitClient, remote explicit: String?) async throws -> Plan {
+    /// `push.default` and `push.autoSetupRemote`, which git reads — and
+    /// refuses when malformed — before anything else, even for a push
+    /// whose refspecs leave them unused.
+    struct Settings {
+        /// `push.default` as configured; `nil` when it isn't.
+        let configuredMode: String?
+        let autoSetupRemote: Bool
+        var mode: String { configuredMode ?? "simple" }
+
+        init(client: SwiftGit.GitClient) async throws {
+            configuredMode = try await client.configGet("push.default")
+            switch configuredMode ?? "simple" {
+            case "nothing", "matching", "simple", "upstream", "tracking", "current":
+                break
+            case let mode:
+                throw CLIError.stderr([
+                    "error: malformed value for push.default: \(mode)",
+                    "error: must be one of nothing, matching, simple, upstream or current",
+                    "fatal: bad config variable 'push.default'"
+                ], exitCode: 128)
+            }
+            do {
+                autoSetupRemote = try await client.configBool("push.autoSetupRemote") ?? false
+            } catch let error as Libgit2Error {
+                throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)
+            }
+        }
+    }
+
+    static func plan(
+        client: SwiftGit.GitClient, remote explicit: String?, settings: Settings
+    ) async throws -> Plan {
         let branch = try await client.currentBranch()
         func branchConfig(_ key: String) async throws -> String? {
             guard let branch else { return nil }
@@ -95,13 +129,14 @@ enum DefaultPush {
         var remote = explicit
         if remote == nil { remote = try await branchConfig("pushRemote") }
         if remote == nil { remote = try await client.configGet("remote.pushDefault") }
-        let target = remote ?? fetchRemote
+        guard let target = remote ?? (fetchRemote.isUsable ? fetchRemote.name : nil) else {
+            throw noPushDestination()
+        }
 
         if try await client.configGet("remote.\(target).push") != nil {
             return Plan(remote: target, refspecs: [], setUpstream: false)
         }
-        let configuredMode = try await client.configGet("push.default")
-        let mode = configuredMode ?? "simple"
+        let mode = settings.mode
         switch mode {
         case "matching":
             return Plan(remote: target, refspecs: [":"], setUpstream: false)
@@ -109,23 +144,12 @@ enum DefaultPush {
             throw CLIError.stderr(
                 "fatal: You didn't specify any refspecs to push, and push.default is \"nothing\".",
                 exitCode: 128)
-        case "simple", "upstream", "tracking", "current":
-            break
         default:
-            throw CLIError.stderr([
-                "error: malformed value for push.default: \(mode)",
-                "error: must be one of nothing, matching, simple, upstream or current",
-                "fatal: bad config variable 'push.default'"
-            ], exitCode: 128)
+            break
         }
         guard let branch else { throw detachedHead(remote: target) }
 
-        let autoSetup: Bool
-        do {
-            autoSetup = try await client.configBool("push.autoSetupRemote") ?? false
-        } catch let error as Libgit2Error {
-            throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)
-        }
+        let autoSetup = settings.autoSetupRemote
         let local = "refs/heads/\(branch)"
         // git's get_upstream_ref: the branch's upstream, else, when
         // push.autoSetupRemote is about to record one, the branch itself.
@@ -138,17 +162,17 @@ enum DefaultPush {
         }
         var destination = local
         switch mode {
-        case "simple" where target == fetchRemote:
+        case "simple" where target == fetchRemote.name:
             let upstream = try upstreamRef()
             if upstream != local {
                 let autoSetupMerge = try await client.configGet("branch.autoSetupMerge")
                 throw upstreamNameMismatch(
                     remote: target, upstream: upstream,
-                    pushDefaultAdvice: configuredMode == nil,
+                    pushDefaultAdvice: settings.configuredMode == nil,
                     autoSetupMergeAdvice: autoSetupMerge != "simple")
             }
         case "upstream", "tracking":
-            guard target == fetchRemote else {
+            guard target == fetchRemote.name else {
                 throw CLIError.stderr([
                     "fatal: You are pushing to remote '\(target)', which is not the upstream of",
                     "your current branch '\(branch)', without telling me what to push",
@@ -164,6 +188,20 @@ enum DefaultPush {
         }
         return Plan(remote: target, refspecs: ["\(local):\(destination)"],
                     setUpstream: autoSetup && upstreamMerge == nil)
+    }
+
+    private static func noPushDestination() -> CLIError {
+        CLIError.stderr([
+            "fatal: No configured push destination.",
+            "Either specify the URL from the command-line or configure a remote repository using",
+            "",
+            "    git remote add <name> <url>",
+            "",
+            "and then push using the remote name",
+            "",
+            "    git push <name>",
+            ""
+        ], exitCode: 128)
     }
 
     private static func detachedHead(remote: String) -> CLIError {
@@ -239,10 +277,17 @@ enum RemoteArguments {
 
     /// The remote git takes for a branch when none is named
     /// (`remote_for_branch`): the branch's own remote, else the only
-    /// remote configured, else `origin`.
-    static func defaultRemote(client: SwiftGit.GitClient, branchRemote: String?) async throws -> String {
-        if let branchRemote { return branchRemote }
+    /// remote configured, else `origin`. Unlike a remote named on the
+    /// command line or in the branch's config, the fallback `origin` has
+    /// to be configured to be used: git never reads it as a path, so a
+    /// repository in `./origin` is never pushed to or fetched from by
+    /// accident.
+    static func defaultRemote(
+        client: SwiftGit.GitClient, branchRemote: String?
+    ) async throws -> (name: String, isUsable: Bool) {
+        if let branchRemote { return (branchRemote, true) }
         let remotes = try await client.remoteList()
-        return remotes.count == 1 ? remotes[0] : "origin"
+        if remotes.count == 1 { return (remotes[0], true) }
+        return ("origin", remotes.contains("origin"))
     }
 }
