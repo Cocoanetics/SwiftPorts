@@ -11,12 +11,12 @@ import SwiftGit
 /// when the wording matters; ArgumentParser's default formatter would
 /// otherwise prefix our messages with `Error: `.
 ///
-/// Conforming to `LocalizedError` keeps the in-process bash-builtin
-/// path (`ParsableCommandBridge` in SwiftBash) from falling through to
-/// `String(describing:)`, which would otherwise dump the struct as
-/// `CLIError(lines: [...], exitCode: 1)`. Standalone-CLI callers go
-/// through ``emitAndExit()`` and never hit ArgumentParser's formatter.
-public struct CLIError: Error, LocalizedError {
+/// In-process (a shell embedding `git`, through ShellKit's
+/// `Shell.parsableCommand`), it's a ShellKit `CommandFailure`: the shell
+/// prints the lines as they are and exits with ``exitCode``, as git does.
+/// Standalone-CLI callers go through ``emitAndExit()``. `LocalizedError`
+/// keeps any other path from dumping the struct.
+public struct CLIError: Error, LocalizedError, CommandFailure {
     public let lines: [String]
     public let exitCode: Int32
 
@@ -30,6 +30,14 @@ public struct CLIError: Error, LocalizedError {
 
     public var errorDescription: String? {
         lines.joined(separator: "\n")
+    }
+
+    public var diagnostic: String {
+        lines.map { $0 + "\n" }.joined()
+    }
+
+    public var exitStatus: ShellKit.ExitStatus {
+        ShellKit.ExitStatus(exitCode)
     }
 }
 

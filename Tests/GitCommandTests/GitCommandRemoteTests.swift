@@ -7,6 +7,7 @@ import Foundation
 import Testing
 import ArgumentParser
 import ShellKit
+import ShellCommandKit
 import SwiftGit
 @testable import GitCommand
 
@@ -712,6 +713,25 @@ struct GitCommandRemoteTests {
             #expect(error.lines == ["fatal: protocol 'a_' is not supported"])
             #expect(error.exitCode == 128)
         }
+    }
+
+    @Test("in a host shell, git's errors keep its words and exit status")
+    func errorsThroughTheShellBridge() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let out = OutputSink(), err = OutputSink()
+        let shell = Shell(stdout: out, stderr: err,
+                          environment: Environment(workingDirectory: clone.path))
+        let status = try await shell.withCurrent {
+            try await Shell.parsableCommand(GitCommand.self).run(["git", "fetch", "foo://host/x"])
+        }
+        err.finish()
+        // As git prints it: no `Error: ` from ArgumentParser, and 128.
+        #expect(await err.readAllString() == """
+            git: 'remote-foo' is not a git command. See 'git --help'.
+            fatal: remote helper 'foo' aborted session
+
+            """)
+        #expect(status.code == 128)
     }
 
     @Test("git refuses a bad push.default before anything else")
