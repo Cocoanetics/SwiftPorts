@@ -226,6 +226,26 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "HEAD"], in: other))
     }
 
+    @Test("git clone and git remote take the remote exactly as typed")
+    func remotesAsTyped() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        // A literal %20 survives (a URL couldn't tell it from a space).
+        try await git(["remote", "add", "spaced", "git@host:repos%20team.git"], in: clone)
+        #expect(try systemGit(["config", "remote.spaced.url"], in: clone) == "git@host:repos%20team.git")
+        try await git(["remote", "set-url", "spaced", "git@[::1]:r.git"], in: clone)
+        #expect(try systemGit(["config", "remote.spaced.url"], in: clone) == "git@[::1]:r.git")
+
+        // A path with a space, cloned into its humanish name.
+        let spaced = tmp("Git Remote Spaced").appendingPathComponent("project.git")
+        try FileManager.default.createDirectory(
+            at: spaced.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try systemGit(["clone", "-q", "--bare", remote.path, spaced.path], in: clone)
+        try await git(["clone", "-q", spaced.path], in: clone)
+        #expect(FileManager.default.fileExists(
+            atPath: clone.appendingPathComponent("project/file.txt").path))
+        #expect(GitClient.humanishName(of: "git@host:org/repo.git/") == "repo")
+    }
+
     @Test("git fetch applies every configured refspec")
     func fetchEveryConfiguredRefspec() async throws {
         let (_, clone) = try makeRemoteAndClone()

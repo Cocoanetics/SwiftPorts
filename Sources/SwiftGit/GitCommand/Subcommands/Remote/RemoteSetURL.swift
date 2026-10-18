@@ -15,11 +15,9 @@ struct RemoteSetURL: AsyncParsableCommand {
     var url: String
 
     func run() async throws {
-        guard let parsed = URL(string: url) else {
-            throw CLIError.stderr("fatal: '\(url)' is not a valid URL", exitCode: 128)
-        }
         do {
-            try await CommandContext.gitClient().remoteSetURL(name: name, url: parsed)
+            // Stored exactly as typed, as git does.
+            try await CommandContext.gitClient().remoteSetURL(name: name, remote: url)
         } catch let err as Libgit2Error
             where err.message.lowercased().contains("not found") {
             throw CLIError.stderr(

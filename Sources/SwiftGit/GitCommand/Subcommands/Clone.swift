@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import ShellKit
+import SwiftGit
 
 struct Clone: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -37,11 +38,11 @@ struct Clone: AsyncParsableCommand {
     }
 
     func run() async throws {
-        guard let parsed = URL(string: url) else {
-            throw CLIError.stderr("fatal: '\(url)' is not a valid URL", exitCode: 128)
+        guard !url.isEmpty else {
+            throw CLIError.stderr("fatal: repository '' does not exist", exitCode: 128)
         }
         let dest = directory.map { Shell.resolve($0) }
-        let displayName = directory ?? defaultDirName(for: parsed)
+        let displayName = directory ?? SwiftGit.GitClient.humanishName(of: url)
 
         // Real git emits this header to stderr before the network work
         // starts; we follow the same convention so callers piping the
@@ -51,8 +52,9 @@ struct Clone: AsyncParsableCommand {
             stderr.write(Data("Cloning into '\(displayName)'...\n".utf8))
         }
 
+        // The remote as typed: a `URL` can't always hold a scp-style one.
         try await CommandContext.gitClient(quiet: quiet).clone(
-            url: parsed,
+            remote: url,
             directory: dest,
             depth: depth,
             singleBranch: singleBranch || depth != nil,
@@ -75,10 +77,5 @@ struct Clone: AsyncParsableCommand {
         if remote.contains("@") && remote.contains(":") { return false }
         if remote.hasPrefix("/") { return true }
         return FileManager.default.fileExists(atPath: Shell.resolve(remote).path)
-    }
-
-    private func defaultDirName(for url: URL) -> String {
-        let last = url.deletingPathExtension().lastPathComponent
-        return last.isEmpty ? "repo" : last
     }
 }
