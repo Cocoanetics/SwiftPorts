@@ -425,6 +425,18 @@ struct GitCommandRemoteTests {
         try enablePushAdvice(in: clone)
         #expect(try await hints().count == 5)
         #expect(try await hints(["GIT_ADVICE": "0"]).isEmpty)
+        #expect(try await hints(["GIT_ADVICE": "00"]).isEmpty)
+        #expect(try await hints(["GIT_ADVICE": ""]).isEmpty)
+        #expect(try await hints(["GIT_ADVICE": "YES"]).count == 5)
+        #expect(try await hints(["GIT_ADVICE": "-1"]).count == 5)
+        // A value that's no boolean is git's error, before anything is sent.
+        do {
+            try await git(["push"], in: clone, environment: ["GIT_ADVICE": "bogus"])
+            Issue.record("expected git push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == ["fatal: bad boolean environment value 'bogus' for 'GIT_ADVICE'"])
+            #expect(error.exitCode == 128)
+        }
         for key in ["pushFetchFirst", "pushUpdateRejected", "pushNonFastForward"] {
             try systemGit(["config", "advice.\(key)", "false"], in: clone)
             #expect(try await hints().isEmpty, "\(key)")

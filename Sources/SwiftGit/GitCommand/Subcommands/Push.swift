@@ -147,8 +147,8 @@ enum DefaultPush {
                     }
                 }
                 // `GIT_ADVICE` is read as a boolean; empty is false.
-                if let value = Shell.current.environment["GIT_ADVICE"]?.lowercased() {
-                    advice.global = !(["", "false", "no", "off"].contains(value) || Int(value) == 0)
+                if let value = Shell.current.environment["GIT_ADVICE"] {
+                    advice.global = try GitClient.parseGitBoolEnvironment(value, name: "GIT_ADVICE")
                 }
                 self.advice = advice
             } catch let error as Libgit2Error {

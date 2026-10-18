@@ -73,6 +73,20 @@ extension GitClient {
     /// which names the key the way git spells it (section and variable
     /// lowercased: `push.autosetupremote`). A key without a value is
     /// true; an empty value is false.
+    /// An environment variable read as git reads a boolean one
+    /// (`git_env_bool`): the config rules, with git's error for a value
+    /// that is none (`GIT_ADVICE=bogus`).
+    public static func parseGitBoolEnvironment(_ value: String, name: String) throws -> Bool {
+        var parsed: CInt = 0
+        let result = value.withCString { git_config_parse_bool(&parsed, $0) }
+        guard result == 0 else {
+            throw Libgit2Error(
+                code: Int32(result), klass: 0,
+                message: "bad boolean environment value '\(value)' for '\(name)'")
+        }
+        return parsed != 0
+    }
+
     static func parseGitBool(_ value: String?, key: String) throws -> Bool {
         guard let value else { return true }
         var parsed: CInt = 0
