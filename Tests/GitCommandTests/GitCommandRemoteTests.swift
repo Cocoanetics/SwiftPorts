@@ -1601,6 +1601,19 @@ struct GitCommandRemoteTests {
         try await expectLikeGit(["merge", "a", "d"], in: clone)
     }
 
+    @Test("merge titles group FETCH_HEAD's descriptions as fmt-merge-msg does")
+    func mergeTitles() {
+        let title = SwiftGit.GitClient.mergeTitle
+        // A remote's HEAD leads its source's group, whatever its URL ends in.
+        #expect(title(["/tmp/r'", "branch 'a' of /tmp/r'"]) == "Merge HEAD, branch 'a' of /tmp/r'")
+        #expect(title(["branch 'a' of /tmp/r'", "/tmp/r'"]) == "Merge HEAD, branch 'a' of /tmp/r'")
+        #expect(title(["/tmp/r'"]) == "Merge /tmp/r'")
+        // Any other ref is named as a commit.
+        #expect(title(["'refs/x' of u", "branch 'a' of u"]) == "Merge branch 'a', commit 'refs/x' of u")
+        #expect(title(["branch 'a'", "commit '1234567'", "tag 'v1'"]) == "Merge branch 'a', tag 'v1'; commit '1234567'")
+        #expect(title(["branch 'z' (early part)", "branch 'a'"]) == "Merge branches 'z' (early part) and 'a'")
+    }
+
     @Test("merge.suppressDest takes git's globs")
     func suppressDestGlobs() {
         for (pattern, branch, matches) in [

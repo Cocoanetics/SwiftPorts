@@ -272,13 +272,13 @@ extension GitClient {
     /// or nothing for this repository), each a commit named by itself in
     /// a group of its own, groups in the order first seen and joined by
     /// `; `; within one, branches, remote-tracking branches, tags and
-    /// other refs, each kind joined as `'a', 'b' and 'c'`.
+    /// other refs (as commits), each kind joined as `'a', 'b' and 'c'`.
     static func mergeTitle(_ descriptions: [String]) -> String {
         struct Group {
             let source: String?
             /// Whether the source's own HEAD is among the heads.
             var head = false
-            var branches: [String] = [], remoteBranches: [String] = [], tags: [String] = [], others: [String] = []
+            var branches: [String] = [], remoteBranches: [String] = [], tags: [String] = [], commits: [String] = []
         }
         var groups: [Group] = []
         for description in descriptions {
@@ -301,18 +301,19 @@ extension GitClient {
             let isCommit = source == nil && line.hasPrefix("commit ")
             var index = groups.firstIndex { $0.source == source && source != nil }
             if source == nil, !isCommit {
-                index = groups.firstIndex { $0.source == nil && $0.others.isEmpty }
+                index = groups.firstIndex { $0.source == nil && $0.commits.isEmpty }
             }
             if index == nil || isCommit {
                 groups.append(Group(source: source))
                 index = groups.count - 1
             }
+            // Any other ref (`'refs/x' of <url>`) is named as a commit.
             for (prefix, keyPath) in [("branch ", \Group.branches), ("remote-tracking branch ", \Group.remoteBranches),
-                                      ("tag ", \Group.tags)] where line.hasPrefix(prefix) {
+                                      ("tag ", \Group.tags), ("commit ", \Group.commits)] where line.hasPrefix(prefix) {
                 groups[index!][keyPath: keyPath].append(String(line.dropFirst(prefix.count)))
                 line = ""
             }
-            if !line.isEmpty { groups[index!].others.append(String(line)) }
+            if !line.isEmpty { groups[index!].commits.append(String(line)) }
         }
         func joined(_ singular: String, _ plural: String, _ names: [String]) -> String? {
             guard let last = names.last else { return nil }
@@ -322,8 +323,8 @@ extension GitClient {
         let parts = groups.map { group -> String in
             var kinds = [joined("branch", "branches", group.branches),
                          joined("remote-tracking branch", "remote-tracking branches", group.remoteBranches),
-                         joined("tag", "tags", group.tags)].compactMap { $0 }
-            kinds += group.others
+                         joined("tag", "tags", group.tags),
+                         joined("commit", "commits", group.commits)].compactMap { $0 }
             guard let source = group.source else { return kinds.joined(separator: ", ") }
             if group.head {
                 if kinds.isEmpty { return source }
@@ -335,9 +336,14 @@ extension GitClient {
     }
 
     /// Whether a FETCH_HEAD description is a source alone (a remote's
-    /// HEAD), not a quoted ref with ` of <url>` or a local one.
+    /// HEAD), not a quoted ref: `branch 'a'`, `tag 'v1'`,
+    /// `remote-tracking branch 'origin/a'`, `commit '…'` or another ref
+    /// (`'refs/x' of <url>`), each maybe ` of <url>` — told apart by how
+    /// they begin, as a URL may end in anything.
     static func isBareSource(_ description: String) -> Bool {
-        !description.hasSuffix("'") && !description.hasSuffix(" (early part)")
+        let kinds = ["branch '", "tag '", "remote-tracking branch '", "commit '"]
+        if kinds.contains(where: description.hasPrefix) { return false }
+        return !(description.hasPrefix("'") && description.contains("' of "))
     }
 
     /// A FETCH_HEAD description with its URL as git's fetch writes it:
