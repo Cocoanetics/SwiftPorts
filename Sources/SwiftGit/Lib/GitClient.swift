@@ -107,12 +107,26 @@ public struct GitClient: ForgeKit.GitClient {
         depth: Int?,
         prune: Bool? = nil
     ) async throws {
+        try await fetch(remote: remote, refspecs: [refspec], depth: depth, prune: prune)
+    }
+
+    /// `git fetch <remote> [<refspec>…]`: every refspec in one fetch, as
+    /// git applies them, so a negative refspec excludes what the others
+    /// match. No refspecs fetch what the remote is configured to fetch,
+    /// or, with nothing configured (and for a URL or path), its `HEAD`
+    /// into `FETCH_HEAD`.
+    public func fetch(
+        remote: String,
+        refspecs: [String],
+        depth: Int?,
+        prune: Bool? = nil
+    ) async throws {
         let progress = shellProgressSink()
         let remote = try await resolveRemoteOperand(remote)
         try await withRepository { repository in
             let shouldPrune = try resolvedFetchPrune(
                 prune, remote: remote, repository: repository)
-            try repository.fetch(remote: remote, refspec: refspec, depth: depth,
+            try repository.fetch(remote: remote, refspecs: refspecs, depth: depth,
                                  prune: shouldPrune,
                                  credentials: credentials, progress: progress)
         }
@@ -123,17 +137,27 @@ public struct GitClient: ForgeKit.GitClient {
         refspec: String,
         prune: Bool? = nil
     ) async throws {
+        try await unshallow(remote: remote, refspecs: [refspec], prune: prune)
+    }
+
+    /// `git fetch --unshallow <remote> [<refspec>…]`, the refspecs applied
+    /// together as for ``fetch(remote:refspecs:depth:prune:)``.
+    public func unshallow(
+        remote: String,
+        refspecs: [String],
+        prune: Bool? = nil
+    ) async throws {
         let progress = shellProgressSink()
         let remote = try await resolveRemoteOperand(remote)
         try await withRepository { repository in
             let shouldPrune = try resolvedFetchPrune(
                 prune, remote: remote, repository: repository)
             try repository.unshallow(
-                remote: remote, refspec: refspec,
+                remote: remote, refspecs: refspecs,
                 credentials: credentials, progress: progress)
             if shouldPrune {
                 try repository.fetch(
-                    remote: remote, refspec: refspec, prune: true,
+                    remote: remote, refspecs: refspecs, prune: true,
                     credentials: credentials, progress: progress)
             }
         }
@@ -144,10 +168,21 @@ public struct GitClient: ForgeKit.GitClient {
     }
 
     public func push(remote: String, refspec: String, setUpstream: Bool) async throws {
+        try await push(remote: remote, refspecs: [refspec], setUpstream: setUpstream)
+    }
+
+    /// `git push <remote> [<refspec>…]`: one push for every refspec, git's
+    /// patterns, matching (`:`) and negative refspecs included. No
+    /// refspecs push the remote's `remote.<name>.push` refspecs.
+    ///
+    /// - Returns: The refspecs pushed, one per ref and fully qualified;
+    ///   empty when there was nothing to send.
+    @discardableResult
+    public func push(remote: String, refspecs: [String], setUpstream: Bool) async throws -> [String] {
         let progress = shellProgressSink()
         let remote = try await resolveRemoteOperand(remote)
-        try await withRepository {
-            try $0.push(remote: remote, refspec: refspec, setUpstream: setUpstream,
+        return try await withRepository {
+            try $0.push(remote: remote, refspecs: refspecs, setUpstream: setUpstream,
                         credentials: credentials, progress: progress)
         }
     }

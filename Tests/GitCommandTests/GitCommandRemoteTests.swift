@@ -189,6 +189,131 @@ struct GitCommandRemoteTests {
         }
     }
 
+    @Test("git push goes to branch.<name>.pushRemote, then remote.pushDefault")
+    func pushRemoteSelection() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let fork = tmp("GitRemoteFork")
+        try systemGit(["init", "-q", "--bare", fork.path], in: clone)
+        try systemGit(["remote", "add", "fork", fork.path], in: clone)
+        try systemGit(["config", "remote.pushDefault", "origin"], in: clone)
+        try systemGit(["config", "branch.main.pushRemote", "fork"], in: clone)
+        try commitFile("two.txt", in: clone)
+        try await git(["push", "-q"], in: clone)
+        let two = try systemGit(["rev-parse", "HEAD"], in: clone)
+        #expect(try systemGit(["rev-parse", "main"], in: fork) == two)
+        #expect(try systemGit(["rev-parse", "main"], in: remote) != two)
+
+        // remote.pushDefault beats the branch's own remote.
+        try systemGit(["config", "--unset", "branch.main.pushRemote"], in: clone)
+        try systemGit(["config", "remote.pushDefault", "fork"], in: clone)
+        try commitFile("three.txt", in: clone)
+        try await git(["push", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "main"], in: fork)
+                == systemGit(["rev-parse", "HEAD"], in: clone))
+        #expect(try systemGit(["rev-parse", "main"], in: remote) != two)
+    }
+
+    @Test("remote.<name>.push decides what a bare git push pushes")
+    func pushConfiguredRefspecs() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        try systemGit(["config", "remote.origin.push", "refs/heads/main:refs/heads/from-config"],
+                      in: clone)
+        try systemGit(["config", "push.default", "nothing"], in: clone)
+        let output = try await git(["push"], in: clone)
+        #expect(try systemGit(["rev-parse", "from-config"], in: remote)
+                == systemGit(["rev-parse", "HEAD"], in: clone))
+        #expect(output.stderr.hasSuffix(" * [new branch]      main -> from-config\n"))
+    }
+
+    @Test("push.default=matching pushes the branches both sides have")
+    func pushMatching() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        try systemGit(["push", "-q", "origin", "main:dev"], in: clone)
+        try systemGit(["branch", "dev", "origin/dev"], in: clone)
+        try systemGit(["branch", "local-only"], in: clone)
+        try commitFile("two.txt", in: clone)
+        try systemGit(["branch", "-f", "dev", "HEAD"], in: clone)
+        try systemGit(["config", "push.default", "matching"], in: clone)
+        try await git(["push", "-q"], in: clone)
+        let head = try systemGit(["rev-parse", "HEAD"], in: clone)
+        #expect(try systemGit(["rev-parse", "main"], in: remote) == head)
+        #expect(try systemGit(["rev-parse", "dev"], in: remote) == head)
+        #expect(throws: Failure.self) {
+            try systemGit(["rev-parse", "--verify", "local-only"], in: remote)
+        }
+    }
+
+    @Test("push.default=upstream refuses a remote that isn't the upstream")
+    func pushUpstreamModeElsewhere() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherBare")
+        try systemGit(["init", "-q", "--bare", other.path], in: clone)
+        try systemGit(["remote", "add", "other", other.path], in: clone)
+        try systemGit(["config", "push.default", "upstream"], in: clone)
+        do {
+            try await git(["push", "other"], in: clone)
+            Issue.record("expected git push other to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == [
+                "fatal: You are pushing to remote 'other', which is not the upstream of",
+                "your current branch 'main', without telling me what to push",
+                "to update which remote branch."
+            ])
+            #expect(error.exitCode == 128)
+        }
+    }
+
+    @Test("push.autoSetupRemote records the upstream with current, and on another remote")
+    func pushAutoSetupRemote() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["config", "push.autoSetupRemote", "true"], in: clone)
+        try systemGit(["config", "push.default", "current"], in: clone)
+        try systemGit(["switch", "-q", "-c", "cur"], in: clone)
+        let current = try await git(["push"], in: clone)
+        #expect(current.stdout == "branch 'cur' set up to track 'origin/cur'.\n")
+
+        let fork = tmp("GitRemoteFork")
+        try systemGit(["init", "-q", "--bare", fork.path], in: clone)
+        try systemGit(["remote", "add", "fork", fork.path], in: clone)
+        try systemGit(["config", "--unset", "push.default"], in: clone)
+        try systemGit(["config", "remote.pushDefault", "fork"], in: clone)
+        try systemGit(["switch", "-q", "-c", "tri"], in: clone)
+        let triangular = try await git(["push"], in: clone)
+        #expect(triangular.stdout == "branch 'tri' set up to track 'fork/tri'.\n")
+        #expect(try systemGit(["config", "branch.tri.remote"], in: clone) == "fork")
+    }
+
+    @Test("git push -u reports each branch it pushed")
+    func pushSetUpstreamReportsPushedBranches() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["branch", "dev"], in: clone)
+        try systemGit(["branch", "wip"], in: clone)
+        let output = try await git(
+            ["push", "-u", "origin", "refs/heads/*:refs/heads/*", "^refs/heads/wip"], in: clone)
+        #expect(output.stdout == """
+            branch 'dev' set up to track 'origin/dev'.
+            branch 'main' set up to track 'origin/main'.
+
+            """)
+        #expect(throws: Failure.self) { try systemGit(["config", "branch.wip.remote"], in: clone) }
+    }
+
+    @Test("with one remote, not named origin, git push and fetch default to it")
+    func soleRemoteIsTheDefault() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        try systemGit(["remote", "rename", "origin", "upstream"], in: clone)
+        try systemGit(["switch", "-q", "-c", "solo"], in: clone)
+        try systemGit(["config", "push.default", "current"], in: clone)
+        try await git(["push", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "solo"], in: remote)
+                == systemGit(["rev-parse", "HEAD"], in: clone))
+
+        try systemGit(["update-ref", "-d", "refs/remotes/upstream/main"], in: clone)
+        try await git(["fetch", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "refs/remotes/upstream/main"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+    }
+
     @Test("git fetch and push take a URL or path for <repository>")
     func fetchAndPushAPath() async throws {
         let (remote, clone) = try makeRemoteAndClone()
@@ -256,6 +381,33 @@ struct GitCommandRemoteTests {
         let main = try systemGit(["rev-parse", "main"], in: clone)
         #expect(try systemGit(["rev-parse", "refs/remotes/origin/main"], in: clone) == main)
         #expect(try systemGit(["rev-parse", "refs/remotes/mirror/main"], in: clone) == main)
+    }
+
+    @Test("git fetch keeps out what a configured negative refspec excludes")
+    func fetchNegativeRefspec() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["push", "-q", "origin", "main:dev", "main:private"], in: clone)
+        for ref in ["dev", "private"] {
+            try systemGit(["update-ref", "-d", "refs/remotes/origin/\(ref)"], in: clone)
+        }
+        try systemGit(["config", "--add", "remote.origin.fetch", "^refs/heads/private"], in: clone)
+        try await git(["fetch", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "refs/remotes/origin/dev"], in: clone)
+                == systemGit(["rev-parse", "main"], in: clone))
+        #expect(throws: Failure.self) {
+            try systemGit(["rev-parse", "--verify", "refs/remotes/origin/private"], in: clone)
+        }
+    }
+
+    @Test("git fetch <remote> without a fetch refspec fetches only its HEAD")
+    func fetchWithoutMapping() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        try systemGit(["remote", "add", "nomap", remote.path], in: clone)
+        try systemGit(["config", "--unset-all", "remote.nomap.fetch"], in: clone)
+        try await git(["fetch", "-q", "nomap"], in: clone)
+        #expect(try systemGit(["for-each-ref", "refs/remotes/nomap"], in: clone).isEmpty)
+        #expect(try systemGit(["rev-parse", "FETCH_HEAD"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
     }
 
     // MARK: -q

@@ -7,10 +7,13 @@ struct Fetch: AsyncParsableCommand {
         discussion: """
             `git fetch [<repository> [<refspec>…]]`, as in git: the repository
             is a remote's name, a URL or a path. Without one it fetches from
-            the current branch's upstream remote (else `origin`); without a
-            refspec, every refspec configured for the remote (a URL's
-            `HEAD`). `--remote <name>` names the remote instead, leaving
-            every argument a refspec.
+            the current branch's remote, else the only remote configured,
+            else `origin`. The refspecs are fetched together, so a negative
+            `^<ref>` excludes what the others match; without any, it fetches
+            what `remote.<name>.fetch` says, and with nothing configured
+            (and for a URL or path) the remote's `HEAD`, into `FETCH_HEAD`.
+            `--remote <name>` names the remote instead, leaving every
+            argument a refspec.
             """
     )
 
@@ -49,32 +52,23 @@ struct Fetch: AsyncParsableCommand {
 
     func run() async throws {
         let client = CommandContext.gitClient(quiet: quiet)
-        var (remoteName, refspecs) = RemoteArguments.split(arguments, remote: remote)
+        let (remoteName, refspecs) = RemoteArguments.split(arguments, remote: remote)
         let name: String
         if let remoteName {
             name = remoteName
-        } else if let branch = try await client.currentBranch(),
-                  let upstream = try await client.configGet("branch.\(branch).remote") {
-            name = upstream
         } else {
-            name = "origin"
-        }
-        if refspecs.isEmpty {
-            if (try? await client.remoteExists(named: name)) == true {
-                let key = "remote.\(name).fetch"
-                let configured = try await client.configList().filter { $0.name == key }.map(\.value)
-                refspecs = configured.isEmpty ? ["+refs/heads/*:refs/remotes/\(name)/*"] : configured
-            } else {
-                // A URL or path: its HEAD, into FETCH_HEAD.
-                refspecs = ["HEAD"]
+            var branchRemote: String?
+            if let branch = try await client.currentBranch() {
+                branchRemote = try await client.configGet("branch.\(branch).remote")
             }
+            name = try await RemoteArguments.defaultRemote(client: client, branchRemote: branchRemote)
         }
-        for refspec in refspecs {
-            if unshallow {
-                try await client.unshallow(remote: name, refspec: refspec, prune: prune)
-            } else {
-                try await client.fetch(remote: name, refspec: refspec, depth: depth, prune: prune)
-            }
+        // One fetch for every refspec, as git applies them; with none,
+        // the remote's configured refspecs (or its HEAD).
+        if unshallow {
+            try await client.unshallow(remote: name, refspecs: refspecs, prune: prune)
+        } else {
+            try await client.fetch(remote: name, refspecs: refspecs, depth: depth, prune: prune)
         }
         // Progress and per-ref summaries are written by GitClient's
         // libgit2 callbacks through the active shell stderr.

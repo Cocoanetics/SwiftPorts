@@ -8,10 +8,14 @@ struct Push: AsyncParsableCommand {
         abstract: "Update remote refs along with associated objects.",
         discussion: """
             `git push [<repository> [<refspec>…]]`, as in git: the repository
-            is a remote's name, a URL or a path. Without a refspec it pushes
-            the current branch as `push.default` says (`simple` unless
-            configured). `--remote <name>` names the remote instead, leaving
-            every argument a refspec.
+            is a remote's name, a URL or a path, and the refspecs go out in
+            one push, patterns, `:` (matching branches) and negative `^<ref>`
+            included. Without a repository it pushes to the current branch's
+            `branch.<name>.pushRemote`, else `remote.pushDefault`, else the
+            branch's remote. Without a refspec it pushes what
+            `remote.<name>.push` says, else what `push.default` (`simple`
+            unless configured) says. `--remote <name>` names the remote
+            instead, leaving every argument a refspec.
             """
     )
 
@@ -32,23 +36,18 @@ struct Push: AsyncParsableCommand {
 
     func run() async throws {
         let client = CommandContext.gitClient(quiet: quiet)
-        var (remoteName, refspecs) = RemoteArguments.split(arguments, remote: remote)
-        var upstream = setUpstream
-        if refspecs.isEmpty {
-            let plan = try await CurrentBranchPush.plan(client: client, remote: remoteName)
-            remoteName = plan.remote
-            refspecs = [plan.refspec]
-            upstream = upstream || plan.setUpstream
-        }
-        let target = remoteName ?? "origin"
-        for refspec in refspecs {
-            try await client.push(remote: target, refspec: refspec, setUpstream: upstream)
-        }
+        let (remoteName, refspecs) = RemoteArguments.split(arguments, remote: remote)
+        let plan = refspecs.isEmpty
+            ? try await DefaultPush.plan(client: client, remote: remoteName)
+            : DefaultPush.Plan(remote: remoteName ?? "origin", refspecs: refspecs, setUpstream: false)
+        let upstream = setUpstream || plan.setUpstream
+        let pushed = try await client.push(
+            remote: plan.remote, refspecs: plan.refspecs, setUpstream: upstream)
         // Like git, confirm each upstream recorded for a configured remote.
-        guard upstream, !quiet, (try? await client.remoteExists(named: target)) == true else { return }
-        for refspec in refspecs {
+        guard upstream, !quiet, (try? await client.remoteExists(named: plan.remote)) == true else { return }
+        for refspec in pushed {
             guard let (local, remoteBranch) = Self.branchNames(in: refspec) else { continue }
-            Shell.print("branch '\(local)' set up to track '\(target)/\(remoteBranch)'.")
+            Shell.print("branch '\(local)' set up to track '\(plan.remote)/\(remoteBranch)'.")
         }
     }
 
@@ -69,80 +68,158 @@ struct Push: AsyncParsableCommand {
     }
 }
 
-/// What `git push [<repository>]` pushes when no refspec is given:
-/// the current branch, as `push.default` (`simple` unless configured)
-/// and `push.autoSetupRemote` say, with git's refusals.
-enum CurrentBranchPush {
-    static func plan(
-        client: SwiftGit.GitClient, remote explicit: String?
-    ) async throws -> (remote: String, refspec: String, setUpstream: Bool) {
-        guard let branch = try await client.currentBranch() else {
-            throw CLIError.stderr([
-                "fatal: You are not currently on a branch.",
-                "To push the history leading to the current (detached HEAD)",
-                "state now, use",
-                "",
-                "    git push \(explicit ?? "origin") HEAD:<name-of-remote-branch>",
-                ""
-            ], exitCode: 128)
-        }
-        let upstreamRemote = try await client.configGet("branch.\(branch).remote")
-        let upstreamBranch = try await client.configGet("branch.\(branch).merge")
-            .map { $0.hasPrefix("refs/heads/") ? String($0.dropFirst("refs/heads/".count)) : $0 }
-        let pullRemote = upstreamRemote ?? "origin"
-        var target = explicit
-        if target == nil { target = try await client.configGet("remote.pushDefault") }
-        let remote = target ?? pullRemote
-        let mode = try await client.configGet("push.default") ?? "simple"
+/// What `git push [<repository>]` pushes without a refspec, decided the
+/// way git decides it: the remote is the one named, else the current
+/// branch's `branch.<name>.pushRemote`, else `remote.pushDefault`, else
+/// the branch's own remote. The refspecs are that remote's
+/// `remote.<name>.push`, else what `push.default` (`simple` unless
+/// configured) and `push.autoSetupRemote` make of the current branch,
+/// with git's refusals.
+enum DefaultPush {
+    struct Plan {
+        let remote: String
+        /// What to push; empty for the remote's `remote.<name>.push`.
+        let refspecs: [String]
+        /// Whether `push.autoSetupRemote` asks for `-u`.
+        let setUpstream: Bool
+    }
 
-        if mode == "nothing" {
+    static func plan(client: SwiftGit.GitClient, remote explicit: String?) async throws -> Plan {
+        let branch = try await client.currentBranch()
+        func branchConfig(_ key: String) async throws -> String? {
+            guard let branch else { return nil }
+            return try await client.configGet("branch.\(branch).\(key)")
+        }
+        let upstreamRemote = try await branchConfig("remote")
+        let upstreamMerge = try await branchConfig("merge")
+        let fetchRemote = try await RemoteArguments.defaultRemote(
+            client: client, branchRemote: upstreamRemote)
+        var remote = explicit
+        if remote == nil { remote = try await branchConfig("pushRemote") }
+        if remote == nil { remote = try await client.configGet("remote.pushDefault") }
+        let target = remote ?? fetchRemote
+
+        if try await client.configGet("remote.\(target).push") != nil {
+            return Plan(remote: target, refspecs: [], setUpstream: false)
+        }
+        let configuredMode = try await client.configGet("push.default")
+        let mode = configuredMode ?? "simple"
+        switch mode {
+        case "matching":
+            return Plan(remote: target, refspecs: [":"], setUpstream: false)
+        case "nothing":
             throw CLIError.stderr(
                 "fatal: You didn't specify any refspecs to push, and push.default is \"nothing\".",
                 exitCode: 128)
-        }
-        // `current` — and `simple` pushing somewhere other than where the
-        // branch pulls from, a triangular workflow — pushes the branch
-        // under its own name.
-        if mode == "current" || (mode == "simple" && remote != pullRemote) {
-            return (remote, branch, false)
-        }
-        guard upstreamRemote != nil, let upstreamBranch else {
-            let auto = try await client.configGet("push.autoSetupRemote")?.lowercased()
-            if ["true", "yes", "on", "1"].contains(auto ?? "") {
-                return (remote, branch, true)
-            }
+        case "simple", "upstream", "tracking", "current":
+            break
+        default:
             throw CLIError.stderr([
-                "fatal: The current branch \(branch) has no upstream branch.",
-                "To push the current branch and set the remote as upstream, use",
-                "",
-                "    git push --set-upstream \(remote) \(branch)",
-                "",
-                "To have this happen automatically for branches without a tracking",
-                "upstream, see 'push.autoSetupRemote' in 'git help config'.",
-                ""
+                "error: malformed value for push.default: \(mode)",
+                "error: must be one of nothing, matching, simple, upstream or current",
+                "fatal: bad config variable 'push.default'"
             ], exitCode: 128)
         }
-        if mode == "simple", upstreamBranch != branch {
-            throw CLIError.stderr([
-                "fatal: The upstream branch of your current branch does not match",
-                "the name of your current branch.  To push to the upstream branch",
-                "on the remote, use",
+        guard let branch else { throw detachedHead(remote: target) }
+
+        let autoSetup = ["true", "yes", "on", "1"].contains(
+            try await client.configGet("push.autoSetupRemote")?.lowercased() ?? "")
+        let local = "refs/heads/\(branch)"
+        // git's get_upstream_ref: the branch's upstream, else, when
+        // push.autoSetupRemote is about to record one, the branch itself.
+        func upstreamRef() throws -> String {
+            if upstreamMerge == nil, autoSetup { return local }
+            guard let upstreamMerge, upstreamRemote != nil else {
+                throw noUpstream(branch: branch, remote: target, autoSetup: autoSetup)
+            }
+            return upstreamMerge
+        }
+        var destination = local
+        switch mode {
+        case "simple" where target == fetchRemote:
+            let upstream = try upstreamRef()
+            if upstream != local {
+                let autoSetupMerge = try await client.configGet("branch.autoSetupMerge")
+                throw upstreamNameMismatch(
+                    remote: target, upstream: upstream,
+                    pushDefaultAdvice: configuredMode == nil,
+                    autoSetupMergeAdvice: autoSetupMerge != "simple")
+            }
+        case "upstream", "tracking":
+            guard target == fetchRemote else {
+                throw CLIError.stderr([
+                    "fatal: You are pushing to remote '\(target)', which is not the upstream of",
+                    "your current branch '\(branch)', without telling me what to push",
+                    "to update which remote branch."
+                ], exitCode: 128)
+            }
+            destination = try upstreamRef()
+        default:
+            // `current`, and `simple` pushing somewhere other than where
+            // the branch pulls from (a triangular workflow): the branch
+            // under its own name.
+            break
+        }
+        return Plan(remote: target, refspecs: ["\(local):\(destination)"],
+                    setUpstream: autoSetup && upstreamMerge == nil)
+    }
+
+    private static func detachedHead(remote: String) -> CLIError {
+        CLIError.stderr([
+            "fatal: You are not currently on a branch.",
+            "To push the history leading to the current (detached HEAD)",
+            "state now, use",
+            "",
+            "    git push \(remote) HEAD:<name-of-remote-branch>",
+            ""
+        ], exitCode: 128)
+    }
+
+    private static func noUpstream(branch: String, remote: String, autoSetup: Bool) -> CLIError {
+        var lines = [
+            "fatal: The current branch \(branch) has no upstream branch.",
+            "To push the current branch and set the remote as upstream, use",
+            "",
+            "    git push --set-upstream \(remote) \(branch)"
+        ]
+        if !autoSetup {
+            lines += [
                 "",
-                "    git push \(remote) HEAD:\(upstreamBranch)",
-                "",
-                "To push to the branch of the same name on the remote, use",
-                "",
-                "    git push \(remote) HEAD",
-                "",
-                "To choose either option permanently, see push.default in 'git help config'.",
+                "To have this happen automatically for branches without a tracking",
+                "upstream, see 'push.autoSetupRemote' in 'git help config'."
+            ]
+        }
+        return CLIError.stderr(lines + [""], exitCode: 128)
+    }
+
+    private static func upstreamNameMismatch(
+        remote: String, upstream: String, pushDefaultAdvice: Bool, autoSetupMergeAdvice: Bool
+    ) -> CLIError {
+        let short = upstream.hasPrefix("refs/heads/")
+            ? String(upstream.dropFirst("refs/heads/".count)) : upstream
+        var lines = [
+            "fatal: The upstream branch of your current branch does not match",
+            "the name of your current branch.  To push to the upstream branch",
+            "on the remote, use",
+            "",
+            "    git push \(remote) HEAD:\(short)",
+            "",
+            "To push to the branch of the same name on the remote, use",
+            "",
+            "    git push \(remote) HEAD"
+        ]
+        if pushDefaultAdvice {
+            lines += ["", "To choose either option permanently, see push.default in 'git help config'."]
+        }
+        if autoSetupMergeAdvice {
+            lines += [
                 "",
                 "To avoid automatically configuring an upstream branch when its name",
                 "won't match the local branch, see option 'simple' of branch.autoSetupMerge",
-                "in 'git help config'.",
-                ""
-            ], exitCode: 128)
+                "in 'git help config'."
+            ]
         }
-        return (remote, "\(branch):\(upstreamBranch)", false)
+        return CLIError.stderr(lines + [""], exitCode: 128)
     }
 }
 
@@ -156,5 +233,14 @@ enum RemoteArguments {
         if let remote { return (remote, arguments) }
         guard let first = arguments.first else { return (nil, []) }
         return (first, Array(arguments.dropFirst()))
+    }
+
+    /// The remote git takes for a branch when none is named
+    /// (`remote_for_branch`): the branch's own remote, else the only
+    /// remote configured, else `origin`.
+    static func defaultRemote(client: SwiftGit.GitClient, branchRemote: String?) async throws -> String {
+        if let branchRemote { return branchRemote }
+        let remotes = try await client.remoteList()
+        return remotes.count == 1 ? remotes[0] : "origin"
     }
 }

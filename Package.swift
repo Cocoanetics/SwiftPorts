@@ -420,9 +420,11 @@ let package = Package(
         // the hook GitKitSSH (issue #113) implements over SSHKit. GitKit 2.3.0
         // takes remotes as strings and fetches from / pushes to a URL or
         // path, which `git clone`, `remote add|set-url`, `fetch` and `push`
-        // rely on.
+        // rely on. GitKit 2.4.0 fetches and pushes a set of refspecs at
+        // once (negative, pattern and matching refspecs), which `git fetch`
+        // and `git push` need to apply them as git does.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.3.0",
+                 from: "2.4.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
