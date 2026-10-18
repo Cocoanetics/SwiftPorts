@@ -141,9 +141,13 @@ extension GitClient {
     /// repository itself (`.`) not at all, as git names them.
     public func pullMergeMessage(for head: FetchHeadEntry, repository: String? = nil) async throws -> String {
         var description = head.description
-        if let repository, !(try await remoteList()).contains(repository),
-           let of = description.range(of: "' of ") {
-            description = description[..<of.upperBound] + repository
+        if let repository, !(try await remoteList()).contains(repository) {
+            // `branch 'x' of <url>`, or for a remote's HEAD just `<url>`.
+            if let of = description.range(of: "' of ") {
+                description = description[..<of.upperBound] + repository
+            } else if !description.hasPrefix("branch '"), !description.hasPrefix("tag '") {
+                description = repository
+            }
         }
         let subject = "Merge " + Self.describingURLAsGit(description)
         let branch = try await currentBranch() ?? "HEAD"

@@ -1335,6 +1335,35 @@ struct GitCommandRemoteTests {
         #expect(try subject == systemGit(["log", "-1", "--format=%s"], in: theirs))
     }
 
+    @Test("an empty first fetch refspec merges HEAD beside the other mappings")
+    func pullEmptyFirstRefspec() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try systemGit(["config", "--unset-all", "remote.origin.fetch"], in: clone)
+        try systemGit(["config", "remote.origin.fetch", ""], in: clone)
+        try systemGit(["config", "--add", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], in: clone)
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        try await git(["pull", "-q", "--no-rebase", "origin"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+    }
+
+    @Test("a remote's HEAD pulled from a path is named as typed")
+    func pullPathHeadMessage() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try commitFile("mine.txt", in: clone)
+        let typed = "../\(remote.lastPathComponent)"
+        try await git(["pull", "-q", "--no-rebase", typed, "HEAD"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%s"], in: clone) == "Merge \(typed)")
+    }
+
     @Test("a branch whose remote is `.` merges its upstream without a source")
     func pullFromDotRemote() async throws {
         let (_, clone) = try makeRemoteAndClone()
