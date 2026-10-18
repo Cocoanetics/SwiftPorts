@@ -402,13 +402,16 @@ struct GitCommandRemoteTests {
             (["mian"], "src refspec mian does not match any"),
             (["main:refs/heads/main", "dev:refs/heads/main"],
              "dst ref refs/heads/main receives from more than one src"),
-            ([":nope"], "unable to delete 'nope': remote ref does not exist")
+            ([":nope"], "unable to delete 'nope': remote ref does not exist"),
+            // Every refusal, as git lists them.
+            (["mian", "mian2"], "src refspec mian does not match any\nerror: src refspec mian2 does not match any")
         ] {
             do {
                 try await git(["push", "origin"] + refspecs, in: clone)
                 Issue.record("expected git push \(refspecs) to fail")
             } catch let error as CLIError {
-                #expect(error.lines == ["error: \(reason)", "error: failed to push some refs to '\(url)'"])
+                #expect(error.lines == "error: \(reason)".components(separatedBy: "\n")
+                        + ["error: failed to push some refs to '\(url)'"])
             }
         }
     }
