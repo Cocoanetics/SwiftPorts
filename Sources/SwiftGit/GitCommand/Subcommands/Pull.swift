@@ -215,7 +215,8 @@ struct Pull: AsyncParsableCommand {
         var mergeMessage = message
         if mergeMessage == nil {
             // The repository as typed, or as `branch.<name>.remote` has it.
-            mergeMessage = try await client.pullMergeMessage(for: heads, repository: fetchFrom)
+            mergeMessage = try await client.pullMergeMessage(
+                for: Self.messageHeads(heads, current: current, client: client), repository: fetchFrom)
         }
         if heads.count > 1 {
             // git's merge of `FETCH_HEAD`: the heads named by their
@@ -242,6 +243,28 @@ struct Pull: AsyncParsableCommand {
         } else if case .conflicts = outcome {
             try Merge.printOutcome(outcome)
         }
+    }
+
+    /// The fetched heads git's merge message names (fmt-merge-msg's
+    /// `find_merge_parents`): those whose commit survives reducing HEAD
+    /// and all of them. One HEAD already has, or another head has, drops
+    /// out; one that is HEAD, or the same commit as another, stays.
+    static func messageHeads(
+        _ heads: [SwiftGit.GitClient.FetchHeadEntry], current: String?, client: SwiftGit.GitClient
+    ) async throws -> [SwiftGit.GitClient.FetchHeadEntry] {
+        guard heads.count > 1 else { return heads }
+        func contains(_ commit: String, _ ancestor: String) async -> Bool {
+            guard commit != ancestor else { return false }
+            return (try? await client.mergeBase(commit, ancestor)) == ancestor
+        }
+        var kept: [SwiftGit.GitClient.FetchHeadEntry] = []
+        for head in heads {
+            if let current, await contains(current, head.oid) { continue }
+            var reachable = false
+            for other in heads where !reachable { reachable = await contains(other.oid, head.oid) }
+            if !reachable { kept.append(head) }
+        }
+        return kept
     }
 
     /// `pull.ff`: a boolean (`true` is `--ff`, `false` `--no-ff`) or

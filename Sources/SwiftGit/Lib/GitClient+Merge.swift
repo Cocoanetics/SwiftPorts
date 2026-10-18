@@ -177,7 +177,10 @@ extension GitClient {
         var descriptions = heads.map(\.description)
         if let repository, !(try await remoteList()).contains(repository) {
             descriptions = descriptions.map { description in
-                guard let of = description.range(of: "' of ") else { return description }
+                // A remote's HEAD is described by the URL alone.
+                guard let of = description.range(of: "' of ") else {
+                    return Self.isBareSource(description) ? repository : description
+                }
                 return String(description[..<of.upperBound]) + repository
             }
         }
@@ -230,6 +233,8 @@ extension GitClient {
     static func mergeTitle(_ descriptions: [String]) -> String {
         struct Group {
             let source: String?
+            /// Whether the source's own HEAD is among the heads.
+            var head = false
             var branches: [String] = [], remoteBranches: [String] = [], tags: [String] = [], others: [String] = []
         }
         var groups: [Group] = []
@@ -239,9 +244,14 @@ extension GitClient {
             if let of = description.range(of: "' of ") {
                 line = description[..<description.index(after: of.lowerBound)]
                 source = String(description[of.upperBound...])
-            } else if !description.hasSuffix("'") && !description.hasSuffix(" (early part)") {
-                // A remote's HEAD: the description is the URL alone.
-                groups.append(Group(source: description))
+            } else if isBareSource(description) {
+                // A remote's HEAD: the description is the URL alone; it
+                // leads its source's group as `HEAD`, or names it alone.
+                if let index = groups.firstIndex(where: { $0.source == description }) {
+                    groups[index].head = true
+                } else {
+                    groups.append(Group(source: description, head: true))
+                }
                 continue
             }
             // A commit named by itself has a group of its own.
@@ -271,11 +281,20 @@ extension GitClient {
                          joined("remote-tracking branch", "remote-tracking branches", group.remoteBranches),
                          joined("tag", "tags", group.tags)].compactMap { $0 }
             kinds += group.others
-            let text = kinds.joined(separator: ", ")
-            guard let source = group.source else { return text }
-            return text.isEmpty ? source : text + " of " + source
+            guard let source = group.source else { return kinds.joined(separator: ", ") }
+            if group.head {
+                if kinds.isEmpty { return source }
+                kinds.insert("HEAD", at: 0)
+            }
+            return kinds.joined(separator: ", ") + " of " + source
         }
         return "Merge " + parts.joined(separator: "; ")
+    }
+
+    /// Whether a FETCH_HEAD description is a source alone (a remote's
+    /// HEAD), not a quoted ref with ` of <url>` or a local one.
+    static func isBareSource(_ description: String) -> Bool {
+        !description.hasSuffix("'") && !description.hasSuffix(" (early part)")
     }
 
     /// A FETCH_HEAD description with its URL as git's fetch writes it:

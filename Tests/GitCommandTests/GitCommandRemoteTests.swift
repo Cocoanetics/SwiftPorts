@@ -1467,6 +1467,34 @@ struct GitCommandRemoteTests {
         #expect(try systemGit(["log", "-1", "--format=%s"], in: clone).hasPrefix("Merge branches 'a' and 'b' of "))
     }
 
+    @Test("git pull of several heads names those git's message names")
+    func pullOctopusMessage() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        let remote = try systemGit(["remote", "get-url", "origin"], in: clone)
+        // `a1` is `a` again; `a2` is a commit past `a`; the remote's HEAD is `b`.
+        try systemGit(["push", "-q", "origin", "a:a1"], in: clone)
+        try systemGit(["switch", "-q", "a"], in: clone)
+        try commitFile("a2.txt", in: clone)
+        try systemGit(["push", "-q", "origin", "a:a2"], in: clone)
+        try systemGit(["reset", "-q", "--hard", "HEAD~1"], in: clone)
+        try systemGit(["switch", "-q", "main"], in: clone)
+        try systemGit(["symbolic-ref", "HEAD", "refs/heads/b"], in: URL(fileURLWithPath: remote))
+        let start = try systemGit(["rev-parse", "HEAD"], in: clone)
+        let cases: [([String], String)] = [
+            // `a` is in `a2`'s history, so only `a2` is named.
+            (["a", "a2"], "Merge branch 'a2' of"),
+            // The same commit twice is named twice.
+            (["a", "a1", "b"], "Merge branches 'a', 'a1' and 'b' of"),
+            // The remote's HEAD leads, as `HEAD`.
+            (["a", "HEAD"], "Merge HEAD, branch 'a' of"),
+        ]
+        for (refs, subject) in cases {
+            try systemGit(["reset", "-q", "--hard", start], in: clone)
+            try await expectLikeGit(["pull", "-q", "--no-rebase", "origin"] + refs, in: clone)
+            #expect(try systemGit(["log", "-1", "--format=%s"], in: clone) == subject + " " + remote, "\(refs)")
+        }
+    }
+
     @Test("git pull of several heads refuses as git does: rebasing, --ff-only, an unconfigured pull")
     func pullOctopusRefusals() async throws {
         let clone = try makeOctopusRemoteAndClone()
