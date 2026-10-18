@@ -48,7 +48,7 @@ struct Fetch: AsyncParsableCommand {
 
     @Flag(name: [.customShort("t"), .long],
           inversion: .prefixedNo,
-          help: "Fetch all tags as well (or, with --no-tags, none).")
+          help: "Fetch all tags as well (or, with --no-tags or -n, none).")
     var tags: Bool?
 
     @Flag(name: [.customShort("q"), .customLong("quiet")],

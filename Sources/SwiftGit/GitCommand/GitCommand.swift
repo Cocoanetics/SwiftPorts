@@ -63,6 +63,8 @@ public struct GitCommand: AsyncParsableCommand {
     ///   means `always`, and only attaches the value with `=`.
     /// - `-U<n>` becomes `-U <n>` for `diff`.
     /// - `-<n>` becomes `-n <n>` for `log`.
+    /// - `-n` becomes `--no-tags` for `fetch`, git's short spelling,
+    ///   which ArgumentParser can't give an inverted flag.
     /// - For `push`, a bare `--force-with-lease` and
     ///   `--no-force-with-lease` (and an empty `--force-with-lease=`,
     ///   which ArgumentParser reads as no value) become values of the one
@@ -102,6 +104,9 @@ public struct GitCommand: AsyncParsableCommand {
                 out.append(String(arg.dropFirst()))
             } else if !afterDoubleDash, subcommand == "push", arg == "--force-with-lease" {
                 out.append("--force-with-lease=\(Push.leaseAll)")
+            } else if !afterDoubleDash, subcommand == "fetch", arg == "-n" {
+                // git fetch's short --no-tags.
+                out.append("--no-tags")
             } else if !afterDoubleDash, subcommand == "push", arg == "--force-with-lease=" {
                 out.append("--force-with-lease=\(Push.leaseEmpty)")
             } else if !afterDoubleDash, subcommand == "push", arg == "--no-force-with-lease" {

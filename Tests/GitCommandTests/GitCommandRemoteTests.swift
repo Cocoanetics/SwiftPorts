@@ -941,6 +941,14 @@ struct GitCommandRemoteTests {
         let (remote, clone) = try makeRemoteAndClone()
         _ = try diverge(remote: remote, clone: clone)
         let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        // A SHA-256 length is no object ID in this (SHA-1) repository.
+        do {
+            try await git(["push", "--force-with-lease=main:\(String(repeating: "1", count: 64))", "origin", "main"],
+                          in: clone)
+            Issue.record("expected a usage error")
+        } catch let error as CLIError {
+            #expect(error.exitCode == 129)
+        }
         for expect in [String(repeating: "1", count: 40), String(repeating: "0", count: 40)] {
             do {
                 try await git(["push", "-q", "--force-with-lease=main:\(expect)", "origin", "main"], in: clone)
@@ -1098,6 +1106,10 @@ struct GitCommandRemoteTests {
         #expect(try tags(clone).isEmpty)
         try await git(["fetch", "-q", "--no-tags", "--tags"], in: clone)
         #expect(try tags(clone) == ["v2", "vside"])
+        // `-n` is git's short --no-tags.
+        try systemGit(["tag", "-d", "v2", "vside"], in: clone)
+        try await git(["fetch", "-q", "-t", "-n"], in: clone)
+        #expect(try tags(clone).isEmpty)
     }
 
     @Test("remote.<name>.tagOpt --tags fetches every tag, --no-tags none")

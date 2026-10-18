@@ -137,8 +137,9 @@ struct Push: AsyncParsableCommand {
                     continue
                 }
                 // A full object ID is taken as given, here or not (git's
-                // get_oid); all zeros expects the ref absent.
-                if [40, 64].contains(expect.count), expect.allSatisfy(\.isHexDigit) {
+                // get_oid); all zeros expects the ref absent. Object IDs
+                // are SHA-1 ones: the libgit2 GitKit builds has no SHA-256.
+                if expect.count == 40, expect.allSatisfy(\.isHexDigit) {
                     leases.leases.append(.init(
                         ref: ref,
                         expectation: expect.allSatisfy { $0 == "0" } ? .absent : .object(expect.lowercased())))
