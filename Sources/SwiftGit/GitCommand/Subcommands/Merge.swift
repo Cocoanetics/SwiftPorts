@@ -46,6 +46,11 @@ struct Merge: AsyncParsableCommand {
         let mode: FastForwardMode = noFF ? .never : (ffOnly ? .onlyFastForward : .auto)
         let client = CommandContext.gitClient()
 
+        // A merge needs a work tree.
+        if try await client.toplevel() == nil {
+            throw CLIError.stderr("fatal: this operation must be run in a work tree", exitCode: 128)
+        }
+
         // git won't start a merge while another waits to be concluded.
         if let gitDir = try await client.gitDir() {
             for (file, operation) in [("MERGE_HEAD", "merge"), ("CHERRY_PICK_HEAD", "cherry-pick")]
@@ -178,6 +183,11 @@ struct Merge: AsyncParsableCommand {
                     error("ERROR: \(path): Not merging symbolic link changes.")
                 case .submodule(let path):
                     error("ERROR: \(path): Not merging conflicting submodule changes.")
+                case .removed:
+                    break
+                case .addedWithDifferentModes(let path, let ours, let theirs):
+                    error("ERROR: File \(path) added identically in both branches,")
+                    error("ERROR: but permissions conflict \(ours)->\(theirs).")
                 case .notHandled(let path, let base, let ours, let theirs):
                     error("ERROR: \(path): Not handling case \(base) -> \(ours) -> \(theirs)")
                 }
@@ -191,8 +201,7 @@ struct Merge: AsyncParsableCommand {
             guard !quiet else { return }
             Shell.print("Merge made by the 'octopus' strategy.")
             Shell.print(summary)
-            for line in added { Shell.print(line) }
-            for line in deleted { Shell.print(line) }
+            for line in modeLines(added, deleted) { Shell.print(line) }
         case .conflicts:
             Shell.print("Automatic merge failed; fix conflicts and then commit the result.")
             throw CLIError.stderr([], exitCode: 1)
@@ -222,6 +231,15 @@ struct Merge: AsyncParsableCommand {
         }
     }
 
+    /// ` create mode …` and ` delete mode …` lines in path order, as
+    /// git's diffstat summary lists them.
+    static func modeLines(_ added: [String], _ deleted: [String]) -> [String] {
+        func path(_ line: String) -> String {
+            line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true).dropFirst(3).first.map(String.init) ?? line
+        }
+        return (added + deleted).sorted { Array(path($0).utf8).lexicographicallyPrecedes(Array(path($1).utf8)) }
+    }
+
     static func printOutcome(_ outcome: MergeOutcome) throws {
         switch outcome {
         case .alreadyUpToDate:
@@ -231,16 +249,14 @@ struct Merge: AsyncParsableCommand {
             Shell.print("Updating \(String(oldSHA.prefix(7)))..\(String(newSHA.prefix(7)))")
             Shell.print("Fast-forward")
             Shell.print(summary)
-            for line in added { Shell.print(line) }
-            for line in deleted { Shell.print(line) }
+            for line in modeLines(added, deleted) { Shell.print(line) }
 
         case .mergeCommit(_, let summary, let added, let deleted):
             // Modern git (≥ 2.34) defaults to the 'ort' strategy. We
             // print the same string so output matches what users see today.
             Shell.print("Merge made by the 'ort' strategy.")
             Shell.print(summary)
-            for line in added { Shell.print(line) }
-            for line in deleted { Shell.print(line) }
+            for line in modeLines(added, deleted) { Shell.print(line) }
 
         case .conflicts(let paths):
             // All three line groups go to stderr — that's where real git

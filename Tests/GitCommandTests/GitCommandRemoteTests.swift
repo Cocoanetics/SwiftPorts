@@ -1662,6 +1662,13 @@ struct GitCommandRemoteTests {
         try await expectLikeGit(["merge", "a", "d"], in: clone)
         try systemGit(["clean", "-qfd"], in: clone)
 
+        // A bare repository has no work tree to merge in.
+        let remote = URL(fileURLWithPath: try systemGit(["remote", "get-url", "origin"], in: clone))
+        let bareTheirs = try theirs(["merge", "a", "b"], in: remote)
+        let bareOurs = try await ours(["merge", "a", "b"], in: remote)
+        #expect(bareOurs.status == bareTheirs.status)
+        #expect(bareOurs.stderr == bareTheirs.stderr)
+
         // A merge waiting to be concluded stops another, and a pull, with
         // or without the advice (CI's macOS runner turns advice off
         // globally, so the clone says).
