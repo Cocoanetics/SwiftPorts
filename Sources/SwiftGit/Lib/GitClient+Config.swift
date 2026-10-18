@@ -108,6 +108,28 @@ extension GitClient {
         return (first.key, file, line)
     }
 
+    /// A quoted subsection as git reads it: `"orig\"in"` is `orig"in`,
+    /// a backslash taking the next character as it is.
+    private static func decodedSubsection(_ quoted: Substring) -> String {
+        var body = quoted.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))[...]
+        if body.hasPrefix("\"") { body = body.dropFirst() }
+        // The closing quote ends the header, whatever comes before it.
+        if body.hasSuffix("\"") { body = body.dropLast() }
+        var decoded = ""
+        var escaped = false
+        for character in body {
+            if escaped {
+                decoded.append(character)
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else {
+                decoded.append(character)
+            }
+        }
+        return decoded
+    }
+
     /// The line of `file` where `key` (`remote.origin.push`) is written
     /// without a value, counting from 1.
     private static func valuelessLine(of key: String, in file: URL) -> Int? {
@@ -128,7 +150,7 @@ extension GitClient {
                 let pieces = header.split(maxSplits: 1, whereSeparator: { $0 == " " || $0 == "\t" })
                 if pieces.count == 2 {
                     inSection = pieces[0].lowercased() == String(parts[0])
-                        && pieces[1].trimmingCharacters(in: CharacterSet(charactersIn: " \t\"")) == subsection
+                        && decodedSubsection(pieces[1]) == subsection
                 } else if let dot = header.firstIndex(of: ".") {
                     // The older `[remote.origin]`, which git reads with
                     // the subsection lowercased.
