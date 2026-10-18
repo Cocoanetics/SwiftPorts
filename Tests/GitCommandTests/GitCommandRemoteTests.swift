@@ -1400,6 +1400,8 @@ struct GitCommandRemoteTests {
             try await git(args, in: clone)
             #expect(try systemGit(["rev-parse", "HEAD"], in: clone) == tip, "\(args)")
         }
+        try await expectRefusal(["pull", "-q", "origin", "tag"], in: clone,
+                                stderr: "fatal: you need to specify a tag name\n", status: 1)
     }
 
     @Test("which upstreams fetch refspecs cover")

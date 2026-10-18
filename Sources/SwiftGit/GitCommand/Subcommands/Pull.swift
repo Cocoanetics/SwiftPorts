@@ -90,7 +90,7 @@ struct Pull: AsyncParsableCommand {
 
         // Fetch, as `git fetch [<repository> [<refspec>…]]` would.
         let repository = arguments.first
-        var refspecs = Self.normalizingTagRefspecs(Array(arguments.dropFirst()))
+        var refspecs = try Self.normalizingTagRefspecs(Array(arguments.dropFirst()))
         var branchRemote: String?
         if let branch { branchRemote = try await client.configGet("branch.\(branch).remote") }
         let remotes = try await client.remoteList()
@@ -247,12 +247,16 @@ struct Pull: AsyncParsableCommand {
     }
 
     /// git fetch's `tag <name>`, which is one refspec,
-    /// `refs/tags/<name>:refs/tags/<name>`.
-    static func normalizingTagRefspecs(_ arguments: [String]) -> [String] {
+    /// `refs/tags/<name>:refs/tags/<name>`; a `tag` without a name is
+    /// refused as git fetch refuses it.
+    static func normalizingTagRefspecs(_ arguments: [String]) throws -> [String] {
         var result: [String] = []
         var index = arguments.startIndex
         while index < arguments.endIndex {
-            if arguments[index] == "tag", index + 1 < arguments.endIndex {
+            if arguments[index] == "tag" {
+                guard index + 1 < arguments.endIndex else {
+                    throw CLIError.stderr("fatal: you need to specify a tag name", exitCode: 1)
+                }
                 let name = arguments[index + 1]
                 result.append("refs/tags/\(name):refs/tags/\(name)")
                 index += 2
