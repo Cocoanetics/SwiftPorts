@@ -77,10 +77,15 @@ struct Merge: AsyncParsableCommand {
             if (try? await client.resolveOID("HEAD")) == nil {
                 throw CLIError.stderr("fatal: Can merge only exactly one commit into empty head", exitCode: 128)
             }
-            var names: [String] = []
-            for head in heads.heads { names.append(try await client.mergeName(head)) }
+            // Each head's name, and its object, so an annotated tag's
+            // message follows the title.
+            var names: [String] = [], objects: [String] = []
+            for head in heads.heads {
+                names.append(try await client.mergeName(head))
+                objects.append(try await client.resolveOID(head))
+            }
             var message = self.message
-            if message == nil { message = try await client.mergeMessage(describing: names) }
+            if message == nil { message = try await client.mergeMessage(describing: names, objects: objects) }
             try await Self.merge(heads: heads, mode: mode, message: message ?? "", client: client, quiet: quiet)
             return
         }

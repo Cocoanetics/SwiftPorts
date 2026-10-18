@@ -1636,6 +1636,12 @@ struct GitCommandRemoteTests {
         #expect(result.stdout.hasPrefix("Fast-forwarding to: origin/a\n"))
         #expect(try systemGit(["log", "-1", "--format=%s"], in: clone)
                 == "Merge branch 'b', remote-tracking branch 'origin/a'")
+
+        // An annotated tag's message follows the title.
+        try systemGit(["reset", "-q", "--hard", "origin/main"], in: clone)
+        try systemGit(["tag", "-a", "ta", "-m", "tag A", "a"], in: clone)
+        try await expectLikeGit(["merge", "ta", "b"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%B"], in: clone) == "Merge branch 'b', tag 'ta'\n\ntag A")
     }
 
     @Test("git merge of several heads reduces them, and refuses as git does")
