@@ -190,6 +190,10 @@ struct Merge: AsyncParsableCommand {
                     error("ERROR: \(path): Not merging conflicting submodule changes.")
                 case .removed:
                     break
+                case .permissionsConflict(let path, let base, let ours, let theirs, let contentConflict):
+                    Shell.print("Auto-merging \(path)")
+                    let content = contentConflict ? "content conflict, " : ""
+                    error("ERROR: \(content)permissions conflict: \(base)->\(ours),\(theirs) in \(path)")
                 case .addedWithDifferentModes(let path, let ours, let theirs):
                     error("ERROR: File \(path) added identically in both branches,")
                     error("ERROR: but permissions conflict \(ours)->\(theirs).")
