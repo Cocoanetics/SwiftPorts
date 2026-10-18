@@ -88,6 +88,20 @@ struct Pull: AsyncParsableCommand {
         var rebasing = rebase.map { $0 ? RebaseChoice.yes : .no } ?? configuredRebase ?? .no
         let rebaseUnspecified = rebase == nil && configuredRebase == nil
 
+        // Before fetching, where the branch forked from its upstream's
+        // remote-tracking branch (`merge-base --fork-point`), which a
+        // rebase replays from, as git's pull does: commits the upstream
+        // dropped since stay dropped.
+        var forkPoint: String?
+        // Only for the upstream: no refspec, and no other remote named.
+        if rebasing != .no, arguments.count <= 1, let branch {
+            let remote = try await client.configGet("branch.\(branch).remote")
+            if arguments.first == nil || arguments.first == remote,
+               let upstream = try? await client.upstreamBranch(of: branch) {
+                forkPoint = try await Self.forkPoint(of: "refs/remotes/\(upstream)", client: client)
+            }
+        }
+
         // Fetch, as `git fetch [<repository> [<refspec>…]]` would.
         let repository = arguments.first
         var refspecs = try Self.normalizingTagRefspecs(Array(arguments.dropFirst()))
@@ -207,7 +221,8 @@ struct Pull: AsyncParsableCommand {
                 throw CLIError.stderr(
                     "fatal: rebasing merge commits (pull.rebase=merges) is not supported", exitCode: 128)
             }
-            let outcome = try await client.rebase(upstream: head.oid, author: nil) { current, total in
+            let outcome = try await client.rebase(
+                upstream: forkPoint ?? head.oid, onto: head.oid, author: nil) { current, total in
                 if !quiet { Rebase.emitProgress(current: current, total: total) }
             }
             if !quiet {
@@ -255,6 +270,21 @@ struct Pull: AsyncParsableCommand {
         } else if case .conflicts = outcome {
             try Merge.printOutcome(outcome)
         }
+    }
+
+    /// `git merge-base --fork-point <ref> HEAD`: the newest of `ref`'s
+    /// values, its reflog's included, that HEAD descends from; `nil`
+    /// when there's none.
+    static func forkPoint(of ref: String, client: SwiftGit.GitClient) async throws -> String? {
+        guard let head = try? await client.resolveOID("HEAD") else { return nil }
+        var candidates: [String] = []
+        if let tip = try? await client.resolveOID(ref) { candidates.append(tip) }
+        candidates += ((try? await client.reflog(refName: ref)) ?? []).map(\.newSHA)
+        var seen = Set<String>()
+        for candidate in candidates where seen.insert(candidate).inserted {
+            if (try? await client.mergeBase(candidate, head)) == candidate { return candidate }
+        }
+        return nil
     }
 
     /// git fetch's `tag <name>`, which is one refspec,

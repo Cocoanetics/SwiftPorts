@@ -1257,6 +1257,29 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "feature"], in: remote))
     }
 
+    @Test("git pull --rebase replays from the fork point, leaving what the upstream dropped")
+    func pullRebaseForkPoint() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("dropped.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try systemGit(["fetch", "-q"], in: clone)
+        try systemGit(["switch", "-q", "-c", "work", "--track", "origin/main"], in: clone)
+        try commitFile("mine.txt", in: clone)
+        // The upstream drops its commit and moves on.
+        try systemGit(["reset", "-q", "--hard", "HEAD^"], in: other)
+        try commitFile("new.txt", in: other)
+        try systemGit(["push", "-q", "--force", "origin", "main"], in: other)
+
+        let theirs = try twin(of: clone)
+        try systemGit(["pull", "-q", "--rebase"], in: theirs)
+        try await git(["pull", "-q", "--rebase"], in: clone)
+        let subjects = try systemGit(["log", "--format=%s"], in: clone)
+        #expect(try subjects == systemGit(["log", "--format=%s"], in: theirs))
+        #expect(subjects == "mine.txt\nnew.txt\none")
+    }
+
     @Test("pull.rebase=merges refuses to flatten local merges")
     func pullRebaseMergesRefusesMerges() async throws {
         let (_, clone) = try makeDiverged()
