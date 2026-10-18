@@ -757,6 +757,20 @@ struct GitCommandRemoteTests {
         #expect(fetched.status == 0)
         #expect(fetched.stderr == "From ../bare\n * [new branch]      main       -> local/main\n")
         #expect(try systemGit(["rev-parse", "local/main"], in: repo) == systemGit(["rev-parse", "main"], in: bare))
+
+        // Inside the mapped `.git`, git stays where it runs: `../bare.git`
+        // from `/work/repo/.git/sub` is `repo/.git/bare.git`, not the
+        // top's sibling.
+        try commitFile("inner.txt", in: repo)
+        let inner = repo.appendingPathComponent(".git/bare.git")
+        try systemGit(["clone", "-q", "--bare", repo.path, inner.path], in: repo)
+        try FileManager.default.createDirectory(
+            at: repo.appendingPathComponent(".git/sub"), withIntermediateDirectories: true)
+        let fromGitDir = try await gitStderr(
+            ["fetch", "local", "main"], in: URL(fileURLWithPath: "/work/repo/.git/sub"), sandbox: sandbox)
+        #expect(fromGitDir.status == 0)
+        #expect(try systemGit(["rev-parse", "FETCH_HEAD"], in: repo) == systemGit(["rev-parse", "main"], in: inner))
+        #expect(try systemGit(["rev-parse", "FETCH_HEAD"], in: repo) != systemGit(["rev-parse", "main"], in: bare))
     }
 
     @Test("without a configured remote, git push refuses and git fetch does nothing")
