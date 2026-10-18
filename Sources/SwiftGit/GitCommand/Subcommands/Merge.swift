@@ -190,6 +190,11 @@ struct Merge: AsyncParsableCommand {
                     error("ERROR: \(path): Not merging conflicting submodule changes.")
                 case .removed:
                     break
+                case .submoduleDirectoryKept(let path):
+                    error("warning: unable to rmdir '\(path)': Directory not empty")
+                case .addedOverUntracked(let path):
+                    Shell.print("Adding \(path)")
+                    error("ERROR: untracked \(path) is overwritten by the merge.")
                 case .deletedWithModeChange(let path):
                     error("ERROR: File \(path) deleted on one branch but had its")
                     error("ERROR: permissions changed on the other.")
