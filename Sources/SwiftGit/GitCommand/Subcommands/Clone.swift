@@ -84,12 +84,11 @@ struct Clone: AsyncParsableCommand {
     }
 
     /// Whether `remote` is a local path, which git clones by copying
-    /// objects (ending on `done.`). A `file://` URL goes through the
-    /// regular transport, like any other URL.
+    /// objects (ending on `done.`): not a URL — a `file://` URL goes
+    /// through the regular transport, like any other — and not a
+    /// scp-style `host:path`, which has a colon before any slash
+    /// (`/srv/team@host/repo:copy.git` is a path).
     static func isLocal(_ remote: String) -> Bool {
-        if remote.contains("://") { return false }
-        if remote.contains("@") && remote.contains(":") { return false }
-        if remote.hasPrefix("/") { return true }
-        return FileManager.default.fileExists(atPath: Shell.resolve(remote).path)
+        !remote.contains("://") && !SwiftGit.GitClient.isSCPLike(remote)
     }
 }

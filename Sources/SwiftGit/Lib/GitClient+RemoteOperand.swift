@@ -81,7 +81,7 @@ extension GitClient {
 
     /// git's rule for a scp-style `[user@]host:path` remote: no `://`,
     /// and a colon before any slash (`url_is_local_not_ssh`).
-    static func isSCPLike(_ remote: String) -> Bool {
+    public static func isSCPLike(_ remote: String) -> Bool {
         guard !remote.contains("://"), let colon = remote.firstIndex(of: ":") else { return false }
         #if os(Windows)
         // `C:/repo` is a drive letter, not a host.

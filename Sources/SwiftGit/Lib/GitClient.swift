@@ -124,8 +124,7 @@ public struct GitClient: ForgeKit.GitClient {
         let progress = shellProgressSink()
         let remote = try await resolveRemoteOperand(remote)
         try await withRepository { repository in
-            let shouldPrune = try resolvedFetchPrune(
-                prune, remote: remote, repository: repository)
+            let shouldPrune = try resolvedFetchPrune(prune, remote: remote)
             try repository.fetch(remote: remote, refspecs: refspecs, depth: depth,
                                  prune: shouldPrune,
                                  credentials: credentials, progress: progress)
@@ -150,8 +149,7 @@ public struct GitClient: ForgeKit.GitClient {
         let progress = shellProgressSink()
         let remote = try await resolveRemoteOperand(remote)
         try await withRepository { repository in
-            let shouldPrune = try resolvedFetchPrune(
-                prune, remote: remote, repository: repository)
+            let shouldPrune = try resolvedFetchPrune(prune, remote: remote)
             try repository.unshallow(
                 remote: remote, refspecs: refspecs,
                 credentials: credentials, progress: progress)
@@ -276,17 +274,13 @@ public struct GitClient: ForgeKit.GitClient {
     /// Resolve `git fetch`'s tri-state pruning setting: an explicit option
     /// wins, followed by the per-remote setting, the global fetch setting,
     /// and finally Git's default of disabled pruning.
-    private func resolvedFetchPrune(
-        _ explicit: Bool?,
-        remote: String,
-        repository: Repository
-    ) throws -> Bool {
+    private func resolvedFetchPrune(_ explicit: Bool?, remote: String) throws -> Bool {
         if let explicit { return explicit }
 
         let keys = ["remote.\(remote).prune", "fetch.prune"]
         for key in keys {
-            guard let value = try repository.configGet(key) else { continue }
-            return try Self.parseGitBool(value, key: key)
+            guard let entry = try Self.configEntry(key, in: workingDirectory) else { continue }
+            return try Self.parseGitBool(entry, key: key)
         }
         return false
     }

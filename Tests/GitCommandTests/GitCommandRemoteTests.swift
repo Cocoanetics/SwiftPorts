@@ -450,6 +450,49 @@ struct GitCommandRemoteTests {
         }
     }
 
+    @Test("a boolean key without a value is true, an empty one false")
+    func valuelessBooleans() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let config = clone.appendingPathComponent(".git/config")
+        func append(_ text: String) throws {
+            let handle = try FileHandle(forWritingTo: config)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data(text.utf8))
+            try handle.close()
+        }
+        try append("[push]\n\tautoSetupRemote\n")
+        try systemGit(["switch", "-q", "-c", "valueless"], in: clone)
+        let pushed = try await git(["push"], in: clone)
+        #expect(pushed.stdout == "branch 'valueless' set up to track 'origin/valueless'.\n")
+
+        try systemGit(["config", "--unset", "push.autoSetupRemote"], in: clone)
+        try append("[push]\n\tautoSetupRemote =\n")
+        try systemGit(["switch", "-q", "-c", "empty"], in: clone)
+        do {
+            try await git(["push"], in: clone)
+            Issue.record("expected git push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.first == "fatal: The current branch empty has no upstream branch.")
+        }
+
+        // fetch.prune without a value prunes.
+        try systemGit(["push", "-q", "origin", "--delete", "valueless"], in: clone)
+        try append("[fetch]\n\tprune\n")
+        try await git(["fetch", "-q"], in: clone)
+        #expect(throws: Failure.self) {
+            try systemGit(["rev-parse", "--verify", "-q", "refs/remotes/origin/valueless"], in: clone)
+        }
+    }
+
+    @Test("git clone tells a local path from a scp-style remote as git does")
+    func cloneLocality() {
+        #expect(Clone.isLocal("/srv/team@host/repo:copy.git"))
+        #expect(Clone.isLocal("../repo.git"))
+        #expect(!Clone.isLocal("git@host:repo.git"))
+        #expect(!Clone.isLocal("host:srv/repo.git"))
+        #expect(!Clone.isLocal("file:///srv/repo.git"))
+    }
+
     @Test("git refuses a bad push.default before anything else")
     func pushSettingsComeFirst() async throws {
         let (_, clone) = try makeRemoteAndClone()
