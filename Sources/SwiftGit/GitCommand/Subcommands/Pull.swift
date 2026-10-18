@@ -16,8 +16,8 @@ struct Pull: AsyncParsableCommand {
             (`branch.<name>.merge`), which needs the repository, if named,
             to be the branch's remote. Whether to rebase comes from
             `--rebase`/`--no-rebase`, else `branch.<name>.rebase`, else
-            `pull.rebase` (`merges` and `interactive` rebase as `true`
-            does); how to merge from `--ff`/`--no-ff`/`--ff-only`, else
+            `pull.rebase` (`merges` only while there are no merges to
+            replay; `interactive` only to fast-forward); how to merge from `--ff`/`--no-ff`/`--ff-only`, else
             `pull.ff`. With neither configured, branches that have diverged
             are refused, as git refuses them.
             """
@@ -61,7 +61,7 @@ struct Pull: AsyncParsableCommand {
     enum FastForward { case allow, never, only }
 
     /// git's rebase choice (`--rebase`, `pull.rebase`).
-    enum RebaseChoice { case no, yes }
+    enum RebaseChoice { case no, yes, merges, interactive }
 
     func run() async throws {
         do {
@@ -88,50 +88,51 @@ struct Pull: AsyncParsableCommand {
 
         // Fetch, as `git fetch [<repository> [<refspec>…]]` would.
         let repository = arguments.first
-        let refspecs = Array(arguments.dropFirst())
+        var refspecs = Array(arguments.dropFirst())
         var branchRemote: String?
         if let branch { branchRemote = try await client.configGet("branch.\(branch).remote") }
         let remotes = try await client.remoteList()
-        // The remote fetched from, `nil` when there's none to fetch from.
-        var fetchedFrom: String?
-        if let repository {
-            if repository.isEmpty { throw CLIError.stderr("fatal: bad repository ''", exitCode: 128) }
-            try await client.fetch(remote: repository, refspecs: refspecs, depth: nil)
-            fetchedFrom = repository
-        } else {
+        // The remote to fetch from, `nil` when there's none.
+        var fetchFrom = repository
+        if let repository, repository.isEmpty {
+            throw CLIError.stderr("fatal: bad repository ''", exitCode: 128)
+        }
+        if repository == nil {
             let fallback = RemoteArguments.defaultRemote(branchRemote: branchRemote, remotes: remotes)
-            if fallback.isUsable {
-                try await client.fetch(remote: fallback.name, refspecs: [], depth: nil)
-                fetchedFrom = fallback.name
-            }
+            if fallback.isUsable { fetchFrom = fallback.name }
         }
 
         // What git's fetch marks for merging (get_ref_map): the refspecs
-        // given; else, from a remote with `remote.<name>.fetch`, the
-        // branch's upstream when it's the branch's remote — a branch with
-        // `branch.<name>.merge` but no `branch.<name>.remote` has none;
-        // else (a URL or path too) the remote's HEAD.
+        // given; else the branch's upstream when this is the branch's
+        // remote — fetched by name if `remote.<name>.fetch` doesn't map
+        // it (a branch with `branch.<name>.merge` but no
+        // `branch.<name>.remote` has none); else, without
+        // `remote.<name>.fetch` (a URL or path too), the remote's HEAD.
         var upstreamMerge: String?
         if let branch, branchRemote != nil {
             upstreamMerge = try await client.configGet("branch.\(branch).merge")
         }
         var wantsMerge = false
-        if let fetchedFrom {
+        if let fetchFrom {
             var mapped = false
-            if remotes.contains(fetchedFrom) {
-                mapped = try await client.configGet("remote.\(fetchedFrom).fetch") != nil
+            if remotes.contains(fetchFrom) {
+                mapped = try await client.configGet("remote.\(fetchFrom).fetch") != nil
             }
-            wantsMerge = !refspecs.isEmpty || !mapped
-                || (upstreamMerge != nil && fetchedFrom == branchRemote)
+            let upstreamHere = upstreamMerge != nil && fetchFrom == branchRemote
+            if refspecs.isEmpty, !mapped, upstreamHere, let upstreamMerge {
+                refspecs = [upstreamMerge]
+            }
+            wantsMerge = !refspecs.isEmpty || !mapped || upstreamHere
+            try await client.fetch(remote: fetchFrom, refspecs: refspecs, depth: nil)
         }
         let heads = wantsMerge ? try await client.fetchHeadEntries().filter(\.isMerge) : []
         guard let head = heads.first else {
             throw noMergeCandidates(
                 branch: branch, branchRemote: branchRemote, upstreamMerge: upstreamMerge,
-                remotes: remotes, rebasing: rebasing == .yes)
+                remotes: remotes, rebasing: rebasing != .no)
         }
         if heads.count > 1 {
-            if rebasing == .yes {
+            if rebasing != .no {
                 throw CLIError.stderr("fatal: Cannot rebase onto multiple branches.", exitCode: 128)
             }
             throw CLIError.stderr(
@@ -159,7 +160,18 @@ struct Pull: AsyncParsableCommand {
                                   exitCode: 128)
         }
 
-        if rebasing == .yes, !canFastForward {
+        if rebasing != .no, !canFastForward {
+            // GitKit's rebase replays commits one by one: it can neither
+            // recreate merges (`--rebase-merges`) nor ask what to do.
+            if rebasing == .interactive {
+                throw CLIError.stderr(
+                    "fatal: an interactive rebase (pull.rebase=interactive) is not supported", exitCode: 128)
+            }
+            if rebasing == .merges,
+               try await client.log(LogQuery(starts: ["HEAD"], excludes: [head.oid])).contains(where: \.isMerge) {
+                throw CLIError.stderr(
+                    "fatal: rebasing merge commits (pull.rebase=merges) is not supported", exitCode: 128)
+            }
             let outcome = try await client.rebase(upstream: head.oid, author: nil) { current, total in
                 if !quiet { Rebase.emitProgress(current: current, total: total) }
             }
@@ -173,7 +185,7 @@ struct Pull: AsyncParsableCommand {
 
         // A rebase that can fast-forward does, as git does it.
         let mode: FastForwardMode
-        switch rebasing == .yes ? .only : fastForward {
+        switch rebasing != .no ? .only : fastForward {
         case .never?: mode = .never
         case .only?: mode = .onlyFastForward
         default: mode = .auto
@@ -220,7 +232,8 @@ struct Pull: AsyncParsableCommand {
         for key in keys {
             guard let value = try await client.configGet(key) else { continue }
             if let flag = try await gitBool(value, key: key, client: client) { return flag ? .yes : .no }
-            if ["merges", "m", "interactive", "i"].contains(value) { return .yes }
+            if ["merges", "m"].contains(value) { return .merges }
+            if ["interactive", "i"].contains(value) { return .interactive }
             throw CLIError.stderr("fatal: invalid value for '\(key)': '\(value)'", exitCode: 128)
         }
         return nil
@@ -327,7 +340,7 @@ struct Pull: AsyncParsableCommand {
         let configured = try await client.configList()
             .last { ["core.commentchar", "core.commentstring"].contains($0.name.lowercased()) }?.value
         guard let configured, !configured.isEmpty else { return "#" }
-        guard configured == "auto" else { return configured }
+        guard configured.lowercased() == "auto" else { return configured }
         let starts = Set(message.split(separator: "\n").compactMap { $0.drop { $0 == " " }.first })
         return "#;@!$%^&|:".first { !starts.contains($0) }.map(String.init) ?? "#"
     }

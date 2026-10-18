@@ -1203,26 +1203,68 @@ struct GitCommandRemoteTests {
 
     @Test("git pull that conflicts leaves git's merge message")
     func pullConflictMessage() async throws {
+        // Of git's two names for it, the one configured last counts, and
+        // `auto` in any case picks a character.
+        for comment in [";", "Auto"] {
+            let (remote, clone) = try makeRemoteAndClone()
+            let other = tmp("GitRemoteOtherClone")
+            try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+            try Data("theirs\n".utf8).write(to: other.appendingPathComponent("file.txt"))
+            try systemGit(["commit", "-q", "-am", "theirs"], in: other)
+            try systemGit(["push", "-q", "origin", "main"], in: other)
+            try Data("mine\n".utf8).write(to: clone.appendingPathComponent("file.txt"))
+            try systemGit(["commit", "-q", "-am", "mine"], in: clone)
+            try systemGit(["config", "pull.rebase", "false"], in: clone)
+            try systemGit(["config", "core.commentString", "%"], in: clone)
+            try systemGit(["config", "core.commentChar", comment], in: clone)
+
+            let theirs = try twin(of: clone)
+            _ = try systemGitStatus(["pull", "-q"], in: theirs)
+            await #expect(throws: CLIError.self) { try await git(["pull", "-q"], in: clone) }
+            let mergeMessage = { (repo: URL) in
+                try String(contentsOf: repo.appendingPathComponent(".git/MERGE_MSG"), encoding: .utf8)
+            }
+            #expect(try mergeMessage(clone) == mergeMessage(theirs), "core.commentChar=\(comment)")
+        }
+    }
+
+    @Test("git pull fetches the upstream by name from a remote that doesn't map it")
+    func pullUpstreamFromUnmappedRemote() async throws {
         let (remote, clone) = try makeRemoteAndClone()
+        try systemGit(["push", "-q", "origin", "main:feature"], in: clone)
+        try systemGit(["fetch", "-q"], in: clone)
+        try systemGit(["switch", "-q", "-c", "local", "--track", "origin/feature"], in: clone)
         let other = tmp("GitRemoteOtherClone")
         try systemGit(["clone", "-q", remote.path, other.path], in: clone)
-        try Data("theirs\n".utf8).write(to: other.appendingPathComponent("file.txt"))
-        try systemGit(["commit", "-q", "-am", "theirs"], in: other)
+        try commitFile("main.txt", in: other)
         try systemGit(["push", "-q", "origin", "main"], in: other)
-        try Data("mine\n".utf8).write(to: clone.appendingPathComponent("file.txt"))
-        try systemGit(["commit", "-q", "-am", "mine"], in: clone)
-        try systemGit(["config", "pull.rebase", "false"], in: clone)
-        // Of git's two names for it, the one configured last counts.
-        try systemGit(["config", "core.commentString", "%"], in: clone)
-        try systemGit(["config", "core.commentChar", ";"], in: clone)
+        try systemGit(["switch", "-q", "-c", "feature", "origin/feature"], in: other)
+        try commitFile("feature.txt", in: other)
+        try systemGit(["push", "-q", "origin", "feature"], in: other)
+        try systemGit(["config", "--unset-all", "remote.origin.fetch"], in: clone)
 
-        let theirs = try twin(of: clone)
-        _ = try systemGitStatus(["pull", "-q"], in: theirs)
-        await #expect(throws: CLIError.self) { try await git(["pull", "-q"], in: clone) }
-        let mergeMessage = { (repo: URL) in
-            try String(contentsOf: repo.appendingPathComponent(".git/MERGE_MSG"), encoding: .utf8)
+        try await git(["pull", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "feature"], in: remote))
+    }
+
+    @Test("pull.rebase=merges refuses to flatten local merges")
+    func pullRebaseMergesRefusesMerges() async throws {
+        let (_, clone) = try makeDiverged()
+        try systemGit(["switch", "-q", "-c", "side", "HEAD^"], in: clone)
+        try commitFile("side.txt", in: clone)
+        try systemGit(["switch", "-q", "main"], in: clone)
+        try systemGit(["merge", "-q", "--no-ff", "--no-edit", "side"], in: clone)
+        let before = try systemGit(["rev-parse", "HEAD"], in: clone)
+        try systemGit(["config", "pull.rebase", "merges"], in: clone)
+        do {
+            try await git(["pull", "-q"], in: clone)
+            Issue.record("expected git pull to refuse")
+        } catch let error as CLIError {
+            #expect(error.lines == ["fatal: rebasing merge commits (pull.rebase=merges) is not supported"])
+            #expect(error.exitCode == 128)
         }
-        #expect(try mergeMessage(clone) == mergeMessage(theirs))
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone) == before)
     }
 
     @Test("git pull <remote> without a fetch refspec merges the remote's HEAD")
