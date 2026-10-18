@@ -44,10 +44,12 @@ struct GitCommandRemoteTests {
 
     /// SwiftPorts' `git`, run in a shell whose working directory is `dir`.
     @discardableResult
-    private func git(_ args: [String], in dir: URL) async throws -> (stdout: String, stderr: String) {
+    private func git(
+        _ args: [String], in dir: URL, environment variables: [String: String] = [:]
+    ) async throws -> (stdout: String, stderr: String) {
         let out = OutputSink(), err = OutputSink()
         let shell = Shell(stdout: out, stderr: err,
-                          environment: Environment(workingDirectory: dir.path))
+                          environment: Environment(variables: variables, workingDirectory: dir.path))
         try await shell.withCurrent {
             let parsed = try GitCommand.parseAsRoot(args)
             if var command = parsed as? AsyncParsableCommand {
@@ -391,6 +393,43 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "dev"], in: clone))
         #expect(try systemGit(["config", "branch.dev.remote"], in: clone) == relative)
         #expect(try systemGit(["config", "branch.main.remote"], in: clone) == "origin")
+    }
+
+    @Test("git's advice switches turn a refused push's hints off")
+    func pushRejectedAdviceSwitches() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("theirs.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try commitFile("mine.txt", in: clone)
+        func hints(_ environment: [String: String] = [:]) async throws -> [String] {
+            do {
+                try await git(["push"], in: clone, environment: environment)
+                Issue.record("expected git push to fail")
+            } catch let error as CLIError {
+                #expect(error.lines.contains { $0.hasPrefix("error: failed to push some refs to ") })
+                return error.lines.filter { $0.hasPrefix("hint: ") }
+            }
+            return []
+        }
+        #expect(try await hints().count == 5)
+        #expect(try await hints(["GIT_ADVICE": "0"]).isEmpty)
+        for key in ["pushFetchFirst", "pushUpdateRejected", "pushNonFastForward"] {
+            try systemGit(["config", "advice.\(key)", "false"], in: clone)
+            #expect(try await hints().isEmpty, "\(key)")
+            try systemGit(["config", "--unset", "advice.\(key)"], in: clone)
+        }
+        // Another hint's switch leaves this one on; a bad value is git's error.
+        try systemGit(["config", "advice.pushNeedsForce", "false"], in: clone)
+        #expect(try await hints().count == 5)
+        try systemGit(["config", "advice.pushFetchFirst", "bogus"], in: clone)
+        do {
+            try await git(["push"], in: clone)
+            Issue.record("expected git push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == ["fatal: bad boolean config value 'bogus' for 'advice.pushfetchfirst'"])
+        }
     }
 
     @Test("a push refused before it starts reads as git's")

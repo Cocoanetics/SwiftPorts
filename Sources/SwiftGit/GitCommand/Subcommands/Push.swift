@@ -55,7 +55,8 @@ struct Push: AsyncParsableCommand {
             // The refs that went through still got their upstream.
             reportUpstreams(of: rejected.pushed, remote: plan.remote, upstream: upstream)
             throw PushRejectionAdvice.error(
-                for: rejected, currentBranch: try? await client.currentBranch(), quiet: quiet)
+                for: rejected, currentBranch: try? await client.currentBranch(), quiet: quiet,
+                switches: settings.advice)
         } catch let error as UnsupportedTransportError {
             throw CLIError(error)
         } catch let error as Libgit2Error
@@ -122,6 +123,8 @@ enum DefaultPush {
         /// Whether `branch.autoSetupMerge` is `simple`, which drops the
         /// advice about it.
         let autoSetupMergeIsSimple: Bool
+        /// Which hints a refused push gets (`GIT_ADVICE`, `advice.push*`).
+        let advice: PushRejectionAdvice.Switches
         var mode: String { configuredMode ?? "simple" }
 
         init(client: SwiftGit.GitClient) async throws {
@@ -144,6 +147,17 @@ enum DefaultPush {
                     _ = try await client.configBool("branch.autoSetupMerge")
                 }
                 autoSetupMergeIsSimple = autoSetupMerge == "simple"
+                var advice = PushRejectionAdvice.Switches()
+                for key in PushRejectionAdvice.Switches.keys {
+                    if try await client.configBool("advice.\(key)") == false {
+                        advice.off.insert(key.lowercased())
+                    }
+                }
+                // `GIT_ADVICE` is read as a boolean; empty is false.
+                if let value = Shell.current.environment["GIT_ADVICE"]?.lowercased() {
+                    advice.global = !(["", "false", "no", "off"].contains(value) || Int(value) == 0)
+                }
+                self.advice = advice
             } catch let error as Libgit2Error {
                 throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)
             }
