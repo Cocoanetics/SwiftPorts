@@ -504,9 +504,21 @@ struct Pull: AsyncParsableCommand {
             .last { ["core.commentchar", "core.commentstring"].contains($0.name.lowercased()) }?.value
         guard let configured, !configured.isEmpty else { return "#" }
         guard configured.lowercased() == "auto" else { return configured }
-        // A line's very first character, as git looks at it.
-        let starts = Set(message.split(separator: "\n").compactMap(\.first))
-        return "#;@!$%^&|:".first { !starts.contains($0) }.map(String.init) ?? "#"
+        // A line's very first byte, as git looks at it.
+        let starts = Set(message.utf8.split(separator: UInt8(ascii: "\n")).compactMap(\.first))
+        return "#;@!$%^&|:".utf8.first { !starts.contains($0) }
+            .map { String(UnicodeScalar($0)) } ?? "#"
+    }
+
+    /// Each physical line of `lines` as a comment, as git's
+    /// `strbuf_add_commented_lines` writes it: `comment` then a space,
+    /// with no space before a tab or on an empty line.
+    static func commented(_ lines: [String], with comment: String) -> String {
+        lines.flatMap { $0.split(separator: "\n", omittingEmptySubsequences: false) }
+            .map { line in
+                line.isEmpty || line.hasPrefix("\t") ? "\(comment)\(line)\n" : "\(comment) \(line)\n"
+            }
+            .joined()
     }
 
     /// `MERGE_MSG` for a merge stopped by conflicts, as git leaves it for
@@ -514,7 +526,7 @@ struct Pull: AsyncParsableCommand {
     static func writeMergeMessage(_ message: String, conflicts: [String], client: SwiftGit.GitClient) async throws {
         guard let gitDir = try await client.gitDir() else { return }
         let comment = try await commentString(for: message, client: client)
-        let text = message + "\n\n\(comment) Conflicts:\n" + conflicts.map { "\(comment)\t\($0)\n" }.joined()
+        let text = message + "\n\n" + commented(["Conflicts:"] + conflicts.map { "\t\($0)" }, with: comment)
         try Data(text.utf8).write(to: URL(fileURLWithPath: gitDir).appendingPathComponent("MERGE_MSG"))
     }
 }

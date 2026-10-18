@@ -1228,6 +1228,13 @@ struct GitCommandRemoteTests {
         }
     }
 
+    @Test("MERGE_MSG comments every line, as git writes them")
+    func commentedLines() {
+        #expect(Pull.commented(["Conflicts:", "\tweird\nname", "\tplain"], with: "#")
+                == "# Conflicts:\n#\tweird\n# name\n#\tplain\n")
+        #expect(Pull.commented(["a", ""], with: ";") == "; a\n;\n")
+    }
+
     @Test("git pull fetches the upstream by name from a remote that doesn't map it")
     func pullUpstreamFromUnmappedRemote() async throws {
         let (remote, clone) = try makeRemoteAndClone()
