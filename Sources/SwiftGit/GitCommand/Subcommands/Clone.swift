@@ -89,6 +89,6 @@ struct Clone: AsyncParsableCommand {
     /// scp-style `host:path`, which has a colon before any slash
     /// (`/srv/team@host/repo:copy.git` is a path).
     static func isLocal(_ remote: String) -> Bool {
-        !remote.contains("://") && !SwiftGit.GitClient.isSCPLike(remote)
+        !SwiftGit.GitClient.isURLOrSCPLike(remote)
     }
 }

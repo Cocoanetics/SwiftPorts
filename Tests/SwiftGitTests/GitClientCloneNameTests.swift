@@ -44,9 +44,14 @@ import Testing
         #if os(Windows)
         #expect(!GitClient.isSCPLike("C:/repo.git"))
         #expect(!GitClient.isSCPLike(#"c:\repo.git"#))
+        // A drive path, even with `//` after the colon.
+        #expect(!GitClient.isURLOrSCPLike("C://repos/repo.git"))
         #else
         #expect(GitClient.isSCPLike("C:/repo.git"))
+        #expect(GitClient.isURLOrSCPLike("C://repos/repo.git"))
         #endif
+        #expect(GitClient.isURLOrSCPLike("https://host/repo.git"))
+        #expect(!GitClient.isURLOrSCPLike("../repo.git"))
     }
 
     /// Which `<repository>` paths are joined to the top of the work tree.

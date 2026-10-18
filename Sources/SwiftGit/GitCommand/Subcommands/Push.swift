@@ -89,13 +89,16 @@ enum DefaultPush {
         let setUpstream: Bool
     }
 
-    /// `push.default` and `push.autoSetupRemote`, which git reads — and
-    /// refuses when malformed — before anything else, even for a push
-    /// whose refspecs leave them unused.
+    /// `push.default`, `push.autoSetupRemote` and `branch.autoSetupMerge`,
+    /// which git reads — and refuses when malformed — before anything
+    /// else, even for a push whose refspecs leave them unused.
     struct Settings {
         /// `push.default` as configured; `nil` when it isn't.
         let configuredMode: String?
         let autoSetupRemote: Bool
+        /// Whether `branch.autoSetupMerge` is `simple`, which drops the
+        /// advice about it.
+        let autoSetupMergeIsSimple: Bool
         var mode: String { configuredMode ?? "simple" }
 
         init(client: SwiftGit.GitClient) async throws {
@@ -112,6 +115,12 @@ enum DefaultPush {
             }
             do {
                 autoSetupRemote = try await client.configBool("push.autoSetupRemote") ?? false
+                // `always`, `inherit`, `simple`, or else a boolean.
+                let autoSetupMerge = try await client.configGet("branch.autoSetupMerge")
+                if let autoSetupMerge, !["always", "inherit", "simple"].contains(autoSetupMerge) {
+                    _ = try await client.configBool("branch.autoSetupMerge")
+                }
+                autoSetupMergeIsSimple = autoSetupMerge == "simple"
             } catch let error as Libgit2Error {
                 throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)
             }
@@ -174,11 +183,10 @@ enum DefaultPush {
         case "simple" where target == fetchRemote.name:
             let upstream = try upstreamRef()
             if upstream != local {
-                let autoSetupMerge = try await client.configGet("branch.autoSetupMerge")
                 throw upstreamNameMismatch(
                     remote: target, upstream: upstream,
                     pushDefaultAdvice: settings.configuredMode == nil,
-                    autoSetupMergeAdvice: autoSetupMerge != "simple")
+                    autoSetupMergeAdvice: !settings.autoSetupMergeIsSimple)
             }
         case "upstream", "tracking":
             guard target == fetchRemote.name else {

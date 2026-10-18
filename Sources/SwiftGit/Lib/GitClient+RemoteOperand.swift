@@ -28,7 +28,7 @@ extension GitClient {
     /// working directory, since libgit2 would read it relative to the
     /// process's.
     func remoteForLibgit2(_ remote: String, relativeTo directory: String? = nil) async throws -> String {
-        if remote.contains("://") || Self.isSCPLike(remote) {
+        if Self.isURLOrSCPLike(remote) {
             if let url = URL(string: remote) {
                 try await Shell.authorize(Self.authorizationURL(forRemote: url))
             }
@@ -85,6 +85,18 @@ extension GitClient {
                 try repository.configSet(key, remote)
             }
         }
+    }
+
+    /// Whether `remote` reaches a host — a URL or a scp-style
+    /// `[user@]host:path` — rather than naming a path. On Windows a drive
+    /// letter makes it a path even with `//` after the colon
+    /// (`C://repos/r.git`), which libgit2 opens as a local directory and
+    /// `git clone` finds on disk.
+    public static func isURLOrSCPLike(_ remote: String) -> Bool {
+        #if os(Windows)
+        if hasDriveLetter(remote) { return false }
+        #endif
+        return remote.contains("://") || isSCPLike(remote)
     }
 
     /// git's rule for a scp-style `[user@]host:path` remote: no `://`,

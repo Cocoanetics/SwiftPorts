@@ -515,6 +515,19 @@ struct GitCommandRemoteTests {
         } catch let error as CLIError {
             #expect(error.lines == ["fatal: bad boolean config value 'bogus' for 'push.autosetupremote'"])
         }
+        try systemGit(["config", "--unset", "push.autoSetupRemote"], in: clone)
+        try systemGit(["config", "branch.autoSetupMerge", "bogus"], in: clone)
+        do {
+            try await git(["push", "origin", "main"], in: clone)
+            Issue.record("expected git push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == ["fatal: bad boolean config value 'bogus' for 'branch.autosetupmerge'"])
+        }
+        // Its own words and any boolean are fine.
+        for value in ["inherit", "always", "simple", "false"] {
+            try systemGit(["config", "branch.autoSetupMerge", value], in: clone)
+            try await git(["push", "-q", "origin", "main"], in: clone)
+        }
     }
 
     // MARK: fetch
