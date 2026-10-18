@@ -1636,6 +1636,12 @@ struct GitCommandRemoteTests {
     @Test("git merge <a> <b> merges both, fast-forwarding to the first when it can")
     func mergeOctopus() async throws {
         let clone = try makeOctopusRemoteAndClone()
+        // git-merge-octopus speaks its steps even with -q; only "Merge
+        // made by…" and the diffstat go.
+        let quiet = try await expectLikeGit(["merge", "-q", "a", "b"], in: clone)
+        #expect(quiet.stdout.hasPrefix("Trying simple merge with a\n"))
+        #expect(!quiet.stdout.contains("Merge made by"))
+        try systemGit(["reset", "-q", "--hard", "HEAD~1"], in: clone)
         try await expectLikeGit(["merge", "a", "b"], in: clone)
         try systemGit(["reset", "-q", "--hard", "HEAD~1"], in: clone)
         try systemGit(["reset", "-q", "--hard", "origin/main"], in: clone)
