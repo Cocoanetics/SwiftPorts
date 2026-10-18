@@ -116,6 +116,11 @@ private final class GitKitSSHDedicatedThreadExecutor: @unchecked Sendable, Seria
 
     init(name: String) {
         self.threadName = name
+        // libgit2's thread blocks on this one (`runBlocking`'s
+        // semaphore), typically at user-initiated QoS. Serving it at a
+        // lower QoS is a priority inversion, which the Thread
+        // Performance Checker flags on every SSH clone and fetch.
+        thread.qualityOfService = .userInitiated
         thread.start()
     }
 

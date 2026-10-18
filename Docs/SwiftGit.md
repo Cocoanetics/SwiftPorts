@@ -71,6 +71,7 @@ let client = GitClient(
 | `fetch(remote:refspec:depth:prune:)` / `unshallow(remote:refspec:prune:)` | `git fetch [--depth N\|--unshallow] [--[no-]prune] <remote> <refspec>` |
 | `pull(...)` / `pullRebase(...)` | `git pull` / `git pull --rebase` |
 | `push(remote:refspec:setUpstream:)` | `git push [-u] <remote> <refspec>` |
+| `quiet = true` (property) | `-q` / `--quiet` for `clone`, `fetch`, `pull` and `push`: no progress lines or per-ref summaries |
 | `add(paths:)` | `git add -A` (empty paths) / `git add -- <paths>` |
 | `commit(message:author:allowEmpty:)` | `git commit` |
 | `merge(ref:fastForward:message:author:)` / `mergeContinue(...)` | `git merge` (--ff / --no-ff / --ff-only) / `git merge --continue` |

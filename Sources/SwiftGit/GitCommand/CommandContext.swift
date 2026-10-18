@@ -14,10 +14,12 @@ enum CommandContext {
     }
 
     /// libgit2-backed client with env-driven credential lookup.
-    static func gitClient() -> SwiftGit.GitClient {
-        SwiftGit.GitClient(
+    static func gitClient(quiet: Bool = false) -> SwiftGit.GitClient {
+        var client = SwiftGit.GitClient(
             workingDirectory: currentDirectory,
             credentials: envCredentialProvider())
+        client.quiet = quiet
+        return client
     }
 
     /// `GH_TOKEN` / `GITHUB_TOKEN` for github.com, `GITLAB_TOKEN` for

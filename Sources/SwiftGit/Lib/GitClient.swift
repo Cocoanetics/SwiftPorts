@@ -31,6 +31,8 @@ import CGitKit
 public struct GitClient: ForgeKit.GitClient {
     public let workingDirectory: URL
     public let credentials: CredentialProvider?
+    /// Drop libgit2's progress lines and per-ref summaries — `-q`.
+    public var quiet = false
 
     public init(
         workingDirectory: URL = Shell.currentDirectory,
@@ -217,6 +219,7 @@ public struct GitClient: ForgeKit.GitClient {
     /// eagerly (the task-local `Shell.current`) so callbacks firing on
     /// libgit2's threads still hit the right shell.
     internal func shellProgressSink() -> @Sendable (String) -> Void {
+        guard !quiet else { return { _ in } }
         let stderr = Shell.current.stderr
         return { stderr.write(Data($0.utf8)) }
     }
