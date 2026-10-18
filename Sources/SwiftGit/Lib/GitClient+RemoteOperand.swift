@@ -66,15 +66,25 @@ extension GitClient {
     /// where it chdirs — unless there's no work tree (a bare repository)
     /// or the command runs inside the git directory, where it stays put
     /// (`setup_git_directory`), so from `bare.git/sub`, `../x.git` is
-    /// `bare.git/x.git`.
+    /// `bare.git/x.git`. Of a work tree and a git directory that both
+    /// hold the command's directory, the nearer one is where it runs, as
+    /// git finds the nearer one first walking up: `repo/.git/sub` is in
+    /// the git directory, while a work tree nested in a separate git
+    /// directory (`meta/wt/sub`, `--separate-git-dir=meta`) is a work tree.
     static func remoteBase(top: String?, gitDir: String?, workingDirectory: URL) -> String {
         func onDisk(_ path: String) -> String {
-            URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+            var path = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+            while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+            return path
+        }
+        let here = onDisk(workingDirectory.path)
+        func holdsHere(_ directory: String) -> Bool {
+            here == directory || here.hasPrefix(directory == "/" ? "/" : directory + "/")
         }
         guard let top else { return workingDirectory.path }
         if let gitDir {
-            let here = onDisk(workingDirectory.path), git = onDisk(gitDir)
-            if here == git || here.hasPrefix(git.hasSuffix("/") ? git : git + "/") {
+            let git = onDisk(gitDir), tree = onDisk(top)
+            if holdsHere(git), !holdsHere(tree) || git.count > tree.count {
                 return workingDirectory.path
             }
         }

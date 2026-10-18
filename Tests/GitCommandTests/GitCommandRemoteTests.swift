@@ -722,10 +722,22 @@ struct GitCommandRemoteTests {
         let sub = bare.appendingPathComponent("sub")
         try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
 
-        // Below a bare repository, and inside a work tree's `.git`.
-        for start in [sub, clone.appendingPathComponent(".git")] {
-            let fetchHead = (start == sub ? bare : clone.appendingPathComponent(".git"))
-                .appendingPathComponent("FETCH_HEAD")
+        // A work tree nested in its separate git directory is still a
+        // work tree: `../target.git` from `meta/wt/sub` is `meta/target.git`.
+        let meta = root.appendingPathComponent("meta"), nested = meta.appendingPathComponent("wt")
+        try systemGit(["init", "-q", "-b", "main", "--separate-git-dir=\(meta.path)", nested.path], in: root)
+        try systemGit(["clone", "-q", "--bare", clone.path, meta.appendingPathComponent("target.git").path], in: root)
+        try systemGit(["clone", "-q", "--bare", remote.path, nested.appendingPathComponent("target.git").path], in: root)
+        try systemGit(["config", "remote.x.url", "../target.git"], in: nested)
+        let nestedSub = nested.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(at: nestedSub, withIntermediateDirectories: true)
+
+        // Below a bare repository, inside a work tree's `.git`, and in a
+        // work tree inside its git directory.
+        let gitDirs = [sub: bare, clone.appendingPathComponent(".git"): clone.appendingPathComponent(".git"),
+                       nestedSub: meta]
+        for start in [sub, clone.appendingPathComponent(".git"), nestedSub] {
+            let fetchHead = try #require(gitDirs[start]).appendingPathComponent("FETCH_HEAD")
             let expected = try systemGitStderr(["fetch", "x", "main"], in: start)
             #expect(expected.status == 0)
             let expectedHead = try String(contentsOf: fetchHead, encoding: .utf8)
