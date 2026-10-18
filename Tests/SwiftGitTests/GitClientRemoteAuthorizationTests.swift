@@ -114,6 +114,10 @@ import ShellKit
             try await client.configSet("url.https://example.invalid/.insteadOf", inside.path)
             #expect(await denial { try await client.fetch(remote: inside.path, refspecs: [], depth: nil) }?
                 .reason == hostDenied)
+            // git rewrites a relative path as typed, before reading it as one.
+            try await client.configSet("url.https://example.invalid/alias/.insteadOf", "../alias")
+            #expect(await denial { try await client.fetch(remote: "../alias", refspecs: [], depth: nil) }?
+                .reason == hostDenied)
         }
     }
 

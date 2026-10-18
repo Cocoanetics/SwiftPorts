@@ -115,36 +115,38 @@ extension GitClient {
     }
 
     /// A remote as git takes it — a URL, a scp-style `[user@]host:path`
-    /// or a path — ready for libgit2. URLs and scp-style remotes pass
-    /// through exactly as typed; a relative path resolves against
+    /// or a path — ready for libgit2, and authorized by where libgit2 will
+    /// connect. git first rewrites the remote as typed by
+    /// `url.<base>.insteadOf` (from the repository at `repository`, or
+    /// the default configuration for a clone), a relative path included,
+    /// and only then reads it as a URL or a path. A URL goes to libgit2
+    /// as typed, to be rewritten the same way; a path resolves against
     /// `directory`, else the shell's working directory, since libgit2
-    /// would read it relative to the process's. libgit2 then applies
-    /// `url.<base>.insteadOf` from the repository at `repository` (or the
-    /// default configuration, for a clone), so what's authorized is
-    /// where it connects after that.
+    /// would read a relative one against the process's.
     func remoteForLibgit2(
         _ remote: String, relativeTo directory: String? = nil,
         for use: RemoteUse = .fetch, in repository: URL? = nil
     ) async throws -> String {
+        func location(of spelling: String) throws -> String {
+            try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+                try Self.effectiveLocation(of: spelling, for: use, in: repository)
+            }
+        }
+        let rewritten = try location(of: remote)
         var spelling = remote
-        if Self.isURLOrSCPLike(remote) {
-            try Self.requireTransport(for: remote)
-        } else {
-            if let directory, Self.isRelativePath(remote) {
+        if !Self.isURLOrSCPLike(rewritten) {
+            spelling = rewritten
+            if let directory, Self.isRelativePath(rewritten) {
                 // Joined in the shell's spelling of the directory, so a
                 // sandbox's path mapping applies to the result as it does
                 // to any path a script names.
                 var base = Shell.displayPath(for: directory)
                 while base.count > 1, base.hasSuffix("/") { base.removeLast() }
-                spelling = base.hasSuffix("/") ? base + remote : base + "/" + remote
+                spelling = base.hasSuffix("/") ? base + rewritten : base + "/" + rewritten
             }
             spelling = Shell.resolve(spelling).path
         }
-        let source = spelling
-        let location = try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
-            try Self.effectiveLocation(of: source, for: use, in: repository)
-        }
-        try await Self.authorize(location: location)
+        try await Self.authorize(location: location(of: spelling))
         return spelling
     }
 
