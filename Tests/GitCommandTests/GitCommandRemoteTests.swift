@@ -42,12 +42,22 @@ struct GitCommandRemoteTests {
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Turns git's push hints on in `repo`'s own config, which outranks a
+    /// global one: CI's macOS runner image switches them off globally.
+    private func enablePushAdvice(in repo: URL) throws {
+        for key in PushRejectionAdvice.Switches.keys {
+            try systemGit(["config", "advice.\(key)", "true"], in: repo)
+        }
+    }
+
     /// SwiftPorts' `git`, run in a shell whose working directory is `dir`.
     @discardableResult
-    private func git(_ args: [String], in dir: URL) async throws -> (stdout: String, stderr: String) {
+    private func git(
+        _ args: [String], in dir: URL, environment variables: [String: String] = [:]
+    ) async throws -> (stdout: String, stderr: String) {
         let out = OutputSink(), err = OutputSink()
         let shell = Shell(stdout: out, stderr: err,
-                          environment: Environment(workingDirectory: dir.path))
+                          environment: Environment(variables: variables, workingDirectory: dir.path))
         try await shell.withCurrent {
             let parsed = try GitCommand.parseAsRoot(args)
             if var command = parsed as? AsyncParsableCommand {
@@ -327,6 +337,192 @@ struct GitCommandRemoteTests {
         try await git(["fetch", "-q"], in: clone)
         #expect(try systemGit(["rev-parse", "refs/remotes/upstream/main"], in: clone)
                 == systemGit(["rev-parse", "main"], in: remote))
+    }
+
+    @Test("a push git refuses fails with git's verdict and advice")
+    func pushRejected() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("theirs.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try commitFile("mine.txt", in: clone)
+        try enablePushAdvice(in: clone)
+        let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        // With -q, git still shows the summary of a failed push.
+        do {
+            try await git(["push", "-q"], in: clone)
+            Issue.record("expected git push -q to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == [
+                "To \(url)",
+                " ! [rejected]        main -> main (fetch first)",
+                "error: failed to push some refs to '\(url)'",
+                "hint: Updates were rejected because the remote contains work that you do not",
+                "hint: have locally. This is usually caused by another repository pushing to",
+                "hint: the same ref. If you want to integrate the remote changes, use",
+                "hint: 'git pull' before pushing again.",
+                "hint: See the 'Note about fast-forwards' in 'git push --help' for details."
+            ])
+            #expect(error.exitCode == 1)
+        }
+
+        // Once fetched, the current branch is behind its remote counterpart.
+        try systemGit(["fetch", "-q"], in: clone)
+        do {
+            try await git(["push"], in: clone)
+            Issue.record("expected git push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.first == "error: failed to push some refs to '\(url)'")
+            #expect(error.lines.dropFirst().first
+                    == "hint: Updates were rejected because the tip of your current branch is behind")
+        }
+        #expect(try systemGit(["rev-parse", "main"], in: remote)
+                == systemGit(["rev-parse", "main"], in: other))
+    }
+
+    @Test("-u to a path records it as typed for the refs a partly refused push sent")
+    func pushRejectedSetsTypedUpstream() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let mirror = tmp("GitRemoteMirror")
+        try systemGit(["init", "-q", "--bare", "-b", "main", mirror.path], in: clone)
+        try systemGit(["push", "-q", mirror.path, "main"], in: clone)
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", mirror.path, other.path], in: clone)
+        try commitFile("theirs.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try commitFile("mine.txt", in: clone)
+        try systemGit(["branch", "dev"], in: clone)
+
+        let relative = "../\(mirror.lastPathComponent)"
+        await #expect(throws: CLIError.self) {
+            try await git(["push", "-u", relative, "main", "dev"], in: clone)
+        }
+        #expect(try systemGit(["rev-parse", "dev"], in: mirror)
+                == systemGit(["rev-parse", "dev"], in: clone))
+        #expect(try systemGit(["config", "branch.dev.remote"], in: clone) == relative)
+        #expect(try systemGit(["config", "branch.main.remote"], in: clone) == "origin")
+    }
+
+    @Test("git's advice switches turn a refused push's hints off")
+    func pushRejectedAdviceSwitches() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("theirs.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try commitFile("mine.txt", in: clone)
+        func hints(_ environment: [String: String] = [:]) async throws -> [String] {
+            do {
+                try await git(["push"], in: clone, environment: environment)
+                Issue.record("expected git push to fail")
+            } catch let error as CLIError {
+                #expect(error.lines.contains { $0.hasPrefix("error: failed to push some refs to ") })
+                return error.lines.filter { $0.hasPrefix("hint: ") }
+            }
+            return []
+        }
+        try enablePushAdvice(in: clone)
+        #expect(try await hints().count == 5)
+        #expect(try await hints(["GIT_ADVICE": "0"]).isEmpty)
+        #expect(try await hints(["GIT_ADVICE": "00"]).isEmpty)
+        #expect(try await hints(["GIT_ADVICE": ""]).isEmpty)
+        #expect(try await hints(["GIT_ADVICE": "YES"]).count == 5)
+        #expect(try await hints(["GIT_ADVICE": "-1"]).count == 5)
+        // A value that's no boolean is git's error once a hint is due:
+        // after the push's own error, in place of the hints.
+        do {
+            try await git(["push"], in: clone, environment: ["GIT_ADVICE": "bogus"])
+            Issue.record("expected git push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.count == 2)
+            #expect(error.lines.first?.hasPrefix("error: failed to push some refs to ") == true)
+            #expect(error.lines.last == "fatal: bad boolean environment value 'bogus' for 'GIT_ADVICE'")
+            #expect(error.exitCode == 128)
+        }
+        // A refusal git gives no hint for never reads it.
+        do {
+            try await git(["push", "origin", "mian"], in: clone, environment: ["GIT_ADVICE": "bogus"])
+            Issue.record("expected git push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.first == "error: src refspec mian does not match any")
+            #expect(error.exitCode == 1)
+        }
+        // Nor does a push that goes through.
+        try await git(["push", "origin", "main:refs/heads/elsewhere"], in: clone,
+                      environment: ["GIT_ADVICE": "bogus"])
+        for key in ["pushFetchFirst", "pushUpdateRejected", "pushNonFastForward"] {
+            try systemGit(["config", "advice.\(key)", "false"], in: clone)
+            #expect(try await hints().isEmpty, "\(key)")
+            try systemGit(["config", "advice.\(key)", "true"], in: clone)
+        }
+        // Another hint's switch leaves this one on; a bad value is git's error.
+        try systemGit(["config", "advice.pushNeedsForce", "false"], in: clone)
+        #expect(try await hints().count == 5)
+        try systemGit(["config", "advice.pushFetchFirst", "bogus"], in: clone)
+        do {
+            try await git(["push"], in: clone)
+            Issue.record("expected git push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == ["fatal: bad boolean config value 'bogus' for 'advice.pushfetchfirst'"])
+        }
+    }
+
+    @Test("a destination git can't complete reads as git's, hint and all")
+    func pushUnqualifiedDestination() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        try commitFile("two.txt", in: clone)
+        let expected = [
+            "error: The destination you provided is not a full refname (i.e.,",
+            "starting with \"refs/\"). We tried to guess what you meant by:",
+            "",
+            "- Looking for a ref that matches 'x2' on the remote side.",
+            "- Checking if the <src> being pushed ('HEAD^')",
+            "  is a ref in \"refs/{heads,tags}/\". If so we add a corresponding",
+            "  refs/{heads,tags}/ prefix on the remote side.",
+            "",
+            "Neither worked, so we gave up. You must fully qualify the ref.",
+            "hint: The <src> part of the refspec is a commit object.",
+            "hint: Did you mean to create a new branch by pushing to",
+            "hint: 'HEAD^:refs/heads/x2'?",
+            "error: failed to push some refs to '\(url)'"
+        ]
+        for unqualifiedAdvice in [true, false] {
+            if !unqualifiedAdvice {
+                try systemGit(["config", "advice.pushUnqualifiedRefName", "false"], in: clone)
+            }
+            do {
+                try await git(["push", "origin", "HEAD^:x2"], in: clone)
+                Issue.record("expected git push to fail")
+            } catch let error as CLIError {
+                #expect(error.lines == expected.filter { unqualifiedAdvice || !$0.hasPrefix("hint: ") })
+                #expect(error.exitCode == 1)
+            }
+        }
+    }
+
+    @Test("a push refused before it starts reads as git's")
+    func pushRefusedUpFront() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        try systemGit(["branch", "dev"], in: clone)
+        for (refspecs, reason) in [
+            (["mian"], "src refspec mian does not match any"),
+            (["main:refs/heads/main", "dev:refs/heads/main"],
+             "dst ref refs/heads/main receives from more than one src"),
+            ([":nope"], "unable to delete 'nope': remote ref does not exist"),
+            // Every refusal, as git lists them.
+            (["mian", "mian2"], "src refspec mian does not match any\nerror: src refspec mian2 does not match any")
+        ] {
+            do {
+                try await git(["push", "origin"] + refspecs, in: clone)
+                Issue.record("expected git push \(refspecs) to fail")
+            } catch let error as CLIError {
+                #expect(error.lines == "error: \(reason)".components(separatedBy: "\n")
+                        + ["error: failed to push some refs to '\(url)'"])
+            }
+        }
     }
 
     @Test("git fetch and push take a URL or path for <repository>")

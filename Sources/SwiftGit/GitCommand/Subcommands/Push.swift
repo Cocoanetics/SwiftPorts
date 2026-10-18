@@ -47,18 +47,30 @@ struct Push: AsyncParsableCommand {
             ? try await DefaultPush.plan(client: client, remote: remoteName, settings: settings)
             : DefaultPush.Plan(remote: remoteName ?? "origin", refspecs: refspecs, setUpstream: false)
         let upstream = setUpstream || plan.setUpstream
-        let pushed: [String]
         do {
-            pushed = try await client.push(
+            let pushed = try await client.push(
                 remote: plan.remote, refspecs: plan.refspecs, setUpstream: upstream)
+            reportUpstreams(of: pushed, remote: plan.remote, upstream: upstream)
+        } catch let rejected as PushRejectedError {
+            // The refs that went through still got their upstream.
+            reportUpstreams(of: rejected.pushed, remote: plan.remote, upstream: upstream)
+            throw PushRejectionAdvice.error(
+                for: rejected, currentBranch: try? await client.currentBranch(), quiet: quiet,
+                switches: settings.advice)
         } catch let error as UnsupportedTransportError {
             throw CLIError(error)
+        } catch let refused as PushRefusedError {
+            // Refused before anything was sent, in git's words.
+            throw PushRejectionAdvice.error(for: refused, switches: settings.advice)
         }
-        // Like git, confirm each upstream recorded, for a URL or path too.
+    }
+
+    /// Like git, confirm each upstream `-u` recorded, for a URL or path too.
+    private func reportUpstreams(of pushed: [String], remote: String, upstream: Bool) {
         guard upstream, !quiet else { return }
         for refspec in pushed {
             guard let (local, remoteBranch) = Self.branchNames(in: refspec) else { continue }
-            Shell.print("branch '\(local)' set up to track '\(plan.remote)/\(remoteBranch)'.")
+            Shell.print("branch '\(local)' set up to track '\(remote)/\(remoteBranch)'.")
         }
     }
 
@@ -104,6 +116,8 @@ enum DefaultPush {
         /// Whether `branch.autoSetupMerge` is `simple`, which drops the
         /// advice about it.
         let autoSetupMergeIsSimple: Bool
+        /// Which hints a refused push gets (`GIT_ADVICE`, `advice.push*`).
+        let advice: PushRejectionAdvice.Switches
         var mode: String { configuredMode ?? "simple" }
 
         init(client: SwiftGit.GitClient) async throws {
@@ -126,6 +140,15 @@ enum DefaultPush {
                     _ = try await client.configBool("branch.autoSetupMerge")
                 }
                 autoSetupMergeIsSimple = autoSetupMerge == "simple"
+                var advice = PushRejectionAdvice.Switches()
+                for key in PushRejectionAdvice.Switches.keys {
+                    if try await client.configBool("advice.\(key)") == false {
+                        advice.off.insert(key.lowercased())
+                    }
+                }
+                // `GIT_ADVICE` is a boolean, read once a hint is due.
+                advice.environment = Shell.current.environment["GIT_ADVICE"]
+                self.advice = advice
             } catch let error as Libgit2Error {
                 throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)
             }
