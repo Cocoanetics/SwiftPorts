@@ -47,18 +47,26 @@ struct Push: AsyncParsableCommand {
             ? try await DefaultPush.plan(client: client, remote: remoteName, settings: settings)
             : DefaultPush.Plan(remote: remoteName ?? "origin", refspecs: refspecs, setUpstream: false)
         let upstream = setUpstream || plan.setUpstream
-        let pushed: [String]
         do {
-            pushed = try await client.push(
+            let pushed = try await client.push(
                 remote: plan.remote, refspecs: plan.refspecs, setUpstream: upstream)
+            reportUpstreams(of: pushed, remote: plan.remote, upstream: upstream)
+        } catch let rejected as PushRejectedError {
+            // The refs that went through still got their upstream.
+            reportUpstreams(of: rejected.pushed, remote: plan.remote, upstream: upstream)
+            throw PushRejectionAdvice.error(
+                for: rejected, currentBranch: try? await client.currentBranch(), quiet: quiet)
         } catch let error as UnsupportedTransportError {
             throw CLIError(error)
         }
-        // Like git, confirm each upstream recorded, for a URL or path too.
+    }
+
+    /// Like git, confirm each upstream `-u` recorded, for a URL or path too.
+    private func reportUpstreams(of pushed: [String], remote: String, upstream: Bool) {
         guard upstream, !quiet else { return }
         for refspec in pushed {
             guard let (local, remoteBranch) = Self.branchNames(in: refspec) else { continue }
-            Shell.print("branch '\(local)' set up to track '\(plan.remote)/\(remoteBranch)'.")
+            Shell.print("branch '\(local)' set up to track '\(remote)/\(remoteBranch)'.")
         }
     }
 

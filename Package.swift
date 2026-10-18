@@ -422,9 +422,11 @@ let package = Package(
         // path, which `git clone`, `remote add|set-url`, `fetch` and `push`
         // rely on. GitKit 2.4.0 fetches and pushes a set of refspecs at
         // once (negative, pattern and matching refspecs), which `git fetch`
-        // and `git push` need to apply them as git does.
+        // and `git push` need to apply them as git does. GitKit 2.5.0
+        // pushes what git's rules allow and reports the rest as
+        // `PushRejectedError`, which `git push` turns into git's verdict.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.4.0",
+                 from: "2.5.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface

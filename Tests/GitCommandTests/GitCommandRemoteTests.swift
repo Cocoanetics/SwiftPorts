@@ -329,6 +329,47 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "main"], in: remote))
     }
 
+    @Test("a push git refuses fails with git's verdict and advice")
+    func pushRejected() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("theirs.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try commitFile("mine.txt", in: clone)
+        let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        // With -q, git still shows the summary of a failed push.
+        do {
+            try await git(["push", "-q"], in: clone)
+            Issue.record("expected git push -q to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == [
+                "To \(url)",
+                " ! [rejected]        main -> main (fetch first)",
+                "error: failed to push some refs to '\(url)'",
+                "hint: Updates were rejected because the remote contains work that you do not",
+                "hint: have locally. This is usually caused by another repository pushing to",
+                "hint: the same ref. If you want to integrate the remote changes, use",
+                "hint: 'git pull' before pushing again.",
+                "hint: See the 'Note about fast-forwards' in 'git push --help' for details."
+            ])
+            #expect(error.exitCode == 1)
+        }
+
+        // Once fetched, the current branch is behind its remote counterpart.
+        try systemGit(["fetch", "-q"], in: clone)
+        do {
+            try await git(["push"], in: clone)
+            Issue.record("expected git push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.first == "error: failed to push some refs to '\(url)'")
+            #expect(error.lines.dropFirst().first
+                    == "hint: Updates were rejected because the tip of your current branch is behind")
+        }
+        #expect(try systemGit(["rev-parse", "main"], in: remote)
+                == systemGit(["rev-parse", "main"], in: other))
+    }
+
     @Test("git fetch and push take a URL or path for <repository>")
     func fetchAndPushAPath() async throws {
         let (remote, clone) = try makeRemoteAndClone()
