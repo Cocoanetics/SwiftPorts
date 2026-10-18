@@ -146,10 +146,8 @@ enum DefaultPush {
                         advice.off.insert(key.lowercased())
                     }
                 }
-                // `GIT_ADVICE` is read as a boolean; empty is false.
-                if let value = Shell.current.environment["GIT_ADVICE"] {
-                    advice.global = try GitClient.parseGitBoolEnvironment(value, name: "GIT_ADVICE")
-                }
+                // `GIT_ADVICE` is a boolean, read once a hint is due.
+                advice.environment = Shell.current.environment["GIT_ADVICE"]
                 self.advice = advice
             } catch let error as Libgit2Error {
                 throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)

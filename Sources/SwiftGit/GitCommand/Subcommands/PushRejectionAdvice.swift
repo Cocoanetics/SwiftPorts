@@ -14,20 +14,33 @@ enum PushRejectionAdvice {
             "pushNonFFMatching", "pushAlreadyExists", "pushFetchFirst", "pushNeedsForce",
             "pushUnqualifiedRefName"
         ]
-        var global = true
+        /// `GIT_ADVICE` as set. Like git (`advice_enabled`), it is read
+        /// only once a hint is up for showing, and a value that's no
+        /// boolean is fatal then, not before.
+        var environment: String?
         /// Keys configured false, lowercased as git compares them.
         var off: Set<String> = []
 
         /// A rejected push's hint: its own switch and the umbrella one.
-        func enabled(_ key: String) -> Bool {
-            enabledAlone(key) && !["pushUpdateRejected", "pushNonFastForward"]
+        func enabled(_ key: String) throws -> Bool {
+            try enabledAlone(key) && !["pushUpdateRejected", "pushNonFastForward"]
                 .contains { off.contains($0.lowercased()) }
         }
 
         /// A hint only its own switch governs.
-        func enabledAlone(_ key: String) -> Bool {
-            global && !off.contains(key.lowercased())
+        func enabledAlone(_ key: String) throws -> Bool {
+            if let environment, try !GitClient.parseGitBoolEnvironment(environment, name: "GIT_ADVICE") {
+                return false
+            }
+            return !off.contains(key.lowercased())
         }
+    }
+
+    /// `lines` and git's verdict on a bad `GIT_ADVICE`, which it reaches
+    /// once the push's own errors are out.
+    private static func fatal(_ error: Error, after lines: [String]) -> CLIError {
+        let message = (error as? Libgit2Error)?.message ?? "\(error)"
+        return CLIError.stderr(lines + ["fatal: \(message)"], exitCode: 128)
     }
 
     /// The error for a push git refused before sending anything: each
@@ -39,8 +52,12 @@ enum PushRejectionAdvice {
             let message = refusal.message.split(separator: "\n", omittingEmptySubsequences: false)
             lines.append("error: \(message.first ?? "")")
             lines += message.dropFirst().map(String.init)
-            if let key = refusal.adviceKey, switches.enabledAlone(key) {
-                lines += refusal.hint.map { "hint: \($0)" }
+            if let key = refusal.adviceKey {
+                do {
+                    if try switches.enabledAlone(key) { lines += refusal.hint.map { "hint: \($0)" } }
+                } catch {
+                    return fatal(error, after: lines)
+                }
             }
         }
         lines.append("error: failed to push some refs to '\(refused.url)'")
@@ -59,8 +76,12 @@ enum PushRejectionAdvice {
             : []
         lines.append("error: failed to push some refs to '\(rejected.url)'")
         let (key, hint) = advice(for: rejected.rejections, currentBranch: currentBranch)
-        if let key, switches.enabled(key) {
-            lines += hint.map { "hint: \($0)" }
+        if let key {
+            do {
+                if try switches.enabled(key) { lines += hint.map { "hint: \($0)" } }
+            } catch {
+                return fatal(error, after: lines)
+            }
         }
         return CLIError.stderr(lines, exitCode: 1)
     }

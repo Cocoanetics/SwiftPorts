@@ -429,14 +429,28 @@ struct GitCommandRemoteTests {
         #expect(try await hints(["GIT_ADVICE": ""]).isEmpty)
         #expect(try await hints(["GIT_ADVICE": "YES"]).count == 5)
         #expect(try await hints(["GIT_ADVICE": "-1"]).count == 5)
-        // A value that's no boolean is git's error, before anything is sent.
+        // A value that's no boolean is git's error once a hint is due:
+        // after the push's own error, in place of the hints.
         do {
             try await git(["push"], in: clone, environment: ["GIT_ADVICE": "bogus"])
             Issue.record("expected git push to fail")
         } catch let error as CLIError {
-            #expect(error.lines == ["fatal: bad boolean environment value 'bogus' for 'GIT_ADVICE'"])
+            #expect(error.lines.count == 2)
+            #expect(error.lines.first?.hasPrefix("error: failed to push some refs to ") == true)
+            #expect(error.lines.last == "fatal: bad boolean environment value 'bogus' for 'GIT_ADVICE'")
             #expect(error.exitCode == 128)
         }
+        // A refusal git gives no hint for never reads it.
+        do {
+            try await git(["push", "origin", "mian"], in: clone, environment: ["GIT_ADVICE": "bogus"])
+            Issue.record("expected git push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.first == "error: src refspec mian does not match any")
+            #expect(error.exitCode == 1)
+        }
+        // Nor does a push that goes through.
+        try await git(["push", "origin", "main:refs/heads/elsewhere"], in: clone,
+                      environment: ["GIT_ADVICE": "bogus"])
         for key in ["pushFetchFirst", "pushUpdateRejected", "pushNonFastForward"] {
             try systemGit(["config", "advice.\(key)", "false"], in: clone)
             #expect(try await hints().isEmpty, "\(key)")
