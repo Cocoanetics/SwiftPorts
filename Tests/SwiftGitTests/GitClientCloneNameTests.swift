@@ -34,4 +34,20 @@ import Testing
         #expect(GitClient.humanishName(of: #"C:\repos\project.git"#) == #"\repos\project"#)
         #endif
     }
+
+    /// Which `<repository>` paths are joined to the top of the work tree.
+    @Test func relativePathsFollowGit() {
+        #expect(GitClient.isRelativePath("../bare"))
+        #expect(GitClient.isRelativePath("bare.git"))
+        #expect(!GitClient.isRelativePath("/srv/bare.git"))
+        #if os(Windows)
+        #expect(!GitClient.isRelativePath(#"\\server\share\bare.git"#))
+        #expect(!GitClient.isRelativePath(#"\bare.git"#))
+        #expect(!GitClient.isRelativePath(#"C:\bare.git"#))
+        #expect(!GitClient.isRelativePath("C:/bare.git"))
+        #expect(GitClient.isRelativePath(#"..\bare"#))
+        #else
+        #expect(GitClient.isRelativePath(#"\bare.git"#))
+        #endif
+    }
 }

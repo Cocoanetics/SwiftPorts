@@ -56,16 +56,18 @@ struct Fetch: AsyncParsableCommand {
         let (remoteName, refspecs) = RemoteArguments.split(arguments, remote: remote)
         let name: String
         if let remoteName {
+            // git takes an empty repository for no remote at all.
+            guard !remoteName.isEmpty else { return }
             name = remoteName
         } else {
             var branchRemote: String?
             if let branch = try await client.currentBranch() {
                 branchRemote = try await client.configGet("branch.\(branch).remote")
             }
-            let fallback = try await RemoteArguments.defaultRemote(
-                client: client, branchRemote: branchRemote)
-            // Without a configured remote to fall back on, git has
-            // nothing to fetch, and says nothing.
+            let fallback = RemoteArguments.defaultRemote(
+                branchRemote: branchRemote, remotes: try await client.remoteList())
+            // Without a usable remote to fall back on, git has nothing to
+            // fetch, and says nothing.
             guard fallback.isUsable else { return }
             name = fallback.name
         }

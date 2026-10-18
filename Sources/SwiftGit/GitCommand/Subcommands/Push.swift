@@ -39,6 +39,10 @@ struct Push: AsyncParsableCommand {
         let client = CommandContext.gitClient(quiet: quiet)
         let settings = try await DefaultPush.Settings(client: client)
         let (remoteName, refspecs) = RemoteArguments.split(arguments, remote: remote)
+        // An empty repository is never read as a path.
+        if remoteName == "" {
+            throw CLIError.stderr("fatal: bad repository ''", exitCode: 128)
+        }
         let plan = refspecs.isEmpty
             ? try await DefaultPush.plan(client: client, remote: remoteName, settings: settings)
             : DefaultPush.Plan(remote: remoteName ?? "origin", refspecs: refspecs, setUpstream: false)
@@ -124,14 +128,19 @@ enum DefaultPush {
         }
         let upstreamRemote = try await branchConfig("remote")
         let upstreamMerge = try await branchConfig("merge")
-        let fetchRemote = try await RemoteArguments.defaultRemote(
-            client: client, branchRemote: upstreamRemote)
+        let remotes = try await client.remoteList()
         var remote = explicit
         if remote == nil { remote = try await branchConfig("pushRemote") }
         if remote == nil { remote = try await client.configGet("remote.pushDefault") }
-        guard let target = remote ?? (fetchRemote.isUsable ? fetchRemote.name : nil) else {
+        let fallback = RemoteArguments.defaultRemote(branchRemote: upstreamRemote, remotes: remotes)
+        guard let target = remote ?? (fallback.isUsable ? fallback.name : nil), !target.isEmpty else {
             throw noPushDestination()
         }
+        // git counts the remote pushed to among its remotes, a URL or path
+        // too, so with no other remote it is the branch's remote as well.
+        let fetchRemote = RemoteArguments.defaultRemote(
+            branchRemote: upstreamRemote,
+            remotes: remotes.contains(target) ? remotes : remotes + [target])
 
         if try await client.configGet("remote.\(target).push") != nil {
             return Plan(remote: target, refspecs: [], setUpstream: false)
@@ -276,17 +285,16 @@ enum RemoteArguments {
     }
 
     /// The remote git takes for a branch when none is named
-    /// (`remote_for_branch`): the branch's own remote, else the only
-    /// remote configured, else `origin`. Unlike a remote named on the
-    /// command line or in the branch's config, the fallback `origin` has
-    /// to be configured to be used: git never reads it as a path, so a
+    /// (`remote_for_branch`): the branch's own remote, else the only one
+    /// of `remotes`, else `origin`. Unlike a remote named on the command
+    /// line or in the branch's config, the fallback `origin` has to be
+    /// configured to be used: git never reads it as a path, so a
     /// repository in `./origin` is never pushed to or fetched from by
-    /// accident.
+    /// accident. Nor is an empty name ever used.
     static func defaultRemote(
-        client: SwiftGit.GitClient, branchRemote: String?
-    ) async throws -> (name: String, isUsable: Bool) {
-        if let branchRemote { return (branchRemote, true) }
-        let remotes = try await client.remoteList()
+        branchRemote: String?, remotes: [String]
+    ) -> (name: String, isUsable: Bool) {
+        if let branchRemote { return (branchRemote, !branchRemote.isEmpty) }
         if remotes.count == 1 { return (remotes[0], true) }
         return ("origin", remotes.contains("origin"))
     }

@@ -11,6 +11,10 @@ extension GitClient {
     /// work tree, so a relative path is relative to there, wherever in
     /// the tree the shell is.
     func resolveRemoteOperand(_ remote: String) async throws -> String {
+        // Not a path to the top of the work tree, as git sees it too.
+        guard !remote.isEmpty else {
+            throw Libgit2Error(code: -1, klass: 0, message: "bad repository ''")
+        }
         // A URL isn't a valid remote name, so the lookup throws for it.
         if (try? await remoteExists(named: remote)) == true { return remote }
         let top = try await withRepository { try $0.toplevel() ?? $0.gitDir() }
@@ -44,13 +48,13 @@ extension GitClient {
         return path.path
     }
 
-    /// Whether ``ShellKit/Shell/resolve(_:)`` reads `path` relative to
-    /// the working directory.
+    /// Whether git reads `path` as relative (`is_absolute_path`): on
+    /// Windows, a leading backslash (`\repo`, `\\server\share`) or a drive
+    /// letter (`C:\repo`, `C:/repo`) roots it too.
     static func isRelativePath(_ path: String) -> Bool {
         if path.hasPrefix("/") { return false }
         #if os(Windows)
-        // `C:\repo` or `C:/repo`: a drive letter.
-        if path.dropFirst().first == ":" { return false }
+        if path.hasPrefix("\\") || path.dropFirst().first == ":" { return false }
         #endif
         return true
     }

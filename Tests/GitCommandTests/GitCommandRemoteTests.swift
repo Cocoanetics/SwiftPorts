@@ -400,6 +400,56 @@ struct GitCommandRemoteTests {
             atPath: clone.appendingPathComponent(".git/FETCH_HEAD").path))
     }
 
+    @Test("a path pushed to counts as a remote: with no other, simple wants an upstream")
+    func pushPathWithoutUpstream() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let mirror = tmp("GitRemoteMirror")
+        try systemGit(["init", "-q", "--bare", "-b", "main", mirror.path], in: clone)
+        try systemGit(["switch", "-q", "-c", "topic"], in: clone)
+        // With origin configured, a push to a path is triangular.
+        try await git(["push", "-q", mirror.path], in: clone)
+        #expect(try systemGit(["rev-parse", "topic"], in: mirror)
+                == systemGit(["rev-parse", "HEAD"], in: clone))
+
+        // As the only remote, the path is the branch's remote too.
+        try systemGit(["remote", "remove", "origin"], in: clone)
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        do {
+            try await git(["push", mirror.path], in: clone)
+            Issue.record("expected git push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.first == "fatal: The current branch lonely has no upstream branch.")
+            #expect(error.lines.contains("    git push --set-upstream \(mirror.path) lonely"))
+        }
+    }
+
+    @Test("an empty repository is no remote at all")
+    func emptyRepository() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        for args in [["push", ""], ["push", "", "main"]] {
+            do {
+                try await git(args, in: clone)
+                Issue.record("expected git push '' to fail")
+            } catch let error as CLIError {
+                #expect(error.lines == ["fatal: bad repository ''"])
+                #expect(error.exitCode == 128)
+            }
+        }
+        let fetched = try await git(["fetch", ""], in: clone)
+        #expect(fetched.stdout.isEmpty && fetched.stderr.isEmpty)
+
+        try systemGit(["config", "branch.main.remote", ""], in: clone)
+        _ = try await git(["fetch"], in: clone)
+        #expect(!FileManager.default.fileExists(
+            atPath: clone.appendingPathComponent(".git/FETCH_HEAD").path))
+        do {
+            try await git(["push"], in: clone)
+            Issue.record("expected git push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.first == "fatal: No configured push destination.")
+        }
+    }
+
     @Test("git refuses a bad push.default before anything else")
     func pushSettingsComeFirst() async throws {
         let (_, clone) = try makeRemoteAndClone()
