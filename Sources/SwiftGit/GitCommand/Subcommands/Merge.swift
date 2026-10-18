@@ -143,9 +143,19 @@ struct Merge: AsyncParsableCommand {
                 case .conflict(let path):
                     Shell.print("Auto-merging \(path)")
                     error("ERROR: content conflict in \(path)")
-                case .addedInBoth(let path):
+                case .addedInBoth(let path, let emptyBlobMissing):
                     Shell.print("Added \(path) in both, but differently.")
+                    if emptyBlobMissing {
+                        // git-merge-one-file reads an empty blob it never wrote.
+                        error("fatal: unable to read blob object e69de29bb2d1d6434b8b29ae775ad8c2e48c5391")
+                        error("error: Could not stat : No such file or directory")
+                    }
                     error("ERROR: content conflict in \(path)")
+                case .addedOverDirectory(let path, let file):
+                    Shell.print("Adding \(path)")
+                    error("error: '\(file)' appears as both a file and as a directory")
+                    error("error: \(file): cannot add to the index - missing --add option?")
+                    error("fatal: git update-index: --cacheinfo cannot add \(file)")
                 case .notHandled(let path, let base, let ours, let theirs):
                     error("ERROR: \(path): Not handling case \(base) -> \(ours) -> \(theirs)")
                 }
