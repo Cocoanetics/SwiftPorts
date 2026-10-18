@@ -64,7 +64,8 @@ public struct GitCommand: AsyncParsableCommand {
     /// - `-U<n>` becomes `-U <n>` for `diff`.
     /// - `-<n>` becomes `-n <n>` for `log`.
     /// - `-n` becomes `--no-tags` for `fetch`, git's short spelling,
-    ///   which ArgumentParser can't give an inverted flag.
+    ///   which ArgumentParser can't give an inverted flag; a cluster of
+    ///   fetch's flags holding it (`-qn`) is spelled out flag by flag.
     /// - For `push`, a bare `--force-with-lease` and
     ///   `--no-force-with-lease` (and an empty `--force-with-lease=`,
     ///   which ArgumentParser reads as no value) become values of the one
@@ -104,9 +105,14 @@ public struct GitCommand: AsyncParsableCommand {
                 out.append(String(arg.dropFirst()))
             } else if !afterDoubleDash, subcommand == "push", arg == "--force-with-lease" {
                 out.append("--force-with-lease=\(Push.leaseAll)")
-            } else if !afterDoubleDash, subcommand == "fetch", arg == "-n" {
-                // git fetch's short --no-tags.
-                out.append("--no-tags")
+            } else if !afterDoubleDash, subcommand == "fetch", arg.count > 1, arg.hasPrefix("-"),
+                      !arg.hasPrefix("--"), arg.dropFirst().contains("n"),
+                      arg.dropFirst().allSatisfy({ "pqtn".contains($0) }) {
+                // git fetch's short --no-tags, alone or among the other
+                // flags of a cluster (`-qn`, `-tn`), in order.
+                for flag in arg.dropFirst() {
+                    out.append(flag == "n" ? "--no-tags" : "-\(flag)")
+                }
             } else if !afterDoubleDash, subcommand == "push", arg == "--force-with-lease=" {
                 out.append("--force-with-lease=\(Push.leaseEmpty)")
             } else if !afterDoubleDash, subcommand == "push", arg == "--no-force-with-lease" {

@@ -1110,6 +1110,10 @@ struct GitCommandRemoteTests {
         try systemGit(["tag", "-d", "v2", "vside"], in: clone)
         try await git(["fetch", "-q", "-t", "-n"], in: clone)
         #expect(try tags(clone).isEmpty)
+        try await git(["fetch", "-qtn"], in: clone)
+        #expect(try tags(clone).isEmpty)
+        try await git(["fetch", "-qnt"], in: clone)
+        #expect(try tags(clone) == ["v2", "vside"])
     }
 
     @Test("remote.<name>.tagOpt --tags fetches every tag, --no-tags none")
