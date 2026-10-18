@@ -1526,6 +1526,22 @@ struct GitCommandRemoteTests {
             try await expectLikeGit(["pull", "-q", "--no-rebase", "origin"] + refs, in: clone)
             #expect(try systemGit(["log", "-1", "--format=%s"], in: clone) == subject + " " + remote, "\(refs)")
         }
+
+        // Annotated tags' messages follow, each under a comment naming it.
+        try systemGit(["tag", "-a", "ta", "-m", "tag A", "a"], in: clone)
+        try systemGit(["tag", "-a", "tb", "-m", "tag B", "b"], in: clone)
+        try systemGit(["push", "-q", "origin", "ta", "tb"], in: clone)
+        try systemGit(["reset", "-q", "--hard", start], in: clone)
+        try await expectLikeGit(["pull", "-q", "--no-rebase", "origin", "ta", "tb"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%B"], in: clone) == """
+            Merge tags 'ta' and 'tb' of \(remote)
+
+            # tag 'ta' of \(remote)
+            tag A
+
+            # tag 'tb' of \(remote)
+            tag B
+            """)
     }
 
     @Test("git pull of several heads refuses as git does: rebasing, --ff-only, an unconfigured pull")

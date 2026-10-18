@@ -184,15 +184,17 @@ extension GitClient {
                 return String(description[..<of.upperBound]) + repository
             }
         }
-        return try await mergeMessage(describing: descriptions)
+        return try await mergeMessage(describing: descriptions, objects: heads.map(\.oid))
     }
 
     /// The merge commit message git writes (`fmt-merge-msg`) for heads
     /// that `FETCH_HEAD` or ``mergeName(_:)`` describe, with ` into
     /// <branch>` unless `merge.suppressDest` (by default `main` and
-    /// `master`) matches the current branch.
-    public func mergeMessage(describing descriptions: [String]) async throws -> String {
-        let subject = Self.mergeTitle(descriptions.map(Self.describingURLAsGit))
+    /// `master`) matches the current branch. With the heads' `objects`,
+    /// annotated tags' messages follow.
+    public func mergeMessage(describing descriptions: [String], objects: [String] = []) async throws -> String {
+        let origins = descriptions.map(Self.describingURLAsGit)
+        let subject = Self.mergeTitle(origins)
         let branch = try await currentBranch() ?? "HEAD"
         var patterns = ["main", "master"]
         var configured = false
@@ -203,12 +205,20 @@ extension GitClient {
         }
         let title = patterns.contains(where: { Self.glob($0, matches: branch) })
             ? subject : subject + " into " + branch
-        // An annotated tag's message follows, as fmt_merge_msg_sigs adds
-        // it (its signature left out).
-        guard head.description.hasPrefix("tag '"),
-              let message = try await annotatedTagMessage(head.oid), !message.isEmpty
-        else { return title }
-        return title + "\n\n" + message
+        // Annotated tags' messages follow, as fmt_merge_msg_sigs adds
+        // them (signatures left out): one alone, several each under a
+        // comment naming it.
+        var tags: [(origin: String, message: String)] = []
+        for (origin, object) in zip(origins, objects) where origin.hasPrefix("tag '") {
+            if let message = try await annotatedTagMessage(object), !message.isEmpty {
+                tags.append((origin, message))
+            }
+        }
+        guard tags.count > 1 else { return tags.first.map { title + "\n\n" + $0.message } ?? title }
+        let commentSetting = try await configList()
+            .last { ["core.commentchar", "core.commentstring"].contains($0.name.lowercased()) }?.value
+        let comment = commentSetting.flatMap { $0.isEmpty || $0.lowercased() == "auto" ? nil : $0 } ?? "#"
+        return title + tags.map { "\n\n\(comment) \($0.origin)\n\($0.message)" }.joined()
     }
 
     /// The message of annotated tag object `oid`, without a signature
