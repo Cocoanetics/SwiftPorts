@@ -121,6 +121,8 @@ import ShellKit
         }
     }
 
+    // POSIX paths throughout (`realpath`, `../` joins).
+    #if !os(Windows)
     /// git opens a configured relative remote from the top of the work
     /// tree, and so does libgit2 now: the gate authorizes that location,
     /// the one GitKit connects to, never the path as read from the
@@ -182,6 +184,7 @@ import ShellKit
             }
         }
     }
+    #endif
 
     @Test func cloneOfBracketedIPv6RemoteIsJudgedByHost() async throws {
         let root = FileManager.default.temporaryDirectory
