@@ -133,6 +133,7 @@ struct Pull: AsyncParsableCommand {
             // Without an upstream, git merges the first refspec if it
             // isn't a pattern.
             var firstIsExact = false
+            var firstIsBlank = false
             var mappings: [String] = []
             if remotes.contains(fetchFrom) {
                 // Section and key in any case, the remote's name as is.
@@ -142,12 +143,13 @@ struct Pull: AsyncParsableCommand {
                           name.lowercased().hasPrefix("remote."), name.lowercased().hasSuffix(".fetch")
                     else { return false }
                     return name.dropFirst(7).dropLast(6) == fetchFrom
-                }.map(\.value).filter { !$0.isEmpty }
-                let key = "remote.\(fetchFrom).fetch"
-                mapped = !values.isEmpty
-                mappings = values
-                if !mapped { blank = try await client.configGet(key) != nil }
+                }.map(\.value)
+                mappings = values.filter { !$0.isEmpty }
+                mapped = !mappings.isEmpty
+                blank = !mapped && !values.isEmpty
+                // An empty refspec, first, is an exact one: the remote's HEAD.
                 firstIsExact = values.first.map { !$0.contains("*") } ?? false
+                firstIsBlank = mapped && values.first == ""
             }
             let upstreamHere = upstreamMerge != nil && fetchFrom == branchRemote
             if refspecs.isEmpty, !mapped, upstreamHere, let upstreamMerge {
@@ -164,6 +166,9 @@ struct Pull: AsyncParsableCommand {
             if refspecs.isEmpty, mapped, upstreamHere, let upstreamMerge,
                !Self.refspecs(mappings, fetch: upstreamMerge) {
                 try await client.fetch(remote: fetchFrom, refspecs: [upstreamMerge], depth: nil)
+            } else if refspecs.isEmpty, upstreamMerge == nil, firstIsBlank {
+                // GitKit skips the empty refspec; git merges the HEAD it fetches.
+                try await client.fetch(remote: fetchFrom, refspecs: ["HEAD"], depth: nil)
             }
         }
         let heads = wantsMerge ? try await client.fetchHeadEntries().filter(\.isMerge) : []
