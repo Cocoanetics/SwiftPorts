@@ -222,6 +222,15 @@ struct Merge: AsyncParsableCommand {
         case .conflicts:
             Shell.print("Automatic merge failed; fix conflicts and then commit the result.")
             throw CLIError.stderr([], exitCode: 1)
+        case .headLocked(let lockFile):
+            // The merge is staged for `git commit`; HEAD couldn't move.
+            if !quiet { Shell.print("Merge made by the 'octopus' strategy.") }
+            throw CLIError.stderr([
+                "fatal: update_ref failed for ref 'HEAD': cannot lock ref 'HEAD': Unable to create '"
+                    + asSeen(lockFile) + "': File exists.",
+                "",
+                "Another git process seems to be running in this repository, or the lock file may be stale",
+            ], exitCode: 128)
         case .failed(let failure):
             switch failure {
             case .localChanges(let paths):
@@ -246,6 +255,28 @@ struct Merge: AsyncParsableCommand {
                 throw CLIError.stderr(failed, exitCode: 2)
             }
         }
+    }
+
+    /// `path`, which libgit2 gives with symbolic links resolved, as git
+    /// spells it: below the working directory (or one of its parents) as
+    /// that is spelled, `/var/…` rather than `/private/var/…`.
+    static func asSeen(_ path: String) -> String {
+        func resolved(_ path: String) -> String? {
+            guard let real = realpath(path, nil) else { return nil }
+            defer { free(real) }
+            return String(cString: real)
+        }
+        // The working directory as git spells it: $PWD where it names
+        // the same directory.
+        var directory = CommandContext.currentDirectory.path
+        if let pwd = Shell.env("PWD"), resolved(pwd) != nil, resolved(pwd) == resolved(directory) { directory = pwd }
+        while directory.count > 1 {
+            if let real = resolved(directory), path.hasPrefix(real + "/") {
+                return directory + path.dropFirst(real.count)
+            }
+            directory = (directory as NSString).deletingLastPathComponent
+        }
+        return path
     }
 
     /// ` create mode …` and ` delete mode …` lines in path order, as
