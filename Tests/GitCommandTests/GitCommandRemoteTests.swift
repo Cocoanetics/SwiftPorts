@@ -378,7 +378,8 @@ struct GitCommandRemoteTests {
         for (refspecs, reason) in [
             (["mian"], "src refspec mian does not match any"),
             (["main:refs/heads/main", "dev:refs/heads/main"],
-             "dst ref refs/heads/main receives from more than one src")
+             "dst ref refs/heads/main receives from more than one src"),
+            ([":nope"], "unable to delete 'nope': remote ref does not exist")
         ] {
             do {
                 try await git(["push", "origin"] + refspecs, in: clone)

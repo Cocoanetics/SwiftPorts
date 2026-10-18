@@ -59,7 +59,8 @@ struct Push: AsyncParsableCommand {
         } catch let error as UnsupportedTransportError {
             throw CLIError(error)
         } catch let error as Libgit2Error
-            where error.message.hasPrefix("src refspec ") || error.message.hasPrefix("dst ref ") {
+            where ["src refspec ", "dst ref ", "dst refspec ", "unable to delete "]
+                .contains(where: error.message.hasPrefix) {
             // Refused before anything was sent, in git's words.
             throw CLIError.stderr([
                 "error: \(error.message)",
