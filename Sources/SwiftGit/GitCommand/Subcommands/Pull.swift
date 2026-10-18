@@ -54,6 +54,14 @@ struct Pull: AsyncParsableCommand {
     }
 
     func run() async throws {
+        do {
+            try await pull()
+        } catch let error as NoRemoteHelperError {
+            throw CLIError(error)
+        }
+    }
+
+    private func pull() async throws {
         let client = CommandContext.gitClient(quiet: quiet)
 
         if rebase {

@@ -1,16 +1,21 @@
 import Foundation
+import CGitKit
 import ShellKit
 import GitKit
 
 extension GitClient {
+
+    /// Which way a remote is used: a push goes to its push URL.
+    enum RemoteUse { case fetch, push }
 
     /// git's `<repository>` argument as GitKit should see it: a
     /// configured remote's name stays as it is; anything else is a URL
     /// or path (an anonymous remote) — see
     /// ``remoteForLibgit2(_:relativeTo:)``. git works from the top of the
     /// work tree, so a relative path is relative to there, wherever in
-    /// the tree the shell is.
-    func resolveRemoteOperand(_ remote: String) async throws -> String {
+    /// the tree the shell is. A configured remote is authorized like a
+    /// typed one, by where libgit2 will connect for `use`.
+    func resolveRemoteOperand(_ remote: String, for use: RemoteUse = .fetch) async throws -> String {
         // Not a path to the top of the work tree, as git sees it too.
         guard !remote.isEmpty else {
             throw Libgit2Error(code: -1, klass: 0, message: "bad repository ''")
@@ -22,9 +27,63 @@ extension GitClient {
         if Self.hasDrivePrefix(remote) { try Self.requireTransport(for: remote) }
         #endif
         // A URL isn't a valid remote name, so the lookup throws for it.
-        if (try? await remoteExists(named: remote)) == true { return remote }
+        if (try? await remoteExists(named: remote)) == true {
+            let location = try await withRepository { _ in
+                try Self.configuredLocation(of: remote, for: use, in: workingDirectory)
+            }
+            #if os(Windows)
+            if Self.hasDrivePrefix(location) { try Self.requireTransport(for: location) }
+            #endif
+            if Self.isURLOrSCPLike(location) {
+                try Self.requireTransport(for: location)
+                try await Self.authorizeURL(location)
+            } else {
+                // libgit2 reads a configured path as the process's, so
+                // that's the path to authorize.
+                try await Shell.authorize(URL(fileURLWithPath: location))
+            }
+            return remote
+        }
         let top = try await withRepository { try $0.toplevel() ?? $0.gitDir() }
         return try await remoteForLibgit2(remote, relativeTo: top)
+    }
+
+    /// Where libgit2 connects for configured remote `name`: its URL
+    /// (after `url.<base>.insteadOf`), or for a push its push URL when it
+    /// has one, as `git_remote__urlfordirection` picks it. GitKit keeps
+    /// its repository handle to itself, so this opens its own.
+    static func configuredLocation(of name: String, for use: RemoteUse, in directory: URL) throws -> String {
+        var repo: OpaquePointer?
+        var remote: OpaquePointer?
+        defer {
+            git_remote_free(remote)
+            git_repository_free(repo)
+        }
+        try check(git_repository_open_ext(&repo, directory.path, 0, nil))
+        try check(git_remote_lookup(&remote, repo, name))
+        let pushURL = use == .push ? git_remote_pushurl(remote) : nil
+        guard let location = pushURL ?? git_remote_url(remote) else {
+            throw Libgit2Error(code: -1, klass: 0, message: "remote '\(name)' has no URL")
+        }
+        return String(cString: location)
+    }
+
+    /// Authorize a URL or scp-style remote by the host it reaches. One
+    /// `URL(string:)` can't read as typed is read percent-encoded, so a
+    /// sandbox still sees its host; one that still can't be read is
+    /// refused under a sandbox rather than let through.
+    static func authorizeURL(_ remote: String) async throws {
+        let url = URL(string: remote)
+            ?? remote.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed).flatMap(URL.init(string:))
+        guard let url else {
+            guard Shell.current.sandbox == nil else {
+                throw Sandbox.Denial(
+                    url: URL(fileURLWithPath: Shell.unmappedPathSentinel),
+                    reason: "cannot tell which host '\(remote)' reaches")
+            }
+            return
+        }
+        try await Shell.authorize(authorizationURL(forRemote: url))
     }
 
     /// A remote as git takes it — a URL, a scp-style `[user@]host:path`
@@ -36,9 +95,7 @@ extension GitClient {
     func remoteForLibgit2(_ remote: String, relativeTo directory: String? = nil) async throws -> String {
         if Self.isURLOrSCPLike(remote) {
             try Self.requireTransport(for: remote)
-            if let url = URL(string: remote) {
-                try await Shell.authorize(Self.authorizationURL(forRemote: url))
-            }
+            try await Self.authorizeURL(remote)
             return remote
         }
         var spelling = remote

@@ -61,7 +61,7 @@ extension GitClient {
     }
 
     /// Throws libgit2's error for a call that failed with `result`.
-    private static func check(_ result: CInt) throws {
+    static func check(_ result: CInt) throws {
         guard result < 0 else { return }
         let last = git_error_last()
         throw Libgit2Error(
