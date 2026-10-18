@@ -244,7 +244,8 @@ struct Pull: AsyncParsableCommand {
         // An annotated tag fetched outside its natural place
         // (`refs/tags/<name>`) is merged with --no-ff unless told
         // otherwise, as git merges one.
-        if rebasing == .no, fastForward == nil,
+        // Several heads are checked once reduced, below.
+        if rebasing == .no, fastForward == nil, heads.count == 1,
            try await Self.isTagOutsideItsPlace(head, client: client) {
             fastForward = .never
         }

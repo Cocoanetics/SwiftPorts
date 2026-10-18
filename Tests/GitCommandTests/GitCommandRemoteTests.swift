@@ -1645,6 +1645,18 @@ struct GitCommandRemoteTests {
             """)
     }
 
+    @Test("git pull of a tag that reduction drops fast-forwards, as git does")
+    func pullOctopusDroppedTagFastForwards() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        // `old` tags an ancestor of `a`, and stays out of refs/tags here.
+        try systemGit(["tag", "-a", "old", "-m", "old", "origin/main"], in: clone)
+        try systemGit(["push", "-q", "origin", "old"], in: clone)
+        try systemGit(["tag", "-d", "old"], in: clone)
+        try systemGit(["switch", "-q", "-c", "behind", "origin/main"], in: clone)
+        try await expectLikeGit(["pull", "-q", "--no-rebase", "origin", "old", "a"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone) == systemGit(["rev-parse", "origin/a"], in: clone))
+    }
+
     @Test("git pull of several heads refuses as git does: rebasing, --ff-only, an unconfigured pull")
     func pullOctopusRefusals() async throws {
         let clone = try makeOctopusRemoteAndClone()
