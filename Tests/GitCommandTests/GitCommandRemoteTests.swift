@@ -42,6 +42,14 @@ struct GitCommandRemoteTests {
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Turns git's push hints on in `repo`'s own config, which outranks a
+    /// global one: CI's macOS runner image switches them off globally.
+    private func enablePushAdvice(in repo: URL) throws {
+        for key in PushRejectionAdvice.Switches.keys {
+            try systemGit(["config", "advice.\(key)", "true"], in: repo)
+        }
+    }
+
     /// SwiftPorts' `git`, run in a shell whose working directory is `dir`.
     @discardableResult
     private func git(
@@ -339,6 +347,7 @@ struct GitCommandRemoteTests {
         try commitFile("theirs.txt", in: other)
         try systemGit(["push", "-q", "origin", "main"], in: other)
         try commitFile("mine.txt", in: clone)
+        try enablePushAdvice(in: clone)
         let url = try systemGit(["config", "remote.origin.url"], in: clone)
         // With -q, git still shows the summary of a failed push.
         do {
@@ -413,12 +422,13 @@ struct GitCommandRemoteTests {
             }
             return []
         }
+        try enablePushAdvice(in: clone)
         #expect(try await hints().count == 5)
         #expect(try await hints(["GIT_ADVICE": "0"]).isEmpty)
         for key in ["pushFetchFirst", "pushUpdateRejected", "pushNonFastForward"] {
             try systemGit(["config", "advice.\(key)", "false"], in: clone)
             #expect(try await hints().isEmpty, "\(key)")
-            try systemGit(["config", "--unset", "advice.\(key)"], in: clone)
+            try systemGit(["config", "advice.\(key)", "true"], in: clone)
         }
         // Another hint's switch leaves this one on; a bad value is git's error.
         try systemGit(["config", "advice.pushNeedsForce", "false"], in: clone)
