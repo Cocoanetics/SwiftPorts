@@ -8,14 +8,25 @@ extension GitClient {
     /// Which way a remote is used: a push goes to its push URL.
     enum RemoteUse { case fetch, push }
 
+    /// git's `<repository>` argument and where to connect for it.
+    struct RemoteConnection: Equatable {
+        /// The remote as GitKit names it: a configured remote's name, or
+        /// the URL or path as typed, which is what git shows in its
+        /// output and records for `-u`.
+        let remote: String
+        /// Where libgit2 connects, exactly: the location authorized.
+        let location: String
+    }
+
     /// git's `<repository>` argument as GitKit should see it: a
-    /// configured remote's name stays as it is; anything else is a URL
-    /// or path (an anonymous remote) — see
-    /// ``remoteForLibgit2(_:relativeTo:)``. git works from the top of the
-    /// work tree, so a relative path is relative to there, wherever in
-    /// the tree the shell is. A configured remote is authorized like a
-    /// typed one, by where libgit2 will connect for `use`.
-    func resolveRemoteOperand(_ remote: String, for use: RemoteUse = .fetch) async throws -> String {
+    /// configured remote's name, or else a URL or path as typed (an
+    /// anonymous remote), along with where libgit2 is to connect for
+    /// `use`, which is what's authorized. git works from the top of the
+    /// work tree, so a relative path — typed, or a configured URL or push
+    /// URL — is relative to there, wherever in the tree the shell is,
+    /// and libgit2, which would read it against the process's directory,
+    /// gets it resolved.
+    func resolveRemoteOperand(_ remote: String, for use: RemoteUse = .fetch) async throws -> RemoteConnection {
         // Not a path to the top of the work tree, as git sees it too.
         guard !remote.isEmpty else {
             throw Libgit2Error(code: -1, klass: 0, message: "bad repository ''")
@@ -26,19 +37,42 @@ extension GitClient {
         // looks on disk first.
         if Self.hasDrivePrefix(remote) { try Self.requireTransport(for: remote) }
         #endif
+        let top = try await withRepository { try $0.toplevel() ?? $0.gitDir() }
         // A URL isn't a valid remote name, so the lookup throws for it.
         if (try? await remoteExists(named: remote)) == true {
-            let location = try await withRepository { _ in
+            let configured = try await withRepository { _ in
                 try Self.configuredLocation(of: remote, for: use, in: workingDirectory)
             }
             #if os(Windows)
-            if Self.hasDrivePrefix(location) { try Self.requireTransport(for: location) }
+            if Self.hasDrivePrefix(configured) { try Self.requireTransport(for: configured) }
             #endif
+            let location = Self.connectionLocation(of: configured, relativeTo: top)
             try await Self.authorize(location: location)
-            return remote
+            return RemoteConnection(remote: remote, location: location)
         }
-        let top = try await withRepository { try $0.toplevel() ?? $0.gitDir() }
-        return try await remoteForLibgit2(remote, relativeTo: top, for: use, in: workingDirectory)
+        let rewritten = try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+            try Self.effectiveLocation(of: remote, for: use, in: workingDirectory)
+        }
+        let location = Self.connectionLocation(of: rewritten, relativeTo: top)
+        try await Self.authorize(location: location)
+        return RemoteConnection(remote: remote, location: location)
+    }
+
+    /// Where to connect for `location`, a URL or path as git reads it
+    /// (after `insteadOf`): a URL as it is; a path resolved in the
+    /// shell's spelling, so a sandbox's path mapping applies to it as to
+    /// any path a script names, and a relative one against `directory`
+    /// (else the shell's working directory) — the top of the work tree,
+    /// where git reads it.
+    static func connectionLocation(of location: String, relativeTo directory: String?) -> String {
+        guard !isURLOrSCPLike(location) else { return location }
+        var spelling = location
+        if let directory, isRelativePath(location) {
+            var base = Shell.displayPath(for: directory)
+            while base.count > 1, base.hasSuffix("/") { base.removeLast() }
+            spelling = base.hasSuffix("/") ? base + location : base + "/" + location
+        }
+        return Shell.resolve(spelling).path
     }
 
     /// Where libgit2 connects for configured remote `name`: its URL
@@ -133,19 +167,8 @@ extension GitClient {
             }
         }
         let rewritten = try location(of: remote)
-        var spelling = remote
-        if !Self.isURLOrSCPLike(rewritten) {
-            spelling = rewritten
-            if let directory, Self.isRelativePath(rewritten) {
-                // Joined in the shell's spelling of the directory, so a
-                // sandbox's path mapping applies to the result as it does
-                // to any path a script names.
-                var base = Shell.displayPath(for: directory)
-                while base.count > 1, base.hasSuffix("/") { base.removeLast() }
-                spelling = base.hasSuffix("/") ? base + rewritten : base + "/" + rewritten
-            }
-            spelling = Shell.resolve(spelling).path
-        }
+        let spelling = Self.isURLOrSCPLike(rewritten)
+            ? remote : Self.connectionLocation(of: rewritten, relativeTo: directory)
         try await Self.authorize(location: location(of: spelling))
         return spelling
     }
@@ -202,26 +225,6 @@ extension GitClient {
         }
         guard transportSchemes.contains(scheme) else {
             throw UnsupportedTransportError.noHelper(scheme: scheme)
-        }
-    }
-
-    /// Record `remote`, as typed, as the upstream remote of each branch
-    /// in `pushed`. GitKit records where it pushed — for a path, the
-    /// resolved `location` — but git keeps the `<repository>` argument
-    /// as given: `-u ../bare` records `../bare`, which still works once
-    /// the repository and its remote move together.
-    static func recordUpstreamRemote(
-        _ remote: String, of pushed: [String], pushedTo location: String, in repository: Repository
-    ) throws {
-        let prefix = "refs/heads/"
-        for refspec in pushed {
-            let body = refspec.hasPrefix("+") ? refspec.dropFirst() : Substring(refspec)
-            let source = body.prefix { $0 != ":" }
-            guard source.hasPrefix(prefix) else { continue }
-            let key = "branch.\(source.dropFirst(prefix.count)).remote"
-            if try repository.configGet(key) == location {
-                try repository.configSet(key, remote)
-            }
         }
     }
 

@@ -425,8 +425,12 @@ let package = Package(
         // and `git push` need to apply them as git does. GitKit 2.5.0
         // pushes what git's rules allow and reports the rest as
         // `PushRejectedError`, which `git push` turns into git's verdict.
+        // GitKit 2.6.0 connects fetch and push at a location the caller
+        // resolved, showing the remote as configured or typed, so a
+        // relative remote opens from the top of the work tree, as in git,
+        // and the gate authorizes exactly where libgit2 connects.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.5.0",
+                 branch: "remote-connection-location",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface

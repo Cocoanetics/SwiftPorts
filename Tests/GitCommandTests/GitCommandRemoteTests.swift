@@ -43,6 +43,47 @@ struct GitCommandRemoteTests {
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// The system `git`'s stderr and exit status, for comparing output
+    /// byte for byte.
+    private func systemGitStderr(_ args: [String], in dir: URL) throws -> (stderr: String, status: Int32) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com"] + args
+        process.currentDirectoryURL = dir
+        let out = Pipe(), err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+        try process.run()
+        let message = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        _ = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (message, process.terminationStatus)
+    }
+
+    /// SwiftPorts' `git`'s stderr, its error's lines included, as git
+    /// would print them, and its exit status.
+    private func gitStderr(
+        _ args: [String], in dir: URL, sandbox: Sandbox? = nil
+    ) async throws -> (stderr: String, status: Int32) {
+        let out = OutputSink(), err = OutputSink()
+        let shell = Shell(stdout: out, stderr: err, environment: Environment(workingDirectory: dir.path))
+        if let sandbox { shell.sandbox = sandbox }
+        var failure: CLIError?
+        do {
+            try await shell.withCurrent {
+                var command = try #require(try GitCommand.parseAsRoot(args) as? AsyncParsableCommand)
+                try await command.run()
+            }
+        } catch let error as CLIError {
+            failure = error
+        }
+        out.finish()
+        err.finish()
+        let printed = await err.readAllString()
+        guard let failure else { return (printed, 0) }
+        return (printed + failure.lines.map { $0 + "\n" }.joined(), failure.exitCode)
+    }
+
     /// Turns git's push hints on in `repo`'s own config, which outranks a
     /// global one: CI's macOS runner image switches them off globally.
     private func enablePushAdvice(in repo: URL) throws {
@@ -54,11 +95,13 @@ struct GitCommandRemoteTests {
     /// SwiftPorts' `git`, run in a shell whose working directory is `dir`.
     @discardableResult
     private func git(
-        _ args: [String], in dir: URL, environment variables: [String: String] = [:]
+        _ args: [String], in dir: URL, environment variables: [String: String] = [:],
+        sandbox: Sandbox? = nil
     ) async throws -> (stdout: String, stderr: String) {
         let out = OutputSink(), err = OutputSink()
         let shell = Shell(stdout: out, stderr: err,
                           environment: Environment(variables: variables, workingDirectory: dir.path))
+        if let sandbox { shell.sandbox = sandbox }
         try await shell.withCurrent {
             let parsed = try GitCommand.parseAsRoot(args)
             if var command = parsed as? AsyncParsableCommand {
@@ -567,6 +610,119 @@ struct GitCommandRemoteTests {
         try await git(["fetch", "-q"], in: sub)
         #expect(try systemGit(["rev-parse", "FETCH_HEAD"], in: clone)
                 == systemGit(["rev-parse", "HEAD"], in: clone))
+    }
+
+    // MARK: relative remotes
+
+    @Test("a configured relative remote is opened from the top of the work tree, as git opens it")
+    func fetchConfiguredRelativeRemote() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let twin = tmp("GitRemoteTwin")
+        try systemGit(["clone", "-q", remote.path, twin.path], in: clone)
+        let mirror = tmp("GitRemoteMirror")
+        try systemGit(["clone", "-q", "--bare", remote.path, mirror.path], in: clone)
+        let relative = "../\(mirror.lastPathComponent)"
+        for repo in [clone, twin] {
+            try systemGit(["remote", "add", "local", relative], in: repo)
+            try FileManager.default.createDirectory(
+                at: repo.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        }
+
+        // From a subdirectory, where the path doesn't lead to the mirror.
+        let expected = try systemGitStderr(["fetch", "local"], in: twin.appendingPathComponent("sub"))
+        let fetched = try await gitStderr(["fetch", "local"], in: clone.appendingPathComponent("sub"))
+        #expect(expected.status == 0)
+        #expect(fetched.stderr == expected.stderr)
+        #expect(fetched.stderr.hasPrefix("From \(relative)\n"))
+        #expect(try systemGit(["rev-parse", "local/main"], in: clone)
+                == systemGit(["rev-parse", "main"], in: mirror))
+        let fetchHead = { (repo: URL) in
+            try String(contentsOf: repo.appendingPathComponent(".git/FETCH_HEAD"), encoding: .utf8)
+        }
+        #expect(try fetchHead(clone) == fetchHead(twin))
+
+        // A configured push URL is read from the top too.
+        try commitFile("two.txt", in: clone)
+        try systemGit(["remote", "set-url", "local", "../nowhere"], in: clone)
+        try systemGit(["remote", "set-url", "--push", "local", relative], in: clone)
+        let pushed = try await gitStderr(["push", "local", "main"], in: clone.appendingPathComponent("sub"))
+        #expect(pushed.status == 0)
+        #expect(pushed.stderr.hasPrefix("To \(relative)\n"))
+        #expect(try systemGit(["rev-parse", "main"], in: mirror)
+                == systemGit(["rev-parse", "main"], in: clone))
+    }
+
+    @Test("a typed path is shown as typed: To ../bare, and failed to push some refs to '../bare'")
+    func pushTypedPathShowsItAsTyped() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let twin = tmp("GitRemoteTwin")
+        try systemGit(["clone", "-q", remote.path, twin.path], in: clone)
+        // One mirror per repository, side by side, so each pushes the same way.
+        let mirror = tmp("GitRemoteMirror"), twinMirror = clone.deletingLastPathComponent()
+            .appendingPathComponent(mirror.lastPathComponent + "-twin")
+        for (bare, repo) in [(mirror, clone), (twinMirror, twin)] {
+            try systemGit(["init", "-q", "--bare", "-b", "main", bare.path], in: repo)
+            try systemGit(["config", "user.name", "Test"], in: repo)
+            try systemGit(["config", "user.email", "test@example.com"], in: repo)
+            try enablePushAdvice(in: repo)
+            try FileManager.default.createDirectory(
+                at: repo.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        }
+        let typed = "../\(mirror.lastPathComponent)", twinTyped = typed + "-twin"
+        func same(_ args: [String], _ twinArgs: [String], in sub: Bool = false) async throws {
+            let mine = sub ? clone.appendingPathComponent("sub") : clone
+            let theirs = sub ? twin.appendingPathComponent("sub") : twin
+            let expected = try systemGitStderr(twinArgs, in: theirs)
+            let actual = try await gitStderr(args, in: mine)
+            #expect(actual.stderr == expected.stderr.replacingOccurrences(of: twinTyped, with: typed))
+            #expect(actual.status == expected.status)
+        }
+        // Same commits on both sides, so the summaries name the same objects.
+        try await same(["push", typed, "main"], ["push", twinTyped, "main"])
+        #expect(try systemGit(["rev-parse", "main"], in: mirror) == systemGit(["rev-parse", "main"], in: clone))
+
+        // From a subdirectory too: git reads the path from the top.
+        try systemGit(["branch", "dev"], in: clone)
+        try systemGit(["branch", "dev"], in: twin)
+        try await same(["push", typed, "dev"], ["push", twinTyped, "dev"], in: true)
+
+        // Refused: the mirror has work this repository doesn't.
+        for (bare, repo) in [(mirror, clone), (twinMirror, twin)] {
+            let other = tmp("GitRemoteOther")
+            try systemGit(["clone", "-q", bare.path, other.path], in: repo)
+            try systemGit(["commit", "-q", "--allow-empty", "-m", "theirs", "--date=@0"], in: other)
+            try systemGit(["push", "-q", "origin", "main"], in: other)
+        }
+        let expected = try systemGitStderr(["push", twinTyped, "main"], in: twin)
+        let refused = try await gitStderr(["push", typed, "main"], in: clone)
+        #expect(refused.stderr == expected.stderr.replacingOccurrences(of: twinTyped, with: typed))
+        #expect(refused.stderr.hasPrefix("To \(typed)\n"))
+        #expect(refused.stderr.contains("error: failed to push some refs to '\(typed)'\n"))
+        #expect(refused.status == expected.status)
+
+        // A source that matches nothing is refused before connecting.
+        try await same(["push", typed, "nothing"], ["push", twinTyped, "nothing"])
+    }
+
+    @Test("under a path-mapped sandbox, a configured relative remote fetches from the mapped work tree")
+    func fetchConfiguredRelativeRemoteUnderPathMapping() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let host = tmp("GitRemoteMapped").resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: host, withIntermediateDirectories: true)
+        let repo = host.appendingPathComponent("repo"), bare = host.appendingPathComponent("bare.git")
+        try systemGit(["clone", "-q", remote.path, repo.path], in: clone)
+        try systemGit(["clone", "-q", "--bare", remote.path, bare.path], in: clone)
+        try systemGit(["remote", "add", "local", "../bare.git"], in: repo)
+        try FileManager.default.createDirectory(
+            at: repo.appendingPathComponent("sub"), withIntermediateDirectories: true)
+
+        let sandbox = Sandbox.confined(
+            to: PathMapping(mounts: [.init(virtual: "/work", host: host.path)]), home: "/work")
+        let fetched = try await gitStderr(
+            ["fetch", "local"], in: URL(fileURLWithPath: "/work/repo/sub"), sandbox: sandbox)
+        #expect(fetched.status == 0)
+        #expect(fetched.stderr == "From ../bare\n * [new branch]      main       -> local/main\n")
+        #expect(try systemGit(["rev-parse", "local/main"], in: repo) == systemGit(["rev-parse", "main"], in: bare))
     }
 
     @Test("without a configured remote, git push refuses and git fetch does nothing")
