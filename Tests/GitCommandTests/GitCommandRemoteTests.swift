@@ -1557,6 +1557,9 @@ struct GitCommandRemoteTests {
         let remote = try systemGit(["remote", "get-url", "origin"], in: clone)
         // `a1` is `a` again; `a2` is a commit past `a`; the remote's HEAD is `b`.
         try systemGit(["push", "-q", "origin", "a:a1"], in: clone)
+        try systemGit(["tag", "-a", "old", "-m", "old", "a"], in: clone)
+        try systemGit(["push", "-q", "origin", "old"], in: clone)
+        try systemGit(["tag", "-d", "old"], in: clone)
         try systemGit(["switch", "-q", "a"], in: clone)
         try commitFile("a2.txt", in: clone)
         try systemGit(["push", "-q", "origin", "a:a2"], in: clone)
@@ -1567,6 +1570,8 @@ struct GitCommandRemoteTests {
         let cases: [([String], String)] = [
             // `a` is in `a2`'s history, so only `a2` is named.
             (["a", "a2"], "Merge branch 'a2' of"),
+            // So is the commit annotated tag `old` names.
+            (["old", "a2"], "Merge branch 'a2' of"),
             // The same commit twice is named twice.
             (["a", "a1", "b"], "Merge branches 'a', 'a1' and 'b' of"),
             // The remote's HEAD leads, as `HEAD`.
@@ -1652,10 +1657,15 @@ struct GitCommandRemoteTests {
         try await expectLikeGit(["merge", "a", "d"], in: clone)
         try systemGit(["clean", "-qfd"], in: clone)
 
-        // A merge waiting to be concluded stops another, and a pull.
+        // A merge waiting to be concluded stops another, and a pull, with
+        // or without the advice (CI's macOS runner turns advice off
+        // globally, so the clone says).
         try systemGit(["merge", "-q", "--no-commit", "--no-ff", "a"], in: clone)
-        try await expectLikeGit(["merge", "b", "x"], in: clone)
-        try await expectLikeGit(["pull", "origin", "b", "x"], in: clone)
+        for advice in ["true", "false"] {
+            try systemGit(["config", "advice.resolveConflict", advice], in: clone)
+            try await expectLikeGit(["merge", "b", "x"], in: clone)
+            try await expectLikeGit(["pull", "origin", "b", "x"], in: clone)
+        }
     }
 
     @Test("merge titles group FETCH_HEAD's descriptions as fmt-merge-msg does")

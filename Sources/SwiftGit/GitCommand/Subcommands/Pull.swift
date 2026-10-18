@@ -297,11 +297,14 @@ struct Pull: AsyncParsableCommand {
             guard commit != ancestor else { return false }
             return (try? await client.mergeBase(commit, ancestor)) == ancestor
         }
+        // Compared as commits: an annotated tag by the commit it names.
+        var commits: [String] = []
+        for head in heads { commits.append((try? await client.resolveOID(head.oid + "^{commit}")) ?? head.oid) }
         var kept: [SwiftGit.GitClient.FetchHeadEntry] = []
-        for head in heads {
-            if let current, await contains(current, head.oid) { continue }
+        for (head, commit) in zip(heads, commits) {
+            if let current, await contains(current, commit) { continue }
             var reachable = false
-            for other in heads where !reachable { reachable = await contains(other.oid, head.oid) }
+            for other in commits where !reachable { reachable = await contains(other, commit) }
             if !reachable { kept.append(head) }
         }
         return kept

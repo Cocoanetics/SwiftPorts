@@ -50,8 +50,15 @@ struct Merge: AsyncParsableCommand {
         if let gitDir = try await client.gitDir() {
             for (file, operation) in [("MERGE_HEAD", "merge"), ("CHERRY_PICK_HEAD", "cherry-pick")]
             where FileManager.default.fileExists(atPath: gitDir + "/" + file) {
-                throw CLIError.stderr(["fatal: You have not concluded your \(operation) (\(file) exists).",
-                                       "Please, commit your changes before you merge."], exitCode: 128)
+                // The second line is advice, which advice.resolveConflict
+                // (or GIT_ADVICE) turns off.
+                var advise = try await client.configBool("advice.resolveConflict") ?? true
+                if advise, let environment = Shell.current.environment["GIT_ADVICE"] {
+                    advise = try SwiftGit.GitClient.parseGitBoolEnvironment(environment, name: "GIT_ADVICE")
+                }
+                throw CLIError.stderr(["fatal: You have not concluded your \(operation) (\(file) exists)."]
+                                      + (advise ? ["Please, commit your changes before you merge."] : []),
+                                      exitCode: 128)
             }
         }
 
