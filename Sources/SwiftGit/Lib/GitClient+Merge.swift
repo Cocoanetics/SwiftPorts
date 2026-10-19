@@ -364,10 +364,11 @@ extension GitClient {
                          joined("remote-tracking branch", "remote-tracking branches", group.remoteBranches),
                          joined("tag", "tags", group.tags),
                          joined("commit", "commits", group.commits)].compactMap { $0 }
-            // This repository (`.`) goes unnamed.
+            // This repository (`.`) goes unnamed beside the refs it gave;
+            // its HEAD alone is named `.`, as any source's alone is.
             let named = group.source == "." ? nil : group.source
             if group.head {
-                if kinds.isEmpty { return named ?? "HEAD" }
+                if kinds.isEmpty { return group.source ?? "HEAD" }
                 kinds.insert("HEAD", at: 0)
             }
             guard let source = named else { return kinds.joined(separator: ", ") }

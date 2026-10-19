@@ -1860,6 +1860,13 @@ struct GitCommandRemoteTests {
             SwiftGit.GitClient.MergeTitleEntry(name: $0, source: nil)
         })
         #expect(local == "Merge branch 'a', tag 'v1'; commit '1234567'")
+        // As fmt-merge-msg reads FETCH_HEAD: this repository's HEAD
+        // alone is `.`, beside its refs `HEAD`.
+        let fetched = { (lines: [String]) in
+            SwiftGit.GitClient.mergeTitle(lines.map(SwiftGit.GitClient.fmtMergeMsgEntry))
+        }
+        #expect(fetched(["."]) == "Merge .")
+        #expect(fetched([".", "branch 'a' of ."]) == "Merge HEAD, branch 'a'")
     }
 
     @Test("merge.suppressDest takes git's globs")
