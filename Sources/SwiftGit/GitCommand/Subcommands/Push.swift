@@ -57,18 +57,23 @@ struct Push: AsyncParsableCommand {
         let client = CommandContext.gitClient(quiet: quiet)
         let settings = try await DefaultPush.Settings(client: client)
         let (remoteName, refspecs) = RemoteArguments.split(arguments, remote: remote)
-        // An empty repository is never read as a path.
-        if remoteName == "" {
-            throw CLIError.stderr("fatal: bad repository ''", exitCode: 128)
-        }
         let leases = try await Self.leases(from: leaseOptions, client: client)
-        // git reads every remote's config before pushing anywhere, and
-        // refuses a push refspec written without a value.
+        // git reads every remote's config before it looks for the remote
+        // to push to, and refuses a push refspec written without a value
+        // or malformed, whether or not it's pushed.
         if let bare = try await client.valuelessRemotePush() {
             throw CLIError.stderr([
                 "error: missing value for '\(bare.key)'",
                 "fatal: bad config variable '\(bare.key)' in file '\(bare.file)' at line \(bare.line)"
             ], exitCode: 128)
+        }
+        if let bad = try await client.allRemotePushRefspecs()
+            .first(where: { !SwiftGit.GitClient.isValidPushRefspec(SwiftGit.GitClient.pushRefspecReadingAtAsHead($0)) }) {
+            throw CLIError.stderr("fatal: invalid refspec '\(bad)'", exitCode: 128)
+        }
+        // An empty repository is never read as a path.
+        if remoteName == "" {
+            throw CLIError.stderr("fatal: bad repository ''", exitCode: 128)
         }
         let plan = refspecs.isEmpty
             ? try await DefaultPush.plan(client: client, remote: remoteName, settings: settings)
@@ -81,12 +86,9 @@ struct Push: AsyncParsableCommand {
             ? try await client.configGetAll("remote.\(plan.remote).push")
                 .map(SwiftGit.GitClient.pushRefspecReadingAtAsHead)
             : []
-        // git refuses a malformed refspec before `--force` would touch
-        // it: every remote's configured ones as it reads its config,
-        // whether or not they're pushed, then those typed.
-        let everyConfigured = try await client.allRemotePushRefspecs()
-        if let bad = (everyConfigured + pushRefspecs)
-            .first(where: { !SwiftGit.GitClient.isValidPushRefspec($0) }) {
+        // The typed refspecs too, before `--force` would touch them (the
+        // configured ones were checked above).
+        if let bad = pushRefspecs.first(where: { !SwiftGit.GitClient.isValidPushRefspec($0) }) {
             throw CLIError.stderr("fatal: invalid refspec '\(bad)'", exitCode: 128)
         }
         if force {

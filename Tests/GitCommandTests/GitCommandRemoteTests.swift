@@ -1084,6 +1084,13 @@ struct GitCommandRemoteTests {
         } catch let error as CLIError {
             #expect(error.lines == ["fatal: invalid refspec ' '"])
         }
+        // Read with the config, before git looks for the remote at all.
+        do {
+            try await git(["push", ""], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == ["fatal: invalid refspec ' '"])
+        }
         // What git takes stays taken.
         #expect(GitClient.isValidPushRefspec("HEAD~1:refs/heads/older"))
         #expect(GitClient.isValidPushRefspec("+refs/heads/*:refs/heads/copy/*"))
