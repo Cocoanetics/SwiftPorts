@@ -78,9 +78,12 @@ struct Push: AsyncParsableCommand {
         // What the remote is configured to push, when that's what goes.
         let configured = pushRefspecs.isEmpty
             ? try await client.configGetAll("remote.\(plan.remote).push") : []
-        // git refuses a malformed refspec, typed or configured, before
-        // `--force` would touch it.
-        if let bad = (pushRefspecs + configured).first(where: { !SwiftGit.GitClient.isValidPushRefspec($0) }) {
+        // git refuses a malformed refspec before `--force` would touch
+        // it: every remote's configured ones as it reads its config,
+        // whether or not they're pushed, then those typed.
+        let everyConfigured = try await client.allRemotePushRefspecs()
+        if let bad = (everyConfigured + pushRefspecs)
+            .first(where: { !SwiftGit.GitClient.isValidPushRefspec($0) }) {
             throw CLIError.stderr("fatal: invalid refspec '\(bad)'", exitCode: 128)
         }
         if force {

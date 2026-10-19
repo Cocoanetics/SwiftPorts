@@ -994,6 +994,17 @@ struct GitCommandRemoteTests {
                 }
             }
         }
+        // Any remote's malformed push refspec stops every push, typed
+        // refspecs or not, as git reads them all with its config.
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["remote", "add", "other", "../elsewhere"], in: clone)
+        try systemGit(["config", "--add", "remote.other.push", " "], in: clone)
+        do {
+            try await git(["push", "-f", "origin", "main"], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == ["fatal: invalid refspec ' '"])
+        }
         // What git takes stays taken.
         #expect(GitClient.isValidPushRefspec("HEAD~1:refs/heads/older"))
         #expect(GitClient.isValidPushRefspec("+refs/heads/*:refs/heads/copy/*"))

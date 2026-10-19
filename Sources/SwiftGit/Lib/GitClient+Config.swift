@@ -38,9 +38,33 @@ extension GitClient {
         try await withRepository { _ in try Self.configValues(name, in: workingDirectory) }
     }
 
+    /// Every remote's `remote.<name>.push` values, in the order git reads
+    /// them: lowest config level first, each file top to bottom.
+    public func allRemotePushRefspecs() async throws -> [String] {
+        try await withRepository { _ in
+            try Self.configValues(matching: "^remote\\..*\\.push$", in: workingDirectory)
+        }
+    }
+
     /// `name`'s values, lowest config level first. libgit2 iterates its
     /// levels highest first, git reads them the other way round.
     static func configValues(_ name: String, in directory: URL) throws -> [String] {
+        try configValues(in: directory) { config, iterator in
+            git_config_multivar_iterator_new(&iterator, config, name, nil)
+        }
+    }
+
+    /// The values of every key matching `regex`, in git's order.
+    static func configValues(matching regex: String, in directory: URL) throws -> [String] {
+        try configValues(in: directory) { config, iterator in
+            git_config_iterator_glob_new(&iterator, config, regex)
+        }
+    }
+
+    private static func configValues(
+        in directory: URL,
+        iterate: (OpaquePointer?, inout UnsafeMutablePointer<git_config_iterator>?) -> CInt
+    ) throws -> [String] {
         var repo: OpaquePointer?
         var config: OpaquePointer?
         var iterator: UnsafeMutablePointer<git_config_iterator>?
@@ -51,7 +75,7 @@ extension GitClient {
         }
         try check(git_repository_open_ext(&repo, directory.path, 0, nil))
         try check(git_repository_config_snapshot(&config, repo))
-        try check(git_config_multivar_iterator_new(&iterator, config, name, nil))
+        try check(iterate(config, &iterator))
         var values: [(level: Int, value: String)] = []
         while true {
             var entry: UnsafeMutablePointer<git_config_entry>?
