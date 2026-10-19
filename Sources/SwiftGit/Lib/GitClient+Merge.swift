@@ -1,4 +1,5 @@
 import Foundation
+import CGitKit
 import ForgeKit
 import GitKit
 
@@ -41,10 +42,63 @@ extension GitClient {
         }
     }
 
-    /// Fetch then merge — `git pull` semantics.
+    /// One ref a fetch recorded in `FETCH_HEAD`, as git writes the line
+    /// (`<oid>\t[not-for-merge]\t<description>`).
+    public struct FetchHeadEntry: Sendable, Equatable {
+        public let oid: String
+        /// Whether the fetch marked it to be merged, as `git pull` does.
+        public let isMerge: Bool
+        /// What it is and where from: `branch 'main' of <url>`, as
+        /// `git merge`'s message names it.
+        public let description: String
+    }
+
+    /// `FETCH_HEAD`'s entries in the order the last fetch wrote them;
+    /// empty when there is no `FETCH_HEAD`.
+    public func fetchHeadEntries() async throws -> [FetchHeadEntry] {
+        try await withRepository { repository in
+            guard let gitDir = try repository.gitDir() else { return [] }
+            let url = URL(fileURLWithPath: gitDir).appendingPathComponent("FETCH_HEAD")
+            guard let data = FileManager.default.contents(atPath: url.path) else { return [] }
+            return String(decoding: data, as: UTF8.self)
+                .split(separator: "\n", omittingEmptySubsequences: true)
+                .compactMap { line in
+                    let fields = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+                    guard fields.count == 3 else { return nil }
+                    return FetchHeadEntry(
+                        oid: String(fields[0]), isMerge: fields[1] != "not-for-merge",
+                        description: String(fields[2]))
+                }
+        }
+    }
+
+    /// The branch HEAD names, born or not (`git symbolic-ref --short
+    /// HEAD`); `nil` when HEAD is detached. GitKit keeps its repository
+    /// handle to itself, so this opens its own.
+    public func symbolicHeadBranch() async throws -> String? {
+        try await withRepository { _ in
+            var repo: OpaquePointer?
+            var head: OpaquePointer?
+            defer {
+                git_reference_free(head)
+                git_repository_free(repo)
+            }
+            try Self.check(git_repository_open_ext(&repo, workingDirectory.path, 0, nil))
+            try Self.check(git_reference_lookup(&head, repo, "HEAD"))
+            guard let target = git_reference_symbolic_target(head).map({ String(cString: $0) }),
+                  target.hasPrefix("refs/heads/")
+            else { return nil }
+            return String(target.dropFirst("refs/heads/".count))
+        }
+    }
+
+    /// Fetch then merge — `git pull <remote> [<branch>]`.
     ///
-    /// `branch` defaults to the current branch's name. After the fetch,
-    /// the remote-tracking ref `<remote>/<branch>` is the merge target.
+    /// Fetches `branch` from `remote` and merges what the fetch marked
+    /// for merging in `FETCH_HEAD`, with git's message. Without a
+    /// `branch`, it fetches the current branch's upstream
+    /// (`branch.<name>.merge`) when `remote` is the branch's remote, and
+    /// else the branch of the same name.
     public func pull(
         remote: String = "origin",
         branch: String? = nil,
@@ -52,39 +106,230 @@ extension GitClient {
         message: String? = nil,
         author: GitSignature? = nil
     ) async throws -> MergeOutcome {
-        let local: String
-        if let branch {
-            local = branch
-        } else {
-            local = (try await currentBranch()) ?? "HEAD"
-        }
-        try await fetch(remote: remote, refspec: local)
+        let head = try await fetchForPull(remote: remote, branch: branch)
+        var message = message
+        if message == nil { message = try await pullMergeMessage(for: head, repository: remote) }
         return try await merge(
-            ref: "\(remote)/\(local)",
+            ref: head.oid,
             fastForward: fastForward,
             message: message,
             author: author)
     }
 
-    /// Fetch then rebase — `git pull --rebase` semantics. Replays the
-    /// local branch's commits since their merge-base with
-    /// `<remote>/<branch>` on top of the freshly-fetched ref.
+    /// Fetch then rebase — `git pull --rebase <remote> [<branch>]`.
+    /// Replays the local branch's commits since their merge-base with
+    /// what was fetched (as for ``pull(remote:branch:fastForward:message:author:)``)
+    /// on top of it.
     public func pullRebase(
         remote: String = "origin",
         branch: String? = nil,
         author: GitSignature? = nil,
         progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> RebaseOutcome {
-        let local: String
-        if let branch {
-            local = branch
-        } else {
-            local = (try await currentBranch()) ?? "HEAD"
-        }
-        try await fetch(remote: remote, refspec: local)
+        let head = try await fetchForPull(remote: remote, branch: branch)
         return try await rebase(
-            upstream: "\(remote)/\(local)",
+            upstream: head.oid,
             author: author,
             progress: progress)
+    }
+
+    /// The merge commit message git writes for pulling `head` into the
+    /// current branch: `Merge branch 'x' of <url>`, with ` into <branch>`
+    /// unless `merge.suppressDest` (by default `main` and `master`)
+    /// matches the branch. A `repository` that is a URL or path rather
+    /// than a configured remote is named as typed (`../other`), and the
+    /// repository itself (`.`) not at all, as git names them.
+    public func pullMergeMessage(for head: FetchHeadEntry, repository: String? = nil) async throws -> String {
+        var description = head.description
+        if let repository, !(try await remoteList()).contains(repository) {
+            // `branch 'x' of <url>`, or for a remote's HEAD just `<url>`.
+            if let of = description.range(of: "' of ") {
+                description = description[..<of.upperBound] + repository
+            } else if !description.hasPrefix("branch '"), !description.hasPrefix("tag '") {
+                description = repository
+            }
+        }
+        let subject = "Merge " + Self.describingURLAsGit(description)
+        let branch = try await currentBranch() ?? "HEAD"
+        var patterns = ["main", "master"]
+        var configured = false
+        for entry in try await configList() where entry.name.lowercased() == "merge.suppressdest" {
+            if !configured { patterns = []; configured = true }
+            // An empty value clears the list, as in git.
+            if entry.value.isEmpty { patterns = [] } else { patterns.append(entry.value) }
+        }
+        let title = patterns.contains(where: { Self.glob($0, matches: branch) })
+            ? subject : subject + " into " + branch
+        // An annotated tag's message follows, as fmt_merge_msg_sigs adds
+        // it (its signature left out).
+        guard head.description.hasPrefix("tag '"),
+              let message = try await annotatedTagMessage(head.oid), !message.isEmpty
+        else { return title }
+        return title + "\n\n" + message
+    }
+
+    /// The message of annotated tag object `oid`, without a signature
+    /// and trailing whitespace; `nil` when `oid` is no tag object.
+    func annotatedTagMessage(_ oid: String) async throws -> String? {
+        try await withRepository { _ in
+            var repo: OpaquePointer?
+            var tag: OpaquePointer?
+            defer {
+                git_tag_free(tag)
+                git_repository_free(repo)
+            }
+            try Self.check(git_repository_open_ext(&repo, workingDirectory.path, 0, nil))
+            var id = git_oid()
+            guard git_oid_fromstr(&id, oid) == 0, git_tag_lookup(&tag, repo, &id) == 0,
+                  let text = git_tag_message(tag).map({ String(cString: $0) })
+            else { return nil }
+            var message = Substring(text)
+            for marker in ["-----BEGIN PGP SIGNATURE-----", "-----BEGIN SSH SIGNATURE-----",
+                           "-----BEGIN SIGNED MESSAGE-----"] {
+                if let start = message.range(of: "\n" + marker) ?? (message.hasPrefix(marker) ? message.range(of: marker) : nil) {
+                    message = message[..<start.lowerBound]
+                }
+            }
+            while let last = message.last, last.isWhitespace { message = message.dropLast() }
+            return String(message)
+        }
+    }
+
+    /// `git pull`'s fetch for one branch, and what it marked to merge.
+    private func fetchForPull(remote: String, branch: String?) async throws -> FetchHeadEntry {
+        var refspec = branch
+        if refspec == nil, let current = try await currentBranch() {
+            if try await configGet("branch.\(current).remote") == remote,
+               let merge = try await configGet("branch.\(current).merge") {
+                refspec = merge
+            } else {
+                refspec = current
+            }
+        }
+        try await fetch(remote: remote, refspecs: [refspec ?? "HEAD"], depth: nil)
+        guard let head = try await fetchHeadEntries().first(where: \.isMerge) else {
+            throw Libgit2Error(code: -1, klass: 0,
+                message: "There are no candidates for merging among the refs that you just fetched.")
+        }
+        return head
+    }
+
+    /// A FETCH_HEAD description with its URL as git's fetch writes it:
+    /// without trailing slashes, then without a trailing `.git`
+    /// (`branch 'x' of ../other.git` becomes `branch 'x' of ../other`).
+    /// The URL follows `' of `, as no ref name holds a space, or is the
+    /// whole description for a remote's `HEAD`.
+    static func describingURLAsGit(_ description: String) -> String {
+        let prefix: Substring
+        var url: Substring
+        if let of = description.range(of: "' of ") {
+            prefix = description[..<of.upperBound]
+            url = description[of.upperBound...]
+        } else {
+            prefix = ""
+            url = Substring(description)
+        }
+        while url.count > 1, url.hasSuffix("/") { url = url.dropLast() }
+        if url.count > 5, url.hasSuffix(".git") { url = url.dropLast(4) }
+        // A local branch, pulled from `.`, is named without a source.
+        if url == ".", prefix.hasSuffix("' of ") { return String(prefix.dropLast(4)) }
+        return String(prefix + url)
+    }
+
+    /// wildmatch's named character classes, over ASCII bytes as git has them.
+    static let characterClasses: [String: @Sendable (UInt8) -> Bool] = [
+        "alnum": { isASCIILetter($0) || (0x30...0x39).contains($0) },
+        "alpha": { isASCIILetter($0) },
+        "blank": { $0 == 0x20 || $0 == 0x09 },
+        "cntrl": { $0 < 32 || $0 == 127 },
+        "digit": { (0x30...0x39).contains($0) },
+        "graph": { $0 > 32 && $0 < 127 },
+        "lower": { (0x61...0x7a).contains($0) },
+        "print": { $0 >= 32 && $0 < 127 },
+        "punct": { $0 > 32 && $0 < 127 && !isASCIILetter($0) && !(0x30...0x39).contains($0) },
+        "space": { [0x20, 0x09, 0x0a, 0x0b, 0x0c, 0x0d].contains($0) },
+        "upper": { (0x41...0x5a).contains($0) },
+        "xdigit": { (0x30...0x39).contains($0) || (0x41...0x46).contains($0) || (0x61...0x66).contains($0) },
+    ]
+
+    private static func isASCIILetter(_ byte: UInt8) -> Bool {
+        (0x41...0x5a).contains(byte) || (0x61...0x7a).contains(byte)
+    }
+
+    /// Whether glob `pattern` matches `text`, as git's wildmatch does
+    /// for a branch name (with WM_PATHNAME), over UTF-8 bytes: `*`, `**`, `?`, bracket expressions
+    /// (`[tw]`, `[a-z]`, `[!x]`, `[^x]`, `[[:alpha:]]`) and `\\`
+    /// escaping the next byte.
+    static func glob(_ pattern: String, matches text: String) -> Bool {
+        let pattern = Array(pattern.utf8), text = Array(text.utf8)
+        let (star, question, open, close, backslash, colon, dash, bang, caret): (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8)
+            = (0x2a, 0x3f, 0x5b, 0x5d, 0x5c, 0x3a, 0x2d, 0x21, 0x5e)
+        let slash: UInt8 = 0x2f
+        /// The end of the bracket expression opening at `p` and whether
+        /// it matches `c`, or `nil` when it is malformed (it then matches
+        /// nothing, as in wildmatch).
+        func bracket(_ p: Int, _ c: UInt8) -> (end: Int, matches: Bool)? {
+            var i = p + 1
+            let negated = i < pattern.count && (pattern[i] == bang || pattern[i] == caret)
+            if negated { i += 1 }
+            var matched = false
+            var first = true
+            while i < pattern.count, pattern[i] != close || first {
+                first = false
+                // A named class (`[:alpha:]`); one git doesn't know
+                // matches nothing.
+                if pattern[i] == open, i + 1 < pattern.count, pattern[i + 1] == colon {
+                    guard let end = (i + 2..<pattern.count).first(where: {
+                        pattern[$0] == colon && $0 + 1 < pattern.count && pattern[$0 + 1] == close
+                    }), let test = Self.characterClasses[String(decoding: pattern[(i + 2)..<end], as: UTF8.self)]
+                    else { return nil }
+                    if test(c) { matched = true }
+                    i = end + 2
+                    continue
+                }
+                var low = pattern[i]
+                if low == backslash, i + 1 < pattern.count { i += 1; low = pattern[i] }
+                if i + 2 < pattern.count, pattern[i + 1] == dash, pattern[i + 2] != close {
+                    var high = pattern[i + 2]
+                    i += 2
+                    if high == backslash, i + 1 < pattern.count { i += 1; high = pattern[i] }
+                    if low <= c && c <= high { matched = true }
+                } else if low == c {
+                    matched = true
+                }
+                i += 1
+            }
+            guard i < pattern.count else { return nil }
+            return (i + 1, matched != negated)
+        }
+        func match(_ p: Int, _ t: Int) -> Bool {
+            if p == pattern.count { return t == text.count }
+            switch pattern[p] {
+            case star:
+                // `**` between slashes (or the ends) crosses them, `**/`
+                // matching no directory too; any other `*` stays within
+                // a component (WM_PATHNAME, as dest_suppressed uses).
+                // A run of stars counts as one.
+                var skip = p + 1
+                while skip < pattern.count, pattern[skip] == star { skip += 1 }
+                if skip - p > 1, p == 0 || pattern[p - 1] == slash,
+                   skip == pattern.count || pattern[skip] == slash {
+                    if skip < pattern.count, match(skip + 1, t) { return true }
+                    return (t...text.count).contains { match(skip, $0) }
+                }
+                var end = t
+                while end < text.count, text[end] != slash { end += 1 }
+                return (t...end).contains { match(skip, $0) }
+            case question: return t < text.count && text[t] != slash && match(p + 1, t + 1)
+            case open:
+                guard t < text.count, text[t] != slash,
+                      let (end, matches) = bracket(p, text[t]) else { return false }
+                return matches && match(end, t + 1)
+            case backslash where p + 1 < pattern.count:
+                return t < text.count && text[t] == pattern[p + 1] && match(p + 2, t + 1)
+            case let c: return t < text.count && text[t] == c && match(p + 1, t + 1)
+            }
+        }
+        return match(0, 0)
     }
 }

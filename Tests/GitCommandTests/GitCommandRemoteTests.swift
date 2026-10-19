@@ -8,7 +8,7 @@ import Testing
 import ArgumentParser
 import ShellKit
 import ShellCommandKit
-import SwiftGit
+@testable import SwiftGit
 @testable import GitCommand
 
 @Suite("git push / fetch / -q against a local remote")
@@ -1685,6 +1685,661 @@ struct GitCommandRemoteTests {
         #expect(pull.stderr.isEmpty)
         #expect(try systemGit(["rev-parse", "HEAD"], in: other)
                 == systemGit(["rev-parse", "HEAD"], in: clone))
+    }
+
+    // MARK: pull
+
+    /// What the system `git` writes to stderr, and its exit status, for
+    /// `args` run in `dir`.
+    private func systemGitStatus(_ args: [String], in dir: URL) throws -> (status: Int32, stderr: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + args
+        process.currentDirectoryURL = dir
+        let out = Pipe(), err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+        try process.run()
+        let stderr = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        _ = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, stderr)
+    }
+
+    /// A copy of `repo` for the system `git` to run the same command in.
+    private func twin(of repo: URL) throws -> URL {
+        let copy = tmp("GitRemoteTwin")
+        try FileManager.default.copyItem(at: repo, to: copy)
+        return copy
+    }
+
+    /// Whether the system `git` is 2.54 or later, whose words the
+    /// expected refusals are; older ones word some of them differently.
+    private func systemGitSpeaksLike254() throws -> Bool {
+        let version = try systemGit(["--version"], in: FileManager.default.temporaryDirectory)
+        let numbers = version.split(separator: " ").dropFirst(2).first?
+            .split(separator: ".").prefix(2).compactMap { Int($0) } ?? []
+        guard numbers.count == 2 else { return false }
+        return numbers[0] > 2 || (numbers[0] == 2 && numbers[1] >= 54)
+    }
+
+    /// Expects SwiftPorts' `git` to refuse `args` in `repo` with git
+    /// 2.54's `stderr` and exit `status` — and, with such a system `git`,
+    /// that it refuses the same in a copy of `repo`.
+    private func expectRefusal(
+        _ args: [String], in repo: URL, stderr expected: String, status: Int32,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) async throws {
+        if try systemGitSpeaksLike254() {
+            let theirs = try systemGitStatus(args, in: try twin(of: repo))
+            #expect(theirs.stderr == expected, "system git \(args)", sourceLocation: sourceLocation)
+            #expect(theirs.status == status, "system git \(args)", sourceLocation: sourceLocation)
+        }
+        do {
+            try await git(args, in: repo)
+            Issue.record("expected git \(args.joined(separator: " ")) to fail", sourceLocation: sourceLocation)
+        } catch let error as CLIError {
+            #expect(error.lines.map { $0 + "\n" }.joined() == expected, sourceLocation: sourceLocation)
+            #expect(error.exitCode == status, sourceLocation: sourceLocation)
+        }
+    }
+
+    private func noTrackingInformation(_ branch: String, remote: String = "origin", rebasing: Bool = false) -> String {
+        """
+        There is no tracking information for the current branch.
+        Please specify which branch you want to \(rebasing ? "rebase against" : "merge with").
+        See git-pull(1) for details.
+
+            git pull <remote> <branch>
+
+        If you wish to set tracking information for this branch you can do so with:
+
+            git branch --set-upstream-to=\(remote)/<branch> \(branch)
+
+
+        """
+    }
+
+    private func notTheBranchRemote(_ remote: String) -> String {
+        """
+        You asked to pull from the remote '\(remote)', but did not specify
+        a branch. Because this is not the default configured remote
+        for your current branch, you must specify a branch on the command line.
+
+        """
+    }
+
+    private let notOnABranch = """
+        You are not currently on a branch.
+        Please specify which branch you want to merge with.
+        See git-pull(1) for details.
+
+            git pull <remote> <branch>
+
+
+        """
+
+    private let howToReconcile = """
+        hint: You have divergent branches and need to specify how to reconcile them.
+        hint: You can do so by running one of the following commands sometime before
+        hint: your next pull:
+        hint:
+        hint:   git config pull.rebase false  # merge
+        hint:   git config pull.rebase true   # rebase
+        hint:   git config pull.ff only       # fast-forward only
+        hint:
+        hint: You can replace "git config" with "git config --global" to set a default
+        hint: preference for all repositories. You can also pass --rebase, --no-rebase,
+        hint: or --ff-only on the command line to override the configured default per
+        hint: invocation.
+        fatal: Need to specify how to reconcile divergent branches.
+
+        """
+
+    /// With `advice.diverging` configured, which drops the line on how to
+    /// turn the hint off.
+    private let cannotFastForward = """
+        hint: Diverging branches can't be fast-forwarded, you need to either:
+        hint:
+        hint: \tgit merge --no-ff
+        hint:
+        hint: or:
+        hint:
+        hint: \tgit rebase
+        fatal: Not possible to fast-forward, aborting.
+
+        """
+
+    /// The clone's `main` and the remote's `main` each with a commit the
+    /// other lacks.
+    private func makeDiverged() throws -> (remote: URL, clone: URL) {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("theirs.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try commitFile("mine.txt", in: clone)
+        try systemGit(["fetch", "-q"], in: clone)
+        // CI's macOS runner switches hints off globally.
+        try systemGit(["config", "advice.diverging", "true"], in: clone)
+        return (remote, clone)
+    }
+
+    @Test("git pull merges the upstream branch, whatever its name")
+    func pullUpstreamOfAnotherName() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        try systemGit(["push", "-q", "origin", "main:feature"], in: clone)
+        try systemGit(["fetch", "-q"], in: clone)
+        try systemGit(["switch", "-q", "-c", "local", "--track", "origin/feature"], in: clone)
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", "-b", "feature", remote.path, other.path], in: clone)
+        try commitFile("feature.txt", in: other)
+        try systemGit(["push", "-q", "origin", "feature"], in: other)
+
+        try await git(["pull", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "feature"], in: remote))
+    }
+
+    @Test("git pull fetches from the branch's own remote")
+    func pullUpstreamOnAnotherRemote() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let second = URL(fileURLWithPath: tmp("GitRemoteSecond").path + ".git")
+        try systemGit(["init", "-q", "--bare", second.path], in: clone)
+        try systemGit(["remote", "add", "second", second.path], in: clone)
+        try systemGit(["push", "-q", "-u", "second", "main:topic"], in: clone)
+        try systemGit(["switch", "-q", "-c", "work", "--track", "second/topic"], in: clone)
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", "-b", "topic", second.path, other.path], in: clone)
+        try commitFile("topic.txt", in: other)
+        try systemGit(["push", "-q", "origin", "topic"], in: other)
+
+        try await git(["pull", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "topic"], in: second))
+    }
+
+    @Test("git pull without an upstream refuses, in git's words")
+    func pullWithoutUpstream() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        try await expectRefusal(["pull", "-q"], in: clone,
+                                stderr: noTrackingInformation("lonely"), status: 1)
+        try await expectRefusal(["pull", "-q", "--rebase"], in: clone,
+                                stderr: noTrackingInformation("lonely", rebasing: true), status: 1)
+        // An upstream branch without its remote is no upstream.
+        try systemGit(["config", "branch.lonely.merge", "refs/heads/main"], in: clone)
+        try await expectRefusal(["pull", "-q"], in: clone,
+                                stderr: noTrackingInformation("lonely"), status: 1)
+        try systemGit(["switch", "-q", "--detach", "main"], in: clone)
+        try await expectRefusal(["pull", "-q"], in: clone, stderr: notOnABranch, status: 1)
+    }
+
+    @Test("git pull <remote> refuses a remote that isn't the branch's")
+    func pullOtherRemoteWithoutBranch() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        try systemGit(["remote", "add", "mirror", remote.path], in: clone)
+        try await expectRefusal(["pull", "-q", "mirror"], in: clone,
+                                stderr: notTheBranchRemote("mirror"), status: 1)
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        try await expectRefusal(["pull", "-q", "origin"], in: clone,
+                                stderr: notTheBranchRemote("origin"), status: 1)
+        // An empty repository fetches nothing.
+        try await expectRefusal(["pull", "-q", ""], in: clone, stderr: notTheBranchRemote(""), status: 1)
+        // The upstream's remote, named, merges the upstream.
+        try systemGit(["switch", "-q", "main"], in: clone)
+        try await git(["pull", "-q", "origin"], in: clone)
+    }
+
+    @Test("git pull with an upstream the remote lacks refuses, in git's words")
+    func pullUpstreamNotFetched() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["config", "branch.main.merge", "refs/heads/gone"], in: clone)
+        try await expectRefusal(["pull", "-q"], in: clone, stderr: """
+            Your configuration specifies to merge with the ref 'refs/heads/gone'
+            from the remote, but no such ref was fetched.
+
+            """, status: 1)
+    }
+
+    @Test("git pull <remote> <branch> merges it with git's message")
+    func pullRemoteAndBranch() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let second = URL(fileURLWithPath: tmp("GitRemoteSecond").path + ".git")
+        try systemGit(["init", "-q", "--bare", second.path], in: clone)
+        try systemGit(["remote", "add", "second", second.path], in: clone)
+        try systemGit(["push", "-q", "second", "main:topic"], in: clone)
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", "-b", "topic", second.path, other.path], in: clone)
+        try commitFile("topic.txt", in: other)
+        try systemGit(["push", "-q", "origin", "topic"], in: other)
+        try commitFile("mine.txt", in: clone)
+        try systemGit(["switch", "-q", "-c", "work"], in: clone)
+
+        let theirs = try twin(of: clone)
+        try systemGit(["pull", "-q", "--no-rebase", "--no-edit", "second", "topic"], in: theirs)
+        try await git(["pull", "-q", "--no-rebase", "second", "topic"], in: clone)
+        let message = try systemGit(["log", "-1", "--format=%B"], in: clone)
+        let expected = try systemGit(["log", "-1", "--format=%B"], in: theirs)
+        #expect(message == expected)
+        #expect(message.hasPrefix("Merge branch 'topic' of "))
+        #expect(message.hasSuffix(" into work"))
+        #expect(try systemGit(["rev-parse", "HEAD^2"], in: clone)
+                == systemGit(["rev-parse", "topic"], in: second))
+    }
+
+    @Test("git pull names a repository typed as a path as git does")
+    func pullPathMergeMessage() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["switch", "-q", "-c", "side"], in: clone)
+        try commitFile("side.txt", in: clone)
+        try systemGit(["switch", "-q", "-c", "work", "main"], in: clone)
+        try commitFile("work.txt", in: clone)
+        try systemGit(["config", "pull.rebase", "false"], in: clone)
+
+        // From `.`, a local branch, named without a source.
+        let theirs = try twin(of: clone)
+        try systemGit(["pull", "-q", "--no-edit", ".", "side"], in: theirs)
+        try await git(["pull", "-q", ".", "side"], in: clone)
+        let local = try systemGit(["log", "-1", "--format=%s"], in: clone)
+        #expect(try local == systemGit(["log", "-1", "--format=%s"], in: theirs))
+        #expect(local == "Merge branch 'side' into work")
+
+        // A relative path, as typed, without trailing slashes, then
+        // without a trailing `.git` (which can leave a slash).
+        try systemGit(["reset", "-q", "--hard", "HEAD^"], in: clone)
+        try await git(["pull", "-q", "../\(clone.lastPathComponent)/.git/", "side"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%s"], in: clone)
+                == "Merge branch 'side' of ../\(clone.lastPathComponent)/ into work")
+        try systemGit(["reset", "-q", "--hard", "HEAD^"], in: clone)
+        try await git(["pull", "-q", "../\(clone.lastPathComponent)//", "side"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%s"], in: clone)
+                == "Merge branch 'side' of ../\(clone.lastPathComponent) into work")
+    }
+
+    @Test("git pull of branches that diverged follows pull.rebase and pull.ff")
+    func pullDivergedFollowsConfig() async throws {
+        // Without a say, git refuses; --ff-only and pull.ff=only refuse too.
+        let (remote, clone) = try makeDiverged()
+        try await expectRefusal(["pull", "-q"], in: clone, stderr: howToReconcile, status: 128)
+        try await expectRefusal(["pull", "-q", "--ff-only"], in: clone, stderr: cannotFastForward, status: 128)
+        try systemGit(["config", "pull.ff", "only"], in: clone)
+        try await expectRefusal(["pull", "-q"], in: clone, stderr: cannotFastForward, status: 128)
+        try await expectRefusal(["pull", "-q", "--rebase", "--ff-only"], in: clone,
+                                stderr: cannotFastForward, status: 128)
+
+        // --rebase outranks pull.ff=only.
+        try await git(["pull", "-q", "--rebase"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD^"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+        #expect(try systemGit(["log", "-1", "--format=%s"], in: clone) == "mine.txt")
+
+        // pull.rebase=true rebases; --no-rebase merges, and --no-ff
+        // outranks pull.ff=only.
+        for (config, args, merges) in [
+            (["pull.rebase", "true"], ["pull", "-q"], false),
+            (["pull.rebase", "merges"], ["pull", "-q"], false),
+            (["pull.rebase", "true"], ["pull", "-q", "--no-rebase"], true),
+            (["pull.ff", "false"], ["pull", "-q"], true),
+            (["pull.rebase", "false"], ["pull", "-q"], true),
+        ] as [([String], [String], Bool)] {
+            let (remote, clone) = try makeDiverged()
+            try systemGit(["config"] + config, in: clone)
+            try await git(args, in: clone)
+            let parents = try systemGit(["log", "-1", "--format=%P"], in: clone).split(separator: " ")
+            #expect(parents.count == (merges ? 2 : 1), "\(config) \(args)")
+            if !merges {
+                #expect(try systemGit(["rev-parse", "HEAD^"], in: clone)
+                        == systemGit(["rev-parse", "main"], in: remote))
+            }
+        }
+
+        let (_, bad) = try makeDiverged()
+        try systemGit(["config", "pull.rebase", "bogus"], in: bad)
+        try await expectRefusal(["pull", "-q"], in: bad,
+                                stderr: "fatal: invalid value for 'pull.rebase': 'bogus'\n", status: 128)
+        try systemGit(["config", "--unset", "pull.rebase"], in: bad)
+        try systemGit(["config", "pull.ff", "bogus"], in: bad)
+        try await expectRefusal(["pull", "-q"], in: bad,
+                                stderr: "fatal: invalid value for 'pull.ff': 'bogus'\n", status: 128)
+    }
+
+    @Test("git pull that conflicts leaves git's merge message")
+    func pullConflictMessage() async throws {
+        // Of git's two names for it, the one configured last counts, and
+        // `auto` in any case picks a character.
+        for comment in [";", "Auto"] {
+            let (remote, clone) = try makeRemoteAndClone()
+            let other = tmp("GitRemoteOtherClone")
+            try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+            try Data("theirs\n".utf8).write(to: other.appendingPathComponent("file.txt"))
+            try systemGit(["commit", "-q", "-am", "theirs"], in: other)
+            try systemGit(["push", "-q", "origin", "main"], in: other)
+            try Data("mine\n".utf8).write(to: clone.appendingPathComponent("file.txt"))
+            try systemGit(["commit", "-q", "-am", "mine"], in: clone)
+            try systemGit(["config", "pull.rebase", "false"], in: clone)
+            try systemGit(["config", "core.commentString", "%"], in: clone)
+            try systemGit(["config", "core.commentChar", comment], in: clone)
+
+            let theirs = try twin(of: clone)
+            _ = try systemGitStatus(["pull", "-q"], in: theirs)
+            await #expect(throws: CLIError.self) { try await git(["pull", "-q"], in: clone) }
+            let mergeMessage = { (repo: URL) in
+                try String(contentsOf: repo.appendingPathComponent(".git/MERGE_MSG"), encoding: .utf8)
+            }
+            #expect(try mergeMessage(clone) == mergeMessage(theirs), "core.commentChar=\(comment)")
+        }
+    }
+
+    @Test("MERGE_MSG comments every line, as git writes them")
+    func commentedLines() {
+        #expect(Pull.commented(["Conflicts:", "\tweird\nname", "\tplain"], with: "#")
+                == "# Conflicts:\n#\tweird\n# name\n#\tplain\n")
+        #expect(Pull.commented(["a", ""], with: ";") == "; a\n;\n")
+    }
+
+    @Test("git pull fetches the upstream by name from a remote that doesn't map it")
+    func pullUpstreamFromUnmappedRemote() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        try systemGit(["push", "-q", "origin", "main:feature"], in: clone)
+        try systemGit(["fetch", "-q"], in: clone)
+        try systemGit(["switch", "-q", "-c", "local", "--track", "origin/feature"], in: clone)
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("main.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try systemGit(["switch", "-q", "-c", "feature", "origin/feature"], in: other)
+        try commitFile("feature.txt", in: other)
+        try systemGit(["push", "-q", "origin", "feature"], in: other)
+        try systemGit(["config", "--unset-all", "remote.origin.fetch"], in: clone)
+
+        try await git(["pull", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "feature"], in: remote))
+    }
+
+    @Test("git pull --rebase replays from the fork point, leaving what the upstream dropped")
+    func pullRebaseForkPoint() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("dropped.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try systemGit(["fetch", "-q"], in: clone)
+        try systemGit(["switch", "-q", "-c", "work", "--track", "origin/main"], in: clone)
+        try commitFile("mine.txt", in: clone)
+        // The upstream drops its commit and moves on.
+        try systemGit(["reset", "-q", "--hard", "HEAD^"], in: other)
+        try commitFile("new.txt", in: other)
+        try systemGit(["push", "-q", "--force", "origin", "main"], in: other)
+
+        let theirs = try twin(of: clone)
+        try systemGit(["pull", "-q", "--rebase"], in: theirs)
+        try await git(["pull", "-q", "--rebase"], in: clone)
+        let subjects = try systemGit(["log", "--format=%s"], in: clone)
+        #expect(try subjects == systemGit(["log", "--format=%s"], in: theirs))
+        #expect(subjects == "mine.txt\nnew.txt\none")
+    }
+
+    @Test("the fork point follows the remote's own fetch destination")
+    func forkPointDestination() {
+        #expect(Pull.destination(of: "refs/heads/main", under: ["+refs/heads/*:refs/cache/origin/*"])
+                == "refs/cache/origin/main")
+        #expect(Pull.destination(of: "refs/heads/main", under: ["refs/heads/main:refs/remotes/o/m"])
+                == "refs/remotes/o/m")
+        #expect(Pull.destination(of: "refs/heads/dev", under: ["refs/heads/main:refs/remotes/o/m"]) == nil)
+        #expect(Pull.destination(of: "refs/heads/dev",
+                                 under: ["+refs/heads/*:refs/remotes/o/*", "^refs/heads/dev"]) == nil)
+    }
+
+    @Test("pull.rebase=merges refuses to flatten local merges")
+    func pullRebaseMergesRefusesMerges() async throws {
+        let (_, clone) = try makeDiverged()
+        try systemGit(["switch", "-q", "-c", "side", "HEAD^"], in: clone)
+        try commitFile("side.txt", in: clone)
+        try systemGit(["switch", "-q", "main"], in: clone)
+        try systemGit(["merge", "-q", "--no-ff", "--no-edit", "side"], in: clone)
+        let before = try systemGit(["rev-parse", "HEAD"], in: clone)
+        try systemGit(["config", "pull.rebase", "merges"], in: clone)
+        do {
+            try await git(["pull", "-q"], in: clone)
+            Issue.record("expected git pull to refuse")
+        } catch let error as CLIError {
+            #expect(error.lines == ["fatal: rebasing merge commits (pull.rebase=merges) is not supported"])
+            #expect(error.exitCode == 128)
+        }
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone) == before)
+    }
+
+    @Test("git pull <remote> without a fetch refspec merges the remote's HEAD")
+    func pullUnmappedRemote() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try systemGit(["remote", "add", "nomap", remote.path], in: clone)
+        try systemGit(["config", "--unset-all", "remote.nomap.fetch"], in: clone)
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        try await git(["pull", "-q", "nomap"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+    }
+
+    @Test("git pull into an unborn branch takes its upstream")
+    func pullIntoUnbornBranch() async throws {
+        let seed = tmp("GitRemoteSeed")
+        try FileManager.default.createDirectory(at: seed, withIntermediateDirectories: true)
+        let remote = tmp("GitRemoteBare")
+        try systemGit(["init", "-q", "--bare", "-b", "main", remote.path], in: seed)
+        let clone = tmp("GitRemoteClone")
+        try systemGit(["clone", "-q", remote.path, clone.path], in: seed)
+        try systemGit(["init", "-q", "-b", "main"], in: seed)
+        try commitFile("one.txt", in: seed)
+        try systemGit(["push", "-q", remote.path, "main"], in: seed)
+        // An empty clone's branch has an upstream, but no commit yet.
+        try systemGit(["config", "branch.main.remote", "origin"], in: clone)
+        try systemGit(["config", "branch.main.merge", "refs/heads/main"], in: clone)
+
+        try await git(["pull", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+        #expect(FileManager.default.fileExists(atPath: clone.appendingPathComponent("one.txt").path))
+    }
+
+    @Test("an empty remote.<name>.fetch maps nothing: git pull <remote> merges its HEAD")
+    func pullEmptyFetchRefspec() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try systemGit(["remote", "add", "blank", remote.path], in: clone)
+        try systemGit(["config", "remote.blank.fetch", ""], in: clone)
+        // Another remote's mapping, its name differing in case only, isn't blank's.
+        try systemGit(["remote", "add", "Blank", remote.path], in: clone)
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        try commitFile("mine.txt", in: clone)
+        try systemGit(["config", "pull.rebase", "false"], in: clone)
+        let theirs = try twin(of: clone)
+        try systemGit(["pull", "-q", "--no-edit", "blank"], in: theirs)
+        try await git(["pull", "-q", "blank"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD^2"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+        let subject = try systemGit(["log", "-1", "--format=%s"], in: clone)
+        #expect(try subject == systemGit(["log", "-1", "--format=%s"], in: theirs))
+    }
+
+    @Test("an empty first fetch refspec merges HEAD beside the other mappings")
+    func pullEmptyFirstRefspec() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try systemGit(["config", "--unset-all", "remote.origin.fetch"], in: clone)
+        try systemGit(["config", "remote.origin.fetch", ""], in: clone)
+        try systemGit(["config", "--add", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], in: clone)
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        try await git(["pull", "-q", "--no-rebase", "origin"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+    }
+
+    @Test("a remote's HEAD pulled from a path is named as typed")
+    func pullPathHeadMessage() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try commitFile("mine.txt", in: clone)
+        let typed = "../\(remote.lastPathComponent)"
+        try await git(["pull", "-q", "--no-rebase", typed, "HEAD"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%s"], in: clone) == "Merge \(typed)")
+    }
+
+    @Test("a branch whose remote is `.` merges its upstream without a source")
+    func pullFromDotRemote() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["switch", "-q", "-c", "side"], in: clone)
+        try commitFile("side.txt", in: clone)
+        try systemGit(["switch", "-q", "-c", "work", "main"], in: clone)
+        try commitFile("work.txt", in: clone)
+        try systemGit(["config", "branch.work.remote", "."], in: clone)
+        try systemGit(["config", "branch.work.merge", "refs/heads/side"], in: clone)
+        try systemGit(["config", "pull.rebase", "false"], in: clone)
+
+        let theirs = try twin(of: clone)
+        try systemGit(["pull", "-q", "--no-edit"], in: theirs)
+        try await git(["pull", "-q"], in: clone)
+        let subject = try systemGit(["log", "-1", "--format=%s"], in: clone)
+        #expect(try subject == systemGit(["log", "-1", "--format=%s"], in: theirs))
+        #expect(subject == "Merge branch 'side' into work")
+    }
+
+    @Test("without an upstream, git pull <remote> merges its first exact fetch refspec")
+    func pullFirstExactRefspec() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try systemGit(["config", "remote.origin.fetch", "refs/heads/main:refs/remotes/origin/main"], in: clone)
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        try await git(["pull", "-q", "origin"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+    }
+
+    @Test("git pull fetches an upstream the remote's refspecs don't cover")
+    func pullUpstreamNotMapped() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        try systemGit(["push", "-q", "origin", "main:feature"], in: clone)
+        try systemGit(["fetch", "-q"], in: clone)
+        try systemGit(["switch", "-q", "-c", "local", "--track", "origin/feature"], in: clone)
+        try systemGit(["config", "remote.origin.fetch", "refs/heads/main:refs/remotes/origin/main"], in: clone)
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", "-b", "feature", remote.path, other.path], in: clone)
+        try commitFile("feature.txt", in: other)
+        try systemGit(["push", "-q", "origin", "feature"], in: other)
+
+        try await git(["pull", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone)
+                == systemGit(["rev-parse", "feature"], in: remote))
+    }
+
+    @Test("an annotated tag outside refs/tags is merged with --no-ff; `tag <name>` fast-forwards")
+    func pullAnnotatedTagFastForward() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["tag", "-a", "v1", "-m", "Release one"], in: other)
+        try systemGit(["tag", "-a", "v'1", "-m", "Quoted"], in: other)
+        try systemGit(["push", "-q", "origin", "main", "v1", "v'1"], in: other)
+        let tip = try systemGit(["rev-parse", "main"], in: remote)
+        try systemGit(["switch", "-q", "-c", "lonely"], in: clone)
+        let start = try systemGit(["rev-parse", "HEAD"], in: clone)
+
+        try await git(["pull", "-q", "--no-rebase", "origin", "v1"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%P"], in: clone) == "\(start) \(tip)")
+        #expect(try systemGit(["log", "-1", "--format=%B"], in: clone).hasSuffix("Release one"))
+
+        for args in [["pull", "-q", "--no-rebase", "--ff", "origin", "v1"],
+                     ["pull", "-q", "--no-rebase", "origin", "tag", "v1"],
+                     ["pull", "-q", "--no-rebase", "origin", "tag", "v'1"]] {
+            try systemGit(["reset", "-q", "--hard", start], in: clone)
+            try? systemGit(["tag", "-d", "v1"], in: clone)
+            try? systemGit(["tag", "-d", "v'1"], in: clone)
+            try await git(args, in: clone)
+            #expect(try systemGit(["rev-parse", "HEAD"], in: clone) == tip, "\(args)")
+        }
+        try await expectRefusal(["pull", "-q", "origin", "tag"], in: clone,
+                                stderr: "fatal: you need to specify a tag name\n", status: 1)
+    }
+
+    @Test("which upstreams fetch refspecs cover")
+    func refspecCoverage() {
+        #expect(Pull.refspecs(["+refs/heads/*:refs/remotes/origin/*"], fetch: "refs/heads/feature"))
+        #expect(!Pull.refspecs(["refs/heads/main:refs/remotes/origin/main"], fetch: "refs/heads/feature"))
+        #expect(Pull.refspecs(["main:refs/remotes/origin/main"], fetch: "refs/heads/main"))
+        #expect(!Pull.refspecs(["refs/heads/*:refs/remotes/origin/*", "^refs/heads/feature"],
+                               fetch: "refs/heads/feature"))
+    }
+
+    @Test("git pull of an annotated tag keeps its message in the merge commit")
+    func pullAnnotatedTag() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("two.txt", in: other)
+        try systemGit(["tag", "-a", "v1", "-m", "Release one\n\nDetails here."], in: other)
+        try systemGit(["push", "-q", "origin", "main", "v1"], in: other)
+        try commitFile("mine.txt", in: clone)
+        try systemGit(["config", "pull.rebase", "false"], in: clone)
+
+        let theirs = try twin(of: clone)
+        try systemGit(["pull", "-q", "--no-edit", "origin", "v1"], in: theirs)
+        try await git(["pull", "-q", "origin", "v1"], in: clone)
+        let message = try systemGit(["log", "-1", "--format=%B"], in: clone)
+        #expect(try message == systemGit(["log", "-1", "--format=%B"], in: theirs))
+        #expect(message.hasSuffix("Release one\n\nDetails here."))
+    }
+
+    @Test("a valueless pull.rebase is true, an empty one false")
+    func pullValuelessBoolean() async throws {
+        let (remote, clone) = try makeDiverged()
+        let config = clone.appendingPathComponent(".git/config")
+        let text = try String(contentsOf: config, encoding: .utf8)
+        try (text + "[pull]\n\trebase\n").write(to: config, atomically: true, encoding: .utf8)
+        try await git(["pull", "-q"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD^"], in: clone)
+                == systemGit(["rev-parse", "main"], in: remote))
+
+        let (_, empty) = try makeDiverged()
+        try systemGit(["config", "pull.rebase", ""], in: empty)
+        try await git(["pull", "-q"], in: empty)
+        #expect(try systemGit(["log", "-1", "--format=%P"], in: empty).split(separator: " ").count == 2)
+    }
+
+    @Test("merge.suppressDest takes git's globs")
+    func suppressDestGlobs() {
+        for (pattern, branch, matches) in [
+            ("main", "main", true), ("ma*", "main", true), ("m?in", "main", true),
+            ("[tw]ork", "work", true), ("[a-v]ork", "work", false), ("[!w]ork", "work", false),
+            ("[^t]ork", "work", true), ("w[]]rk", "w]rk", true), ("w\\ork", "work", true),
+            ("\\*", "x", false), ("[w", "w", false), ("main", "mainline", false),
+            ("[[:alpha:]]ork", "work", true), ("[[:digit:]]ork", "work", false),
+            ("[[:digit:][:lower:]]ork", "work", true), ("[[:bogus:]]ork", "work", false),
+            ("?", "é", false), ("??", "é", true), ("[[:alpha:]]", "é", false),
+            ("*", "feature/x", false), ("feature/*", "feature/x", true), ("**", "feature/x", true),
+            ("**/x", "x", true), ("**/x", "a/b/x", true), ("f?ature/x", "f/ature/x", false),
+            ("feature?x", "feature/x", false), ("a**", "a/b", false), ("***", "feature/x", true),
+            ("***/x", "a/x", true),
+        ] {
+            #expect(SwiftGit.GitClient.glob(pattern, matches: branch) == matches, "\(pattern) \(branch)")
+        }
     }
 
     @Test("git clone -q prints nothing; a local clone ends on `done.`")
