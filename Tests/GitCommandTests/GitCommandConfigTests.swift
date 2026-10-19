@@ -227,6 +227,25 @@ struct GitCommandConfigTests {
         #expect(missing.status == 128)
     }
 
+    @Test("a relative GIT_CONFIG_GLOBAL is the working directory's, and printed as typed")
+    func relativeConfigFileName() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func run(_ args: [String], _ name: String = "rel.cfg") async throws -> Output {
+            try await git(["config"] + args, root: root, home: home, work: work,
+                          environment: ["GIT_CONFIG_GLOBAL": name])
+        }
+
+        let missing = try await run(["--global", "--list"], "none.cfg")
+        #expect(missing.stderr == "fatal: unable to read config file 'none.cfg': No such file or directory\n")
+        #expect(try await run(["--global", "a.b", "c"]).status == 0)
+        // Started in the working directory, not wherever the process is.
+        #expect(try String(contentsOf: work.appendingPathComponent("rel.cfg"), encoding: .utf8)
+                == "[a]\n\tb = c\n")
+        #expect(try await run(["--global", "--get", "a.b"]).stdout == "c\n")
+    }
+
     @Test("an empty GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM names a file called ''")
     func emptyConfigFileName() async throws {
         let fixture = try makeRoot()

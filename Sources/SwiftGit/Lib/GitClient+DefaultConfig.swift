@@ -31,10 +31,10 @@ extension GitClient {
     /// `--system` also reads it when `GIT_CONFIG_NOSYSTEM` has emptied
     /// libgit2's search path); the global one is `~/.gitconfig` or the XDG
     /// file, as git looks.
-    private static func configFileExists(_ scope: ConfigScope) -> Bool {
-        if configFileOverride(scope) != nil || scope == .system {
-            let path = configFilePath(scope)
-            return !path.isEmpty && FileManager.default.fileExists(atPath: path)
+    private func configFileExists(_ scope: ConfigScope) -> Bool {
+        if Self.configFileOverride(scope) != nil || scope == .system {
+            let path = Self.configFilePath(scope)
+            return !path.isEmpty && FileManager.default.fileExists(atPath: location(of: path))
         }
         var path = git_buf()
         defer { git_buf_dispose(&path) }
@@ -42,6 +42,12 @@ extension GitClient {
         var xdg = git_buf()
         defer { git_buf_dispose(&xdg) }
         return git_config_find_xdg(&xdg) == 0
+    }
+
+    /// Where a config file named `path` is: a relative name is the shell's
+    /// working directory's, as git has it; messages keep it as typed.
+    func location(of path: String) -> String {
+        path.isEmpty ? path : URL(fileURLWithPath: path, relativeTo: workingDirectory).path
     }
 
     /// The path git names for a scope's file.
@@ -91,12 +97,12 @@ extension GitClient {
             defer { git_config_free(file) }
             let path = Self.configFilePath(scope)
             let level = scope == .global ? GIT_CONFIG_LEVEL_GLOBAL : GIT_CONFIG_LEVEL_SYSTEM
-            if Self.configFileExists(scope) {
+            if self.configFileExists(scope) {
                 if Self.configFileOverride(scope) == nil && scope == .global {
                     try Self.check(git_config_open_global(&file, base))
                 } else {
                     try Self.check(git_config_new(&file))
-                    try Self.check(git_config_add_file_ondisk(file, path, level, nil, 1))
+                    try Self.check(git_config_add_file_ondisk(file, self.location(of: path), level, nil, 1))
                 }
             } else {
                 switch missing {
@@ -114,7 +120,7 @@ extension GitClient {
                             message: "could not write config file : Is a directory")
                     }
                     try Self.check(git_config_new(&file))
-                    try Self.check(git_config_add_file_ondisk(file, path, level, nil, 1))
+                    try Self.check(git_config_add_file_ondisk(file, self.location(of: path), level, nil, 1))
                 }
             }
             return try body(file)
