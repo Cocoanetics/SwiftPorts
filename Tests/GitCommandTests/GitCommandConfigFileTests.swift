@@ -19,7 +19,9 @@ struct GitCommandConfigFileTests: ConfigTestHelpers {
         let fixture = try makeRoot()
         let (root, home, work) = (fixture.root, fixture.home, fixture.work)
         defer { try? FileManager.default.removeItem(at: root) }
-        let result = try await git(["config", "--system", "a.b", "c"], root: root, home: home, work: work)
+        // No sandbox: with one, the host's /etc is outside its root and refused.
+        let result = try await git(["config", "--system", "a.b", "c"], root: root, home: home, work: work,
+                                   sandboxed: false)
         #expect(result.stderr == "error: could not lock config file /etc/gitconfig: Permission denied\n")
         #expect(result.status == 255)
 
@@ -30,6 +32,54 @@ struct GitCommandConfigFileTests: ConfigTestHelpers {
         #expect(list.status == 128)
         let get = try await git(["config", "--system", "--get", "a.b"], root: root, home: home, work: work)
         #expect(get.status == 1)
+    }
+
+    @Test("a sandbox refuses to change the host's system config")
+    func systemWriteIsAuthorized() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for args in [["a.b", "c"], ["--unset", "a.b"]] {
+            await #expect(throws: Sandbox.Denial.self) {
+                try await self.git(["config", "--system"] + args, root: root, home: home, work: work)
+            }
+        }
+    }
+
+    @Test("--global works on ~/.gitconfig if there is one, else the XDG file")
+    func globalFileSelection() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let xdgDirectory = home.appendingPathComponent(".config/git")
+        try FileManager.default.createDirectory(at: xdgDirectory, withIntermediateDirectories: true)
+        let xdg = xdgDirectory.appendingPathComponent("config")
+        try "[a]\n\tb = xdg\n".write(to: xdg, atomically: true, encoding: .utf8)
+        func run(_ args: [String]) async throws -> ConfigOutput {
+            try await git(["config", "--global"] + args, root: root, home: home, work: work)
+        }
+
+        // Only the XDG file: read from it, written to it.
+        #expect(try await run(["--get", "a.b"]).stdout == "xdg\n")
+        #expect(try await run(["x.y", "z"]).status == 0)
+        #expect(try String(contentsOf: xdg, encoding: .utf8) == "[a]\n\tb = xdg\n[x]\n\ty = z\n")
+        #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent(".gitconfig").path))
+
+        // With ~/.gitconfig too, the XDG file is left out.
+        try "[h]\n\tz = home\n".write(
+            to: home.appendingPathComponent(".gitconfig"), atomically: true, encoding: .utf8)
+        #expect(try await run(["--get", "a.b"]).status == 1)
+        #expect(try await run(["--list"]).stdout == "h.z=home\n")
+
+        // A lock failure names the file that was picked.
+        try FileManager.default.removeItem(at: home.appendingPathComponent(".gitconfig"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: xdgDirectory.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: xdgDirectory.path) }
+        if getuid() != 0 {
+            let locked = try await run(["q.r", "s"])
+            #expect(locked.stderr == "error: could not lock config file \(xdg.path): Permission denied\n")
+            #expect(locked.status == 255)
+        }
     }
 
     @Test("GIT_CONFIG_SYSTEM names the system file, which is read even under GIT_CONFIG_NOSYSTEM")

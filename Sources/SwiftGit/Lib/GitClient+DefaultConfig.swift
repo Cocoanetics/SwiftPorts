@@ -29,22 +29,13 @@ extension GitClient {
         return Shell.current.environment[variable]
     }
 
-    /// Whether the scope's file is there. A file the environment names, and
-    /// the system file, are judged by their path alone (an explicit
-    /// `--system` also reads it when `GIT_CONFIG_NOSYSTEM` has emptied
-    /// libgit2's search path); the global one is `~/.gitconfig` or the XDG
-    /// file, as git looks.
+    /// Whether the scope's file is there, judged by its path alone: the one
+    /// the environment names, the system file (an explicit `--system` also
+    /// reads it when `GIT_CONFIG_NOSYSTEM` has emptied libgit2's search
+    /// path), or the one `--global` picks.
     private func configFileExists(_ scope: ConfigScope) -> Bool {
-        if Self.configFileOverride(scope) != nil || scope == .system {
-            let path = Self.configFilePath(scope)
-            return !path.isEmpty && FileManager.default.fileExists(atPath: location(of: path))
-        }
-        var path = git_buf()
-        defer { git_buf_dispose(&path) }
-        if git_config_find_global(&path) == 0 { return true }
-        var xdg = git_buf()
-        defer { git_buf_dispose(&xdg) }
-        return git_config_find_xdg(&xdg) == 0
+        let path = Self.configFilePath(scope)
+        return !path.isEmpty && FileManager.default.fileExists(atPath: location(of: path))
     }
 
     /// git's lock failure for a config file whose directory isn't there.
@@ -74,7 +65,19 @@ extension GitClient {
     /// The path git names for a scope's file.
     static func configFilePath(_ scope: ConfigScope) -> String {
         if let path = configFileOverride(scope) { return path }
-        return scope == .global ? Libgit2Sandboxing.shared.globalHome + "/.gitconfig" : systemConfigPath()
+        return scope == .global ? globalConfigPath() : systemConfigPath()
+    }
+
+    /// The file `--global` works on, as git picks it: `~/.gitconfig` if it
+    /// is there, else the XDG file if that is, else `~/.gitconfig` to start.
+    /// Worked out from the shell's environment, as the sandbox bridge sets
+    /// libgit2's search paths from it.
+    static func globalConfigPath() -> String {
+        let sandbox = Shell.current.sandbox
+        let home = Libgit2Sandboxing.shared.home(for: sandbox) + "/.gitconfig"
+        if FileManager.default.fileExists(atPath: home) { return home }
+        let xdg = Libgit2Sandboxing.shared.xdgConfigHome(for: sandbox) + "/git/config"
+        return FileManager.default.fileExists(atPath: xdg) ? xdg : home
     }
 
     /// Where the system config is: `GIT_CONFIG_SYSTEM`, else libgit2's
@@ -113,7 +116,7 @@ extension GitClient {
         scope: ConfigScope?, missing: MissingConfigFile = .fail, _ body: (OpaquePointer?) throws -> T
     ) async throws -> T {
         try await Shell.authorize(workingDirectory)
-        try await authorizeConfigFile(of: scope)
+        try await authorizeConfigFile(of: scope, writing: missing == .create || missing == .emptyForWrite)
         return try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
             var base: OpaquePointer?
             try Self.check(git_config_open_default(&base))
@@ -128,13 +131,19 @@ extension GitClient {
     /// A file the environment names is the user's pick, not libgit2's
     /// search, and the global file sits under the home libgit2 is pointed
     /// at, which may be outside the sandbox: both must be allowed.
-    private func authorizeConfigFile(of scope: ConfigScope?) async throws {
+    private func authorizeConfigFile(of scope: ConfigScope?, writing: Bool) async throws {
         guard scope != .local else { return }
         if let scope, let named = Self.configFileOverride(scope), !named.isEmpty {
             try await Shell.authorize(URL(fileURLWithPath: location(of: named)))
-        } else if scope != .system {
+        } else if scope == .system {
+            // Reading the host's system file is what libgit2 does for every
+            // command; changing it is the sandbox's business.
+            let system = Self.systemConfigPath()
+            if writing, !system.isEmpty { try await Shell.authorize(URL(fileURLWithPath: system)) }
+        } else {
             let home = Libgit2Sandboxing.shared.home(for: Shell.current.sandbox)
             try await Shell.authorize(URL(fileURLWithPath: home).appendingPathComponent(".gitconfig"))
+            try await Shell.authorize(URL(fileURLWithPath: Self.globalConfigPath()))
         }
     }
 
@@ -147,10 +156,6 @@ extension GitClient {
         let path = Self.configFilePath(scope)
         let level = scope == .global ? GIT_CONFIG_LEVEL_GLOBAL : GIT_CONFIG_LEVEL_SYSTEM
         if configFileExists(scope) {
-            if Self.configFileOverride(scope) == nil && scope == .global {
-                try Self.check(git_config_open_global(&file, base))
-                return file
-            }
             // A file that is there but can't be read: git's words.
             guard FileManager.default.isReadableFile(atPath: location(of: path)) else {
                 throw Libgit2Error(

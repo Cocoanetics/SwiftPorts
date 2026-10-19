@@ -38,7 +38,8 @@ extension ConfigTestHelpers {
     /// `git <args>` in `work` under a sandbox whose home is `home`: stdout,
     /// stderr (an error's lines included) and the exit status.
     func git(
-        _ args: [String], root: URL, home: URL, work: URL, environment: [String: String] = [:]
+        _ args: [String], root: URL, home: URL, work: URL, environment: [String: String] = [:],
+        sandboxed: Bool = true
     ) async throws -> ConfigOutput {
         let out = OutputSink(), err = OutputSink()
         let shell = Shell(
@@ -46,7 +47,7 @@ extension ConfigTestHelpers {
             environment: Environment(
                 variables: ["HOME": home.path, "GIT_CONFIG_NOSYSTEM": "1"].merging(environment) { $1 },
                 workingDirectory: work.path))
-        shell.sandbox = Sandbox.rooted(at: root)
+        if sandboxed { shell.sandbox = Sandbox.rooted(at: root) }
         var failure: CLIError?
         do {
             try await shell.withCurrent {

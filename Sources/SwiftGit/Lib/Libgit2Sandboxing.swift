@@ -68,6 +68,15 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
         return sandbox.homeDirectory.path
     }
 
+    /// The XDG config directory libgit2 is pointed at for `sandbox`: the
+    /// shell's `XDG_CONFIG_HOME`, else `<home>/.config`, as `apply` sets it.
+    func xdgConfigHome(for sandbox: Sandbox?) -> String {
+        if sandbox != nil, let xdg = Shell.current.environment.variables["XDG_CONFIG_HOME"], !xdg.isEmpty {
+            return xdg
+        }
+        return home(for: sandbox) + "/.config"
+    }
+
     /// The directory of the global `.gitconfig` libgit2 currently looks
     /// in: the sandbox's, or the process's home when no sandbox is applied.
     /// Read inside ``runIsolated(_:body:)``.
