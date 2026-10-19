@@ -157,34 +157,34 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
     // MARK: - Thin wrappers around CLibgit2Shim
 
     private func setSearchPath(level: Int32, path: String) throws {
-        let rc = path.withCString { swiftports_libgit2_set_search_path(level, $0) }
-        if rc != 0 {
+        let result = path.withCString { swiftports_libgit2_set_search_path(level, $0) }
+        if result != 0 {
             throw Libgit2SandboxingError.optionSetFailed(
-                option: "SET_SEARCH_PATH(\(level))", rc: rc)
+                option: "SET_SEARCH_PATH(\(level))", rc: result)
         }
     }
 
     private func resetSearchPath(level: Int32) throws {
-        let rc = swiftports_libgit2_set_search_path(level, nil)
-        if rc != 0 {
+        let result = swiftports_libgit2_set_search_path(level, nil)
+        if result != 0 {
             throw Libgit2SandboxingError.optionSetFailed(
-                option: "SET_SEARCH_PATH(\(level)) reset", rc: rc)
+                option: "SET_SEARCH_PATH(\(level)) reset", rc: result)
         }
     }
 
     private func setHomedir(path: String) throws {
-        let rc = path.withCString { swiftports_libgit2_set_homedir($0) }
-        if rc != 0 {
+        let result = path.withCString { swiftports_libgit2_set_homedir($0) }
+        if result != 0 {
             throw Libgit2SandboxingError.optionSetFailed(
-                option: "SET_HOMEDIR", rc: rc)
+                option: "SET_HOMEDIR", rc: result)
         }
     }
 
     private func resetHomedir() throws {
-        let rc = swiftports_libgit2_set_homedir(nil)
-        if rc != 0 {
+        let result = swiftports_libgit2_set_homedir(nil)
+        if result != 0 {
             throw Libgit2SandboxingError.optionSetFailed(
-                option: "SET_HOMEDIR reset", rc: rc)
+                option: "SET_HOMEDIR reset", rc: result)
         }
     }
 
