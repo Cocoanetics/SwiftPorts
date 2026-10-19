@@ -102,7 +102,7 @@ extension GitClient {
         if git_config_find_system(&found) == 0, let path = found.ptr { return String(cString: path) }
         var buffer = [CChar](repeating: 0, count: 4096)
         let level = Int32(GIT_CONFIG_LEVEL_SYSTEM.rawValue)
-        if swiftports_libgit2_get_search_path(level, &buffer, UInt(buffer.count)) == 0 {
+        if swiftports_libgit2_get_search_path(level, &buffer, buffer.count) == 0 {
             #if os(Windows)
             let separator: Character = ";"
             #else
@@ -181,6 +181,44 @@ extension GitClient {
         }
     }
 
+    /// A config value as git reads it: quotes group and are dropped, a
+    /// backslash escapes the next character (`\n`, `\t` and `\b` are the usual
+    /// control characters), and an unquoted `#` or `;` starts a comment.
+    /// Whitespace around an unquoted value is dropped.
+    static func configValue(_ raw: Substring) -> String {
+        var value = ""
+        var protected = 0
+        var inQuote = false
+        var escaped = false
+        for character in raw.drop(while: { $0 == " " || $0 == "\t" }) {
+            if escaped {
+                switch character {
+                case "n": value.append("\n")
+                case "t": value.append("\t")
+                case "b": value.append("\u{8}")
+                default: value.append(character)
+                }
+                escaped = false
+                protected = value.count
+            } else if character == "\\" {
+                escaped = true
+            } else if character == "\"" {
+                inQuote.toggle()
+                protected = value.count
+            } else if !inQuote && (character == "#" || character == ";") {
+                break
+            } else {
+                value.append(character)
+                if inQuote { protected = value.count }
+            }
+        }
+        // Whitespace after the last quoted or escaped character goes.
+        while value.count > protected, let last = value.last, last == " " || last == "\t" {
+            value.removeLast()
+        }
+        return value
+    }
+
     /// The files `file` itself names in `[include]` / `[includeIf]` sections,
     /// with `~/` and relative names resolved as git does.
     static func includePaths(in file: String, home: String) -> [String] {
@@ -193,10 +231,7 @@ extension GitClient {
                 section = line.dropFirst().prefix { $0 != " " && $0 != "]" && $0 != "\"" }.lowercased()
             } else if section == "include" || section == "includeif", let equals = line.firstIndex(of: "="),
                       line[..<equals].trimmingCharacters(in: .whitespaces).lowercased() == "path" {
-                var value = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
-                if value.hasPrefix("\""), value.hasSuffix("\""), value.count >= 2 {
-                    value = String(value.dropFirst().dropLast())
-                }
+                let value = Self.configValue(line[line.index(after: equals)...])
                 let directory = URL(fileURLWithPath: file).deletingLastPathComponent()
                 found.append(value.hasPrefix("~/")
                     ? home + String(value.dropFirst(1))

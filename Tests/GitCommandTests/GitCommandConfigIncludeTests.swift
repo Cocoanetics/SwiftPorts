@@ -58,5 +58,26 @@ struct GitCommandConfigIncludeTests: ConfigTestHelpers {
             }
         }
     }
+
+    @Test("an include path is read as git reads a value: quotes and trailing comments")
+    func includePathsAreParsedLikeValues() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitConfigOutside-quoted-\(UUID().uuidString).cfg")
+        try "[secret]\n\tkey = value\n".write(to: outside, atomically: true, encoding: .utf8)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let global = home.appendingPathComponent(".gitconfig")
+        for line in ["path = \"\(outside.path)\" # a comment", "path = \(outside.path) ; a comment",
+                     "path = \"\(outside.path)\""] {
+            try "[include]\n\t\(line)\n".write(to: global, atomically: true, encoding: .utf8)
+            await #expect(throws: Sandbox.Denial.self, "\(line)") {
+                try await self.git(["config", "secret.key"], root: root, home: home, work: work)
+            }
+        }
+    }
 }
 #endif

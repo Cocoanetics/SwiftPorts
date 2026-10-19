@@ -11,7 +11,7 @@ int swiftports_libgit2_set_homedir(const char *path) {
     return git_libgit2_opts(GIT_OPT_SET_HOMEDIR, path);
 }
 
-int swiftports_libgit2_get_search_path(int level, char *out, unsigned long length) {
+int swiftports_libgit2_get_search_path(int level, char *out, size_t length) {
     git_buf buffer = GIT_BUF_INIT;
     int result = git_libgit2_opts(GIT_OPT_GET_SEARCH_PATH, level, &buffer);
     if (result == 0) {

@@ -1,6 +1,8 @@
 #ifndef SWIFTPORTS_CLIBGIT2_SHIM_H
 #define SWIFTPORTS_CLIBGIT2_SHIM_H
 
+#include <stddef.h>
+
 /// Typed wrappers around the small subset of `git_libgit2_opts(int, ...)`
 /// that the `Sandbox` ↔ libgit2 bridge needs.
 ///
@@ -42,6 +44,6 @@ int swiftports_libgit2_set_homedir(const char *path);
 /// `out` (`length` bytes, NUL-terminated). Returns `0` on success, a
 /// negative libgit2 code on failure, and `-1` when the path does not fit.
 /// A level that is disabled (`SET_SEARCH_PATH` with `""`) gives an empty string.
-int swiftports_libgit2_get_search_path(int level, char *out, unsigned long length);
+int swiftports_libgit2_get_search_path(int level, char *out, size_t length);
 
 #endif
