@@ -1703,6 +1703,19 @@ struct GitCommandRemoteTests {
         try await expectLikeGit(["pull", "-q", "--no-rebase", "odd", "HEAD", "a"], in: clone)
     }
 
+    @Test("git pull of an annotated tag HEAD already has is up to date, as git says")
+    func pullTagAlreadyMerged() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        // `old` tags origin/main, which this branch already has.
+        try systemGit(["tag", "-a", "old", "-m", "old", "origin/main"], in: clone)
+        try systemGit(["push", "-q", "origin", "old"], in: clone)
+        try systemGit(["tag", "-d", "old"], in: clone)
+        for refs in [["old"], ["old", "main"]] {
+            let result = try await expectLikeGit(["pull", "origin"] + refs, in: clone)
+            #expect(result.status == 0, "\(refs)")
+        }
+    }
+
     @Test("git pull of several heads refuses as git does: rebasing, --ff-only, an unconfigured pull")
     func pullOctopusRefusals() async throws {
         let clone = try makeOctopusRemoteAndClone()

@@ -227,9 +227,11 @@ struct Pull: AsyncParsableCommand {
             canFastForward = heads.count == 1
             var upToDate = true
             for each in heads {
-                let base = try? await client.mergeBase(current, each.oid)
+                // An annotated tag by the commit it names.
+                let commit = (try? await client.resolveOID(each.oid + "^{commit}")) ?? each.oid
+                let base = try? await client.mergeBase(current, commit)
                 if heads.count == 1 { canFastForward = base == current }
-                if base != each.oid { upToDate = false }
+                if base != commit { upToDate = false }
             }
             divergent = !canFastForward && !upToDate
         }
