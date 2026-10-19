@@ -50,8 +50,11 @@ struct GitCommandConfigIncludeTests: ConfigTestHelpers {
             if name == "nested" {
                 try "[include]\n\tpath = nested.cfg\n".write(to: global, atomically: true, encoding: .utf8)
             }
-            await #expect(throws: Sandbox.Denial.self) {
-                try await self.git(["config", "--global", "--get", "a.b"], root: root, home: home, work: work)
+            // Scoped or unscoped, an include outside the root is refused.
+            for args in [["--global", "--get", "a.b"], ["a.b"], ["--list"]] {
+                await #expect(throws: Sandbox.Denial.self) {
+                    try await self.git(["config"] + args, root: root, home: home, work: work)
+                }
             }
         }
     }

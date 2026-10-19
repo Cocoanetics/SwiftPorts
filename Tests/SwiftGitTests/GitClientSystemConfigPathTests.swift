@@ -30,10 +30,14 @@ struct GitClientSystemConfigPathTests {
         defer {
             if let saved { setenv("XDG_CONFIG_HOME", saved, 1) } else { unsetenv("XDG_CONFIG_HOME") }
         }
+        let savedHome = ProcessInfo.processInfo.environment["HOME"]
+        defer { if let savedHome { setenv("HOME", savedHome, 1) } }
+        setenv("HOME", "/custom/home", 1)
+        #expect(Libgit2Sandboxing.shared.home(for: nil) == "/custom/home")
         setenv("XDG_CONFIG_HOME", "/custom/xdg", 1)
         #expect(Libgit2Sandboxing.shared.xdgConfigHome(for: nil) == "/custom/xdg")
         unsetenv("XDG_CONFIG_HOME")
-        #expect(Libgit2Sandboxing.shared.xdgConfigHome(for: nil) == NSHomeDirectory() + "/.config")
+        #expect(Libgit2Sandboxing.shared.xdgConfigHome(for: nil) == "/custom/home/.config")
     }
 
     /// The search path is a list: the file may be in a later directory.

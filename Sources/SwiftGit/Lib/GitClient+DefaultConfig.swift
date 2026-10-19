@@ -149,11 +149,20 @@ extension GitClient {
     private func authorizeConfigFile(of scope: ConfigScope?, writing: Bool) async throws {
         guard scope != .local else { return }
         try await authorizeSelectedFile(of: scope, writing: writing)
-        // What the file includes is read as well.
-        guard let scope else { return }
+        // What the file includes is read as well: an unscoped read reads
+        // the global file's includes too.
         let home = Libgit2Sandboxing.shared.home(for: Shell.current.sandbox)
-        for included in Self.includedFiles(of: location(of: Self.configFilePath(scope)), home: home) {
+        try await authorizeIncludes(of: location(of: Self.configFilePath(scope ?? .global)), home: home)
+    }
+
+    /// Authorizes each file `file` includes, before it is opened to look for
+    /// the includes in it. A conditional `[includeIf]` counts as an include
+    /// whether or not its condition holds, to be on the safe side.
+    private func authorizeIncludes(of file: String, home: String, depth: Int = 0) async throws {
+        guard depth < 10 else { return }
+        for included in Self.includePaths(in: file, home: home) {
             try await Shell.authorize(URL(fileURLWithPath: included))
+            try await authorizeIncludes(of: included, home: home, depth: depth + 1)
         }
     }
 
@@ -172,11 +181,10 @@ extension GitClient {
         }
     }
 
-    /// Every file the scope's file pulls in with `[include]` / `[includeIf]`,
-    /// followed as libgit2 follows them, with `~/` and relative names as git
-    /// resolves them.
-    static func includedFiles(of file: String, home: String, depth: Int = 0) -> [String] {
-        guard depth < 10, let text = try? String(contentsOfFile: file, encoding: .utf8) else { return [] }
+    /// The files `file` itself names in `[include]` / `[includeIf]` sections,
+    /// with `~/` and relative names resolved as git does.
+    static func includePaths(in file: String, home: String) -> [String] {
+        guard let text = try? String(contentsOfFile: file, encoding: .utf8) else { return [] }
         var section = ""
         var found: [String] = []
         for rawLine in text.split(whereSeparator: \.isNewline) {
@@ -190,11 +198,9 @@ extension GitClient {
                     value = String(value.dropFirst().dropLast())
                 }
                 let directory = URL(fileURLWithPath: file).deletingLastPathComponent()
-                let path = value.hasPrefix("~/")
+                found.append(value.hasPrefix("~/")
                     ? home + String(value.dropFirst(1))
-                    : URL(fileURLWithPath: value, relativeTo: directory).path
-                found.append(path)
-                found += includedFiles(of: path, home: home, depth: depth + 1)
+                    : URL(fileURLWithPath: value, relativeTo: directory).path)
             }
         }
         return found

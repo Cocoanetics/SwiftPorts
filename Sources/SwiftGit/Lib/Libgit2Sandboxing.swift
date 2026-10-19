@@ -61,9 +61,13 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
     private var lastApplied: AppliedSnapshot?
 
     /// The home directory libgit2 is pointed at for `sandbox`: the shell's
-    /// `HOME`, else the sandbox's own home, as `apply` sets it.
+    /// `HOME`, else the sandbox's own home, as `apply` sets it; without a
+    /// sandbox, the process's `HOME`, else the account's home.
     func home(for sandbox: Sandbox?) -> String {
-        guard let sandbox else { return NSHomeDirectory() }
+        guard let sandbox else {
+            if let home = ProcessInfo.processInfo.environment["HOME"], !home.isEmpty { return home }
+            return NSHomeDirectory()
+        }
         if let home = Shell.current.environment.variables["HOME"], !home.isEmpty { return home }
         return sandbox.homeDirectory.path
     }
