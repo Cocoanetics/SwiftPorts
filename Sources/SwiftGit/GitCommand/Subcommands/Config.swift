@@ -66,6 +66,9 @@ struct Config: AsyncParsableCommand {
             if list || writes { throw CLIError.stderr("fatal: \(error.message)", exitCode: 128) }
             Shell.current.stderr("warning: \(error.message)\n")
             throw CLIError(lines: [], exitCode: 1)
+        } catch let error as Libgit2Error where error.message.hasPrefix("could not lock config file") {
+            // The file's directory isn't there.
+            throw CLIError.stderr("error: \(error.message)", exitCode: 255)
         } catch let error as Libgit2Error where error.message.hasPrefix("could not write config file") {
             // A selected file that is no file (`GIT_CONFIG_GLOBAL=`).
             throw CLIError.stderr("error: \(error.message)", exitCode: 4)

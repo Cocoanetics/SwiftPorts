@@ -15,6 +15,9 @@ extension GitClient {
         case empty
         /// A write starts the file.
         case create
+        /// As `empty`, for a change (an unset): git still has to lock the
+        /// file, which fails where its directory isn't.
+        case emptyForWrite
         /// git's "unable to read config file" error.
         case fail
     }
@@ -42,6 +45,19 @@ extension GitClient {
         var xdg = git_buf()
         defer { git_buf_dispose(&xdg) }
         return git_config_find_xdg(&xdg) == 0
+    }
+
+    /// git's lock failure for a config file whose directory isn't there.
+    func requireDirectory(of path: String) throws {
+        guard !path.isEmpty else { return }
+        let directory = URL(fileURLWithPath: location(of: path)).deletingLastPathComponent().path
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue
+        else {
+            throw Libgit2Error(
+                code: GIT_ENOTFOUND.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
+                message: "could not lock config file \(path): No such file or directory")
+        }
     }
 
     /// The file git reads and writes for `scope`, as it names it.
@@ -137,7 +153,11 @@ extension GitClient {
                         message: "unable to read config file '\(path)': No such file or directory")
                 case .empty:
                     try Self.check(git_config_new(&file))
+                case .emptyForWrite:
+                    try self.requireDirectory(of: path)
+                    try Self.check(git_config_new(&file))
                 case .create:
+                    try self.requireDirectory(of: path)
                     // git can't write a file called `''` either.
                     guard !path.isEmpty else {
                         throw Libgit2Error(

@@ -43,7 +43,7 @@ extension GitClient {
     @discardableResult
     public func configUnset(_ name: String, scope: ConfigScope = .local) async throws -> Bool {
         if scope == .global || scope == .system {
-            return try await withDefaultConfig(scope: scope, missing: .empty) { config in
+            return try await withDefaultConfig(scope: scope, missing: .emptyForWrite) { config in
                 // An absent key (or file) is nothing to remove.
                 guard try Self.configString(name, in: config) != nil else { return false }
                 let result = git_config_delete_entry(config, name)
