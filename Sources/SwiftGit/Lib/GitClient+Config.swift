@@ -233,7 +233,9 @@ extension GitClient {
         let forced = body.hasPrefix("+")
         if forced { body = body.dropFirst() }
         if body.hasPrefix("^") {
-            let name = body.dropFirst()
+            var name = body.dropFirst()
+            // `^@` is `^HEAD` as well.
+            if name == "@" { name = "HEAD" }
             guard !forced, !name.isEmpty, !name.contains(":"),
                   !(name.count == 40 && name.utf8.allSatisfy({ isASCIIHex($0) }))
             else { return false }
@@ -255,12 +257,14 @@ extension GitClient {
     }
 
     /// `refspec` with a source of `@` alone spelled out as HEAD, as
-    /// git's parse_refspec reads it (`@:refs/heads/x`, `+@`).
+    /// git's parse_refspec reads it (`@:refs/heads/x`, `+@`, `^@`).
     public static func pushRefspecReadingAtAsHead(_ refspec: String) -> String {
-        let forced = refspec.hasPrefix("+")
-        let body = forced ? refspec.dropFirst() : Substring(refspec)
+        var prefix = ""
+        var body = Substring(refspec)
+        if body.hasPrefix("+") { prefix += "+"; body = body.dropFirst() }
+        if body.hasPrefix("^") { prefix += "^"; body = body.dropFirst() }
         guard body == "@" || body.hasPrefix("@:") else { return refspec }
-        return (forced ? "+" : "") + "HEAD" + body.dropFirst()
+        return prefix + "HEAD" + body.dropFirst()
     }
 
     private static func isASCIIHex(_ byte: UInt8) -> Bool {

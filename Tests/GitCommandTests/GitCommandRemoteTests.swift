@@ -1030,6 +1030,8 @@ struct GitCommandRemoteTests {
         #expect(GitClient.pushRefspecReadingAtAsHead("@") == "HEAD")
         #expect(GitClient.pushRefspecReadingAtAsHead("+@:refs/heads/at") == "+HEAD:refs/heads/at")
         #expect(GitClient.pushRefspecReadingAtAsHead("@foo") == "@foo")
+        #expect(GitClient.pushRefspecReadingAtAsHead("^@") == "^HEAD")
+        #expect(GitClient.isValidPushRefspec("^@"))
         // A negative refspec is a ref name or pattern alone.
         #expect(GitClient.isValidPushRefspec("^refs/heads/dev"))
         #expect(GitClient.isValidPushRefspec("^refs/heads/d*"))
