@@ -33,7 +33,7 @@ extension GitClient {
     /// Every value of a multi-valued key (`git config --get-all <name>`),
     /// in the order git reads them: system, global, then the
     /// repository's own config, each file top to bottom. A key without
-    /// a value (`[remote "origin"] push`) has none to give.
+    /// a value (`[remote "origin"] push`) gives an empty one.
     public func configGetAll(_ name: String) async throws -> [String] {
         try await withRepository { _ in try Self.configValues(name, in: workingDirectory) }
     }
@@ -82,8 +82,10 @@ extension GitClient {
             let result = git_config_next(&entry, iterator)
             if result == GIT_ITEROVER.rawValue { break }
             try check(result)
-            guard let entry = entry?.pointee, let value = entry.value else { continue }
-            values.append((Int(entry.level.rawValue), String(cString: value)))
+            guard let entry = entry?.pointee else { continue }
+            // A key without a value (`[foo] bar`) reads as empty, as
+            // `git config --get-all` gives it.
+            values.append((Int(entry.level.rawValue), entry.value.map { String(cString: $0) } ?? ""))
         }
         // A stable sort keeps each level's values in file order.
         return values.enumerated()

@@ -955,6 +955,19 @@ struct GitCommandRemoteTests {
         }
     }
 
+    @Test("configGetAll reads a key without a value as empty, as git config --get-all does")
+    func configGetAllValueless() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let config = clone.appendingPathComponent(".git/config")
+        try (try String(contentsOf: config, encoding: .utf8) + "[foo]\n\tbar\n\tbar = x\n")
+            .write(to: config, atomically: true, encoding: .utf8)
+        let values = try await Shell(environment: Environment(variables: [:], workingDirectory: clone.path)).withCurrent {
+            try await GitClient(workingDirectory: clone).configGetAll("foo.bar")
+        }
+        // `git config --get-all foo.bar` prints an empty line, then `x`.
+        #expect(values == ["", "x"])
+    }
+
     @Test("a bare push key is found in a CRLF config too")
     func pushValuelessRefspecCRLF() async throws {
         let (_, clone) = try makeRemoteAndClone()
