@@ -1630,6 +1630,15 @@ struct GitCommandRemoteTests {
         #expect(try systemGit(["log", "-1", "--format=%s"], in: clone).hasPrefix("Merge branches 'a' and 'b' of "))
     }
 
+    @Test("git pull . with another ref keeps it in this repository's group, as git's message does")
+    func pullLocalOtherRef() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        try systemGit(["update-ref", "refs/meta/x", "b"], in: clone)
+        _ = try await expectLikeGit(["pull", "-q", "--no-rebase", ".", "refs/meta/x", "HEAD", "a"], in: clone)
+        let subject = try systemGit(["log", "-1", "--format=%s"], in: clone)
+        #expect(subject == "Merge HEAD, branch 'a', commit 'refs/meta/x'")
+    }
+
     @Test("git pull of several heads names those git's message names")
     func pullOctopusMessage() async throws {
         let clone = try makeOctopusRemoteAndClone()

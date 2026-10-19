@@ -208,14 +208,13 @@ extension GitClient {
 
     /// A FETCH_HEAD description as git's fmt-merge-msg reads it: what it
     /// names before the first ` of `, and the source after, or, with no
-    /// ` of `, the source's own HEAD; `.` is this repository.
+    /// ` of `, the source's own HEAD; `.` is this repository, a source of
+    /// its own that the title doesn't name.
     static func fmtMergeMsgEntry(_ description: String) -> MergeTitleEntry {
-        // This repository (`.`) is no source at all.
-        func source(_ text: Substring) -> String? { text == "." ? nil : String(text) }
         guard let of = description.range(of: " of ") else {
-            return MergeTitleEntry(name: nil, source: source(Substring(description)))
+            return MergeTitleEntry(name: nil, source: description)
         }
-        return MergeTitleEntry(name: String(description[..<of.lowerBound]), source: source(description[of.upperBound...]))
+        return MergeTitleEntry(name: String(description[..<of.lowerBound]), source: String(description[of.upperBound...]))
     }
 
     /// The merge commit message git writes (`fmt-merge-msg`) for heads
@@ -231,7 +230,7 @@ extension GitClient {
     /// ``mergeMessage(describing:objects:)``.
     func mergeMessage(entries: [MergeTitleEntry], objects: [String] = []) async throws -> String {
         let origins = entries.map { entry in
-            [entry.name, entry.source].compactMap { $0 }.joined(separator: " of ")
+            [entry.name, entry.source == "." ? nil : entry.source].compactMap { $0 }.joined(separator: " of ")
         }
         let subject = Self.mergeTitle(entries)
         let branch = try await currentBranch() ?? "HEAD"
@@ -313,7 +312,7 @@ extension GitClient {
 
     /// `Merge …` for heads that `FETCH_HEAD` describes, grouped as git's
     /// `fmt-merge-msg` groups them: by where they came from (`of <url>`,
-    /// or nothing for this repository), each a commit named by itself in
+    /// or `.`, this repository, unnamed), each a commit named by itself in
     /// a group of its own, groups in the order first seen and joined by
     /// `; `; within one, branches, remote-tracking branches, tags and
     /// other refs (as commits), each kind joined as `'a', 'b' and 'c'`.
@@ -365,11 +364,13 @@ extension GitClient {
                          joined("remote-tracking branch", "remote-tracking branches", group.remoteBranches),
                          joined("tag", "tags", group.tags),
                          joined("commit", "commits", group.commits)].compactMap { $0 }
+            // This repository (`.`) goes unnamed.
+            let named = group.source == "." ? nil : group.source
             if group.head {
-                if kinds.isEmpty { return group.source ?? "HEAD" }
+                if kinds.isEmpty { return named ?? "HEAD" }
                 kinds.insert("HEAD", at: 0)
             }
-            guard let source = group.source else { return kinds.joined(separator: ", ") }
+            guard let source = named else { return kinds.joined(separator: ", ") }
             return kinds.joined(separator: ", ") + " of " + source
         }
         return "Merge " + parts.joined(separator: "; ")
