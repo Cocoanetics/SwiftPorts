@@ -54,7 +54,8 @@ struct Config: AsyncParsableCommand {
             throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)
         } catch let error as Libgit2Error where system && error.message.contains("Permission denied") {
             // A write that can't create the system file, as git words it.
-            throw CLIError.stderr("error: could not lock config file /etc/gitconfig: Permission denied", exitCode: 255)
+            throw CLIError.stderr(
+                "error: could not lock config file \(GitClient.systemConfigPath()): Permission denied", exitCode: 255)
         } catch let error as Libgit2Error where GitClient.isNoRepository(error) {
             // `--local`, or a write with no scope, needs a repository.
             throw CLIError.stderr(

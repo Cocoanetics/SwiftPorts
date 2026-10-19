@@ -36,13 +36,14 @@ struct GitCommandConfigTests {
     /// `git <args>` in `work` under a sandbox whose home is `home`: stdout,
     /// stderr (an error's lines included) and the exit status.
     private func git(
-        _ args: [String], root: URL, home: URL, work: URL
+        _ args: [String], root: URL, home: URL, work: URL, environment: [String: String] = [:]
     ) async throws -> Output {
         let out = OutputSink(), err = OutputSink()
         let shell = Shell(
             stdout: out, stderr: err,
             environment: Environment(
-                variables: ["HOME": home.path, "GIT_CONFIG_NOSYSTEM": "1"], workingDirectory: work.path))
+                variables: ["HOME": home.path, "GIT_CONFIG_NOSYSTEM": "1"].merging(environment) { $1 },
+                workingDirectory: work.path))
         shell.sandbox = Sandbox.rooted(at: root)
         var failure: CLIError?
         do {
@@ -166,6 +167,32 @@ struct GitCommandConfigTests {
         #expect(list.status == 128)
         let get = try await git(["config", "--system", "--get", "a.b"], root: root, home: home, work: work)
         #expect(get.status == 1)
+    }
+
+    @Test("GIT_CONFIG_SYSTEM names the system file, which is read even under GIT_CONFIG_NOSYSTEM")
+    func systemFileFromTheEnvironment() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let system = root.appendingPathComponent("system.cfg")
+        let environment = ["GIT_CONFIG_SYSTEM": system.path]
+        func run(_ args: [String]) async throws -> Output {
+            try await git(["config"] + args, root: root, home: home, work: work, environment: environment)
+        }
+
+        // Missing: git's error names the file, and a get finds nothing.
+        let missing = try await run(["--system", "--list"])
+        #expect(missing.stderr == "fatal: unable to read config file '\(system.path)': No such file or directory\n")
+        #expect(missing.status == 128)
+        #expect(try await run(["--system", "--get", "a.b"]).status == 1)
+
+        // A write starts it, and every read of it works despite NOSYSTEM.
+        #expect(try await run(["--system", "a.b", "c"]).status == 0)
+        #expect(try String(contentsOf: system, encoding: .utf8) == "[a]\n\tb = c\n")
+        #expect(try await run(["--system", "--list"]).stdout == "a.b=c\n")
+        #expect(try await run(["--system", "--get", "a.b"]).stdout == "c\n")
+        #expect(try await run(["--system", "--unset", "a.b"]).status == 0)
+        #expect(try await run(["--system", "--get", "a.b"]).status == 1)
     }
 
     @Test("a plain write or --local needs a repository")

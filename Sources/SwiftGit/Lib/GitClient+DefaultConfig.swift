@@ -19,12 +19,14 @@ extension GitClient {
         case fail
     }
 
-    /// Whether the scope's file is there: `~/.gitconfig` or the XDG one for
-    /// global, as git looks, and the system file.
-    static func configFileExists(_ scope: ConfigScope) -> Bool {
+    /// Whether the global file is there: `~/.gitconfig` or the XDG one, as
+    /// git looks. The system file is judged by its path alone, as an
+    /// explicit `--system` also reads it when `GIT_CONFIG_NOSYSTEM` has
+    /// emptied libgit2's search path.
+    private static func configFileExists(_ scope: ConfigScope) -> Bool {
+        if scope == .system { return FileManager.default.fileExists(atPath: configFilePath(scope)) }
         var path = git_buf()
         defer { git_buf_dispose(&path) }
-        if scope == .system { return git_config_find_system(&path) == 0 }
         if git_config_find_global(&path) == 0 { return true }
         var xdg = git_buf()
         defer { git_buf_dispose(&xdg) }
@@ -36,10 +38,12 @@ extension GitClient {
         scope == .global ? Libgit2Sandboxing.shared.globalHome + "/.gitconfig" : systemConfigPath()
     }
 
-    /// Where libgit2 looks for the system config: its search path for
+    /// Where the system config is: `GIT_CONFIG_SYSTEM`, else libgit2's search path for
     /// that level, or, when the level is disabled (`GIT_CONFIG_NOSYSTEM`,
     /// which an explicit `--system` ignores in git too), the usual place.
-    static func systemConfigPath() -> String {
+    public static func systemConfigPath() -> String {
+        // `GIT_CONFIG_SYSTEM` names the system file outright.
+        if let path = Shell.current.environment["GIT_CONFIG_SYSTEM"], !path.isEmpty { return path }
         var buffer = [CChar](repeating: 0, count: 4096)
         let level = Int32(GIT_CONFIG_LEVEL_SYSTEM.rawValue)
         if swiftports_libgit2_get_search_path(level, &buffer, UInt(buffer.count)) == 0 {
@@ -75,9 +79,13 @@ extension GitClient {
             defer { git_config_free(file) }
             let isGlobal = scope == .global
             if Self.configFileExists(scope) {
-                try Self.check(isGlobal
-                    ? git_config_open_global(&file, base)
-                    : git_config_open_level(&file, base, GIT_CONFIG_LEVEL_SYSTEM))
+                if isGlobal {
+                    try Self.check(git_config_open_global(&file, base))
+                } else {
+                    try Self.check(git_config_new(&file))
+                    try Self.check(git_config_add_file_ondisk(
+                        file, Self.configFilePath(scope), GIT_CONFIG_LEVEL_SYSTEM, nil, 1))
+                }
             } else {
                 let path = Self.configFilePath(scope)
                 switch missing {
