@@ -75,6 +75,20 @@ struct Pull: AsyncParsableCommand {
 
     private func pull() async throws {
         let client = CommandContext.gitClient(quiet: quiet)
+        // Unmerged entries stop a pull first, a merge waiting to be
+        // concluded next, both before it fetches.
+        try await Merge.refuseUnmergedEntries(client: client, verb: "Pulling")
+        // A merge waiting to be concluded stops a pull before it fetches.
+        if let gitDir = try await client.gitDir(),
+           FileManager.default.fileExists(atPath: gitDir + "/MERGE_HEAD") {
+            var advise = try await client.configBool("advice.resolveConflict") ?? true
+            if advise, let environment = Shell.current.environment["GIT_ADVICE"] {
+                advise = try SwiftGit.GitClient.parseGitBoolEnvironment(environment, name: "GIT_ADVICE")
+            }
+            throw CLIError.stderr(["error: You have not concluded your merge (MERGE_HEAD exists)."]
+                                  + (advise ? ["hint: Please, commit your changes before merging."] : [])
+                                  + ["fatal: Exiting because of unfinished merge."], exitCode: 128)
+        }
         // An unborn branch is a branch too.
         var branch = try await client.currentBranch()
         if branch == nil { branch = try await client.symbolicHeadBranch() }
@@ -195,22 +209,36 @@ struct Pull: AsyncParsableCommand {
                 branch: branch, branchRemote: branchRemote, upstreamMerge: upstreamMerge,
                 remotes: remotes, rebasing: rebasing != .no)
         }
+        let current = try? await client.resolveOID("HEAD")
         if heads.count > 1 {
+            if current == nil {
+                throw CLIError.stderr("fatal: Cannot merge multiple branches into empty head.", exitCode: 128)
+            }
             if rebasing != .no {
                 throw CLIError.stderr("fatal: Cannot rebase onto multiple branches.", exitCode: 128)
             }
-            throw CLIError.stderr(
-                "fatal: merging more than one branch (an octopus merge) is not supported", exitCode: 128)
+            if fastForward == .only {
+                throw CLIError.stderr("fatal: Cannot fast-forward to multiple branches.", exitCode: 128)
+            }
         }
 
         // Whether HEAD can fast-forward to what was fetched, or already
-        // has it; an unborn branch takes it as it is.
+        // has it; an unborn branch takes it as it is. Several heads never
+        // fast-forward, as git sees it, and have diverged unless HEAD has
+        // them all.
         var canFastForward = true
         var divergent = false
-        if let current = try? await client.resolveOID("HEAD") {
-            let base = try? await client.mergeBase(current, head.oid)
-            canFastForward = base == current
-            divergent = !canFastForward && base != head.oid
+        if let current {
+            canFastForward = heads.count == 1
+            var upToDate = true
+            for each in heads {
+                // An annotated tag by the commit it names.
+                let commit = (try? await client.resolveOID(each.oid + "^{commit}")) ?? each.oid
+                let base = try? await client.mergeBase(current, commit)
+                if heads.count == 1 { canFastForward = base == current }
+                if base != commit { upToDate = false }
+            }
+            divergent = !canFastForward && !upToDate
         }
 
         // `--ff-only` outranks a rebase.
@@ -252,7 +280,8 @@ struct Pull: AsyncParsableCommand {
         // An annotated tag fetched outside its natural place
         // (`refs/tags/<name>`) is merged with --no-ff unless told
         // otherwise, as git merges one.
-        if rebasing == .no, fastForward == nil,
+        // Several heads are checked once reduced, below.
+        if rebasing == .no, fastForward == nil, heads.count == 1,
            try await Self.isTagOutsideItsPlace(head, client: client) {
             fastForward = .never
         }
@@ -267,7 +296,23 @@ struct Pull: AsyncParsableCommand {
         var mergeMessage = message
         if mergeMessage == nil {
             // The repository as typed, or as `branch.<name>.remote` has it.
-            mergeMessage = try await client.pullMergeMessage(for: head, repository: fetchFrom)
+            mergeMessage = try await client.pullMergeMessage(
+                for: Self.messageHeads(heads, current: current, client: client), repository: fetchFrom)
+        }
+        if heads.count > 1 {
+            // git's merge of `FETCH_HEAD`: the heads named by their
+            // object names, the message from all that were fetched.
+            let reduced = try await client.mergeHeads(reducing: heads.map(\.oid))
+            // Any annotated tag outside its natural place merges --no-ff.
+            var octopusMode = mode
+            if rebasing == .no, fastForward == nil {
+                for head in heads where reduced.heads.contains(head.oid) {
+                    if try await Self.isTagOutsideItsPlace(head, client: client) { octopusMode = .never }
+                }
+            }
+            try await Merge.merge(heads: reduced, mode: octopusMode, message: mergeMessage ?? "",
+                                  client: client, quiet: quiet)
+            return
         }
         let outcome: MergeOutcome
         do {
@@ -286,6 +331,31 @@ struct Pull: AsyncParsableCommand {
         } else if case .conflicts = outcome {
             try Merge.printOutcome(outcome)
         }
+    }
+
+    /// The fetched heads git's merge message names (fmt-merge-msg's
+    /// `find_merge_parents`): those whose commit survives reducing HEAD
+    /// and all of them. One HEAD already has, or another head has, drops
+    /// out; one that is HEAD, or the same commit as another, stays.
+    static func messageHeads(
+        _ heads: [SwiftGit.GitClient.FetchHeadEntry], current: String?, client: SwiftGit.GitClient
+    ) async throws -> [SwiftGit.GitClient.FetchHeadEntry] {
+        guard heads.count > 1 else { return heads }
+        func contains(_ commit: String, _ ancestor: String) async -> Bool {
+            guard commit != ancestor else { return false }
+            return (try? await client.mergeBase(commit, ancestor)) == ancestor
+        }
+        // Compared as commits: an annotated tag by the commit it names.
+        var commits: [String] = []
+        for head in heads { commits.append((try? await client.resolveOID(head.oid + "^{commit}")) ?? head.oid) }
+        var kept: [SwiftGit.GitClient.FetchHeadEntry] = []
+        for (head, commit) in zip(heads, commits) {
+            if let current, await contains(current, commit) { continue }
+            var reachable = false
+            for other in commits where !reachable { reachable = await contains(other, commit) }
+            if !reachable { kept.append(head) }
+        }
+        return kept
     }
 
     /// Where fetch refspecs `refspecs` store remote ref `ref`: the

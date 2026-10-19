@@ -2323,6 +2323,368 @@ struct GitCommandRemoteTests {
         #expect(try systemGit(["log", "-1", "--format=%P"], in: empty).split(separator: " ").count == 2)
     }
 
+    // MARK: octopus merges
+
+    /// The clone of a remote whose `a` and `b` change the first and last
+    /// line of `f`, `x` its first line as `a` does, but differently, and
+    /// whose `main` the clone has gone past with a commit of its own.
+    private func makeOctopusRemoteAndClone() throws -> URL {
+        let (_, clone) = try makeRemoteAndClone()
+        // No background gc or maintenance racing the copies of the clone.
+        try systemGit(["config", "gc.auto", "0"], in: clone)
+        try systemGit(["config", "maintenance.auto", "false"], in: clone)
+        try Data("1\n2\n3\n4\n5\n6\n7\n".utf8).write(to: clone.appendingPathComponent("f"))
+        try systemGit(["add", "f"], in: clone)
+        try systemGit(["commit", "-q", "-m", "f"], in: clone)
+        try systemGit(["push", "-q", "origin", "main"], in: clone)
+        for (branch, text) in [("a", "1a\n2\n3\n4\n5\n6\n7\n"), ("b", "1\n2\n3\n4\n5\n6\n7b\n"),
+                               ("x", "1x\n2\n3\n4\n5\n6\n7\n")] {
+            try systemGit(["switch", "-q", "-c", branch, "main"], in: clone)
+            try Data(text.utf8).write(to: clone.appendingPathComponent("f"))
+            try systemGit(["commit", "-q", "-am", branch], in: clone)
+            try systemGit(["push", "-q", "origin", branch], in: clone)
+        }
+        try systemGit(["switch", "-q", "main"], in: clone)
+        try commitFile("mine.txt", in: clone)
+        return clone
+    }
+
+    /// SwiftPorts' `git` as the system `git` sees it: exit status, stdout
+    /// and stderr, refusals included.
+    private func ours(_ args: [String], in dir: URL) async throws -> (status: Int32, stdout: String, stderr: String) {
+        let out = OutputSink(), err = OutputSink()
+        let shell = Shell(stdout: out, stderr: err,
+                          environment: Environment(variables: [:], workingDirectory: dir.path))
+        var status: Int32 = 0
+        var diagnostic = ""
+        try await shell.withCurrent {
+            do {
+                let parsed = try GitCommand.parseAsRoot(args)
+                if var command = parsed as? AsyncParsableCommand {
+                    try await command.run()
+                } else {
+                    var command = parsed
+                    try command.run()
+                }
+            } catch let error as CLIError {
+                status = error.exitCode
+                diagnostic = error.diagnostic
+            }
+        }
+        out.finish()
+        err.finish()
+        return (status, await out.readAllString(), await err.readAllString() + diagnostic)
+    }
+
+    /// The system `git`'s exit status, stdout and stderr for `args`.
+    private func theirs(_ args: [String], in dir: URL) throws -> (status: Int32, stdout: String, stderr: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + args
+        process.currentDirectoryURL = dir
+        let out = Pipe(), err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+        try process.run()
+        let stdout = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let stderr = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        return (process.terminationStatus, stdout, stderr)
+    }
+
+    /// What a merge leaves: HEAD's tree, parents and message, the status,
+    /// and the merge state for the commit that concludes it.
+    private func mergeState(of repo: URL) throws -> [String] {
+        let gitDir = repo.appendingPathComponent(".git")
+        return [try systemGit(["log", "-1", "--format=%T %P%n%B"], in: repo),
+                try systemGit(["status", "--porcelain"], in: repo)]
+            + ["MERGE_HEAD", "MERGE_MSG", "MERGE_MODE"].map {
+                (try? String(contentsOf: gitDir.appendingPathComponent($0), encoding: .utf8)) ?? "-"
+            }
+    }
+
+    /// Expects SwiftPorts' `git` to do in `repo` what the system `git`
+    /// does in a copy of it: the same output, exit status and result. An
+    /// older system `git` (before 2.54) isn't compared against: it words
+    /// some refusals differently and leaves a failed octopus half merged.
+    @discardableResult
+    private func expectLikeGit(
+        _ args: [String], in repo: URL, sourceLocation: SourceLocation = #_sourceLocation
+    ) async throws -> (status: Int32, stdout: String, stderr: String) {
+        guard try systemGitSpeaksLike254() else { return try await ours(args, in: repo) }
+        let copy = try twin(of: repo)
+        let expected = try theirs(args, in: copy)
+        let actual = try await ours(args, in: repo)
+        #expect(actual.status == expected.status, "git \(args)", sourceLocation: sourceLocation)
+        #expect(actual.stdout == expected.stdout, "git \(args)", sourceLocation: sourceLocation)
+        #expect(actual.stderr == expected.stderr, "git \(args)", sourceLocation: sourceLocation)
+        #expect(try mergeState(of: repo) == mergeState(of: copy), "git \(args)", sourceLocation: sourceLocation)
+        return actual
+    }
+
+    @Test("git pull <remote> <a> <b> makes git's octopus merge")
+    func pullOctopus() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        let result = try await expectLikeGit(["pull", "--no-rebase", "origin", "a", "b"], in: clone)
+        #expect(result.stdout.contains("Merge made by the 'octopus' strategy."))
+        #expect(try systemGit(["log", "-1", "--format=%P"], in: clone).split(separator: " ").count == 3)
+        #expect(try systemGit(["log", "-1", "--format=%s"], in: clone).hasPrefix("Merge branches 'a' and 'b' of "))
+    }
+
+    @Test("git pull . with another ref keeps it in this repository's group, as git's message does")
+    func pullLocalOtherRef() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        try systemGit(["update-ref", "refs/meta/x", "b"], in: clone)
+        _ = try await expectLikeGit(["pull", "-q", "--no-rebase", ".", "refs/meta/x", "HEAD", "a"], in: clone)
+        let subject = try systemGit(["log", "-1", "--format=%s"], in: clone)
+        #expect(subject == "Merge HEAD, branch 'a', commit 'refs/meta/x'")
+    }
+
+    @Test("git pull of several heads names those git's message names")
+    func pullOctopusMessage() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        let remote = try systemGit(["remote", "get-url", "origin"], in: clone)
+        // `a1` is `a` again; `a2` is a commit past `a`; the remote's HEAD is `b`.
+        try systemGit(["push", "-q", "origin", "a:a1"], in: clone)
+        try systemGit(["tag", "-a", "old", "-m", "old", "a"], in: clone)
+        try systemGit(["push", "-q", "origin", "old"], in: clone)
+        try systemGit(["tag", "-d", "old"], in: clone)
+        try systemGit(["switch", "-q", "a"], in: clone)
+        try commitFile("a2.txt", in: clone)
+        try systemGit(["push", "-q", "origin", "a:a2"], in: clone)
+        try systemGit(["reset", "-q", "--hard", "HEAD~1"], in: clone)
+        try systemGit(["switch", "-q", "main"], in: clone)
+        try systemGit(["symbolic-ref", "HEAD", "refs/heads/b"], in: URL(fileURLWithPath: remote))
+        let start = try systemGit(["rev-parse", "HEAD"], in: clone)
+        let cases: [([String], String)] = [
+            // `a` is in `a2`'s history, so only `a2` is named.
+            (["a", "a2"], "Merge branch 'a2' of"),
+            // So is the commit annotated tag `old` names.
+            (["old", "a2"], "Merge branch 'a2' of"),
+            // The same commit twice is named twice.
+            (["a", "a1", "b"], "Merge branches 'a', 'a1' and 'b' of"),
+            // The remote's HEAD leads, as `HEAD`.
+            (["a", "HEAD"], "Merge HEAD, branch 'a' of"),
+        ]
+        for (refs, subject) in cases {
+            try systemGit(["reset", "-q", "--hard", start], in: clone)
+            try await expectLikeGit(["pull", "-q", "--no-rebase", "origin"] + refs, in: clone)
+            #expect(try systemGit(["log", "-1", "--format=%s"], in: clone) == subject + " " + remote, "\(refs)")
+        }
+
+        // Annotated tags' messages follow, each under a comment naming it.
+        try systemGit(["tag", "-a", "ta", "-m", "tag A", "a"], in: clone)
+        try systemGit(["tag", "-a", "tb", "-m", "tag B", "b"], in: clone)
+        try systemGit(["push", "-q", "origin", "ta", "tb"], in: clone)
+        try systemGit(["reset", "-q", "--hard", start], in: clone)
+        try await expectLikeGit(["pull", "-q", "--no-rebase", "origin", "ta", "tb"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%B"], in: clone) == """
+            Merge tags 'ta' and 'tb' of \(remote)
+
+            # tag 'ta' of \(remote)
+            tag A
+
+            # tag 'tb' of \(remote)
+            tag B
+            """)
+    }
+
+    @Test("git pull of a tag that reduction drops fast-forwards, as git does")
+    func pullOctopusDroppedTagFastForwards() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        // `old` tags an ancestor of `a`, and stays out of refs/tags here.
+        try systemGit(["tag", "-a", "old", "-m", "old", "origin/main"], in: clone)
+        try systemGit(["push", "-q", "origin", "old"], in: clone)
+        try systemGit(["tag", "-d", "old"], in: clone)
+        try systemGit(["switch", "-q", "-c", "behind", "origin/main"], in: clone)
+        try await expectLikeGit(["pull", "-q", "--no-rebase", "origin", "old", "a"], in: clone)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone) == systemGit(["rev-parse", "origin/a"], in: clone))
+    }
+
+    @Test("git pull reads FETCH_HEAD as git does, a URL holding ` of ` included")
+    func pullOctopusOddURL() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        let remote = try systemGit(["remote", "get-url", "origin"], in: clone)
+        let odd = tmp("x' of y").path + ".git"
+        try systemGit(["clone", "-q", "--bare", remote, odd], in: clone)
+        try systemGit(["symbolic-ref", "HEAD", "refs/heads/b"], in: URL(fileURLWithPath: odd))
+        try systemGit(["remote", "add", "odd", odd], in: clone)
+        // git's fmt-merge-msg cuts every line at its first ` of `.
+        try await expectLikeGit(["pull", "-q", "--no-rebase", "odd", "HEAD", "a"], in: clone)
+    }
+
+    @Test("git pull of an annotated tag HEAD already has is up to date, as git says")
+    func pullTagAlreadyMerged() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        // `old` tags origin/main, which this branch already has.
+        try systemGit(["tag", "-a", "old", "-m", "old", "origin/main"], in: clone)
+        try systemGit(["push", "-q", "origin", "old"], in: clone)
+        try systemGit(["tag", "-d", "old"], in: clone)
+        for refs in [["old"], ["old", "main"]] {
+            let result = try await expectLikeGit(["pull", "origin"] + refs, in: clone)
+            #expect(result.status == 0, "\(refs)")
+        }
+    }
+
+    @Test("git pull of several heads refuses as git does: rebasing, --ff-only, an unconfigured pull")
+    func pullOctopusRefusals() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        for args in [["pull", "--rebase", "origin", "a", "b"], ["pull", "--ff-only", "origin", "a", "b"],
+                     ["pull", "origin", "a", "b"]] {
+            let result = try await expectLikeGit(args, in: clone)
+            #expect(result.status == 128)
+        }
+    }
+
+    @Test("git pull of several heads stops at the last one's conflicts, or gives up on an earlier one's")
+    func pullOctopusConflicts() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        let gaveUp = try await expectLikeGit(["pull", "--no-rebase", "origin", "a", "x", "b"], in: clone)
+        #expect(gaveUp.status == 2)
+        #expect(gaveUp.stderr.hasSuffix("Merge with strategy octopus failed.\n"))
+        let stopped = try await expectLikeGit(["pull", "--no-rebase", "origin", "a", "b", "x"], in: clone)
+        #expect(stopped.status == 1)
+        #expect(try systemGit(["status", "--porcelain"], in: clone) == "UU f")
+    }
+
+    @Test("git merge <a> <b> merges both, fast-forwarding to the first when it can")
+    func mergeOctopus() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        // git-merge-octopus speaks its steps even with -q; only "Merge
+        // made by…" and the diffstat go.
+        let quiet = try await expectLikeGit(["merge", "-q", "a", "b"], in: clone)
+        #expect(quiet.stdout.hasPrefix("Trying simple merge with a\n"))
+        #expect(!quiet.stdout.contains("Merge made by"))
+        try systemGit(["reset", "-q", "--hard", "HEAD~1"], in: clone)
+        try await expectLikeGit(["merge", "a", "b"], in: clone)
+        try systemGit(["reset", "-q", "--hard", "HEAD~1"], in: clone)
+        try systemGit(["reset", "-q", "--hard", "origin/main"], in: clone)
+        let result = try await expectLikeGit(["merge", "origin/a", "b"], in: clone)
+        #expect(result.stdout.hasPrefix("Fast-forwarding to: origin/a\n"))
+        #expect(try systemGit(["log", "-1", "--format=%s"], in: clone)
+                == "Merge branch 'b', remote-tracking branch 'origin/a'")
+
+        // An annotated tag's message follows the title.
+        try systemGit(["reset", "-q", "--hard", "origin/main"], in: clone)
+        try systemGit(["tag", "-a", "ta", "-m", "tag A", "a"], in: clone)
+        try await expectLikeGit(["merge", "ta", "b"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%B"], in: clone) == "Merge branch 'b', tag 'ta'\n\ntag A")
+
+        // With several, each tag has its section, an empty one too.
+        try systemGit(["reset", "-q", "--hard", "origin/main"], in: clone)
+        try systemGit(["tag", "-a", "te", "-m", "", "b"], in: clone)
+        try await expectLikeGit(["merge", "te", "ta"], in: clone)
+        #expect(try systemGit(["log", "-1", "--format=%B"], in: clone)
+                == "Merge tags 'te' and 'ta'\n\n# tag 'te'\n\n# tag 'ta'\ntag A")
+    }
+
+    @Test("git merge into an unborn branch takes the one head reduction leaves, quietly")
+    func mergeIntoUnbornBranch() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        try systemGit(["switch", "-q", "--orphan", "fresh"], in: clone)
+        // `origin/main` is in `a`'s history: one head is left.
+        let result = try await expectLikeGit(["merge", "origin/main", "origin/a"], in: clone)
+        #expect(result.stdout.isEmpty && result.status == 0)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: clone) == systemGit(["rev-parse", "origin/a"], in: clone))
+        try systemGit(["switch", "-q", "--orphan", "fresh2"], in: clone)
+        try systemGit(["clean", "-qfd"], in: clone)
+        // Two left: refused, and the branch stays unborn.
+        let copy = try twin(of: clone)
+        let expected = try theirs(["merge", "origin/a", "origin/b"], in: copy)
+        let actual = try await ours(["merge", "origin/a", "origin/b"], in: clone)
+        #expect(actual.status == expected.status && actual.stderr == expected.stderr)
+        #expect(actual.stderr == "fatal: Can merge only exactly one commit into empty head\n")
+    }
+
+    @Test("git merge of several heads reduces them, and refuses as git does")
+    func mergeOctopusReducesAndRefuses() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        // `main~1` is already merged: an ordinary merge of `a` is left.
+        try await expectLikeGit(["merge", "-q", "main~1", "a"], in: clone)
+        try systemGit(["reset", "-q", "--hard", "HEAD~1"], in: clone)
+        try await expectLikeGit(["merge", "--ff-only", "a", "b"], in: clone)
+        try await expectLikeGit(["merge", "a", "nope"], in: clone)
+        try await expectLikeGit(["merge", "a", "x", "b"], in: clone)
+        try Data("dirty\n".utf8).write(to: clone.appendingPathComponent("f"))
+        try await expectLikeGit(["merge", "a", "b"], in: clone)
+        try systemGit(["checkout", "-q", "--", "f"], in: clone)
+        // An untracked file where a head's file goes, and untracked files
+        // where it puts a file over a directory.
+        try systemGit(["switch", "-q", "-c", "d", "origin/main"], in: clone)
+        try Data("d\n".utf8).write(to: clone.appendingPathComponent("d"))
+        try systemGit(["add", "d"], in: clone)
+        try systemGit(["commit", "-q", "-m", "d"], in: clone)
+        try systemGit(["switch", "-q", "main"], in: clone)
+        try FileManager.default.createDirectory(at: clone.appendingPathComponent("d"), withIntermediateDirectories: true)
+        try Data("x\n".utf8).write(to: clone.appendingPathComponent("d/file"))
+        try await expectLikeGit(["merge", "a", "d"], in: clone)
+        try systemGit(["clean", "-qfd"], in: clone)
+
+        // A bare repository has no work tree to merge in.
+        let remote = URL(fileURLWithPath: try systemGit(["remote", "get-url", "origin"], in: clone))
+        let bareTheirs = try theirs(["merge", "a", "b"], in: remote)
+        let bareOurs = try await ours(["merge", "a", "b"], in: remote)
+        #expect(bareOurs.status == bareTheirs.status)
+        #expect(bareOurs.stderr == bareTheirs.stderr)
+
+        // A merge waiting to be concluded stops another, and a pull, with
+        // or without the advice (CI's macOS runner turns advice off
+        // globally, so the clone says).
+        try systemGit(["merge", "-q", "--no-commit", "--no-ff", "a"], in: clone)
+        for advice in ["true", "false"] {
+            try systemGit(["config", "advice.resolveConflict", advice], in: clone)
+            try await expectLikeGit(["merge", "b", "x"], in: clone)
+            try await expectLikeGit(["pull", "origin", "b", "x"], in: clone)
+        }
+    }
+
+    @Test("unmerged files come first, ahead of MERGE_HEAD, in merge and pull, with or without the advice")
+    func unmergedFilesFirst() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        try systemGit(["merge", "-q", "a"], in: clone)
+        // x changes the same line as a: the merge stops with f unmerged and MERGE_HEAD written.
+        _ = try systemGitStatus(["merge", "x"], in: clone)
+        #expect(FileManager.default.fileExists(atPath: clone.appendingPathComponent(".git/MERGE_HEAD").path))
+        for advice in ["true", "false"] {
+            try systemGit(["config", "advice.resolveConflict", advice], in: clone)
+            try await expectLikeGit(["merge", "b"], in: clone)
+            try await expectLikeGit(["merge", "b", "x"], in: clone)
+            try await expectLikeGit(["pull", "--no-rebase", "origin", "b"], in: clone)
+        }
+    }
+
+    @Test("merge titles group FETCH_HEAD's descriptions as fmt-merge-msg does")
+    func mergeTitles() {
+        func title(_ descriptions: [String], known: [String] = []) -> String {
+            SwiftGit.GitClient.mergeTitle(SwiftGit.GitClient.titleEntries(fetchedFrom: descriptions, knownSources: known)
+                .map(SwiftGit.GitClient.normalizingSource))
+        }
+        // A remote's HEAD leads its source's group, whatever its URL holds.
+        #expect(title(["/tmp/r'", "branch 'a' of /tmp/r'"]) == "Merge HEAD, branch 'a' of /tmp/r'")
+        #expect(title(["branch 'a' of /tmp/r'", "/tmp/r'"]) == "Merge HEAD, branch 'a' of /tmp/r'")
+        #expect(title(["branch 'repo", "branch 'a' of branch 'repo"]) == "Merge HEAD, branch 'a' of branch 'repo")
+        #expect(title(["x' of y", "branch 'a' of x' of y"]) == "Merge HEAD, branch 'a' of x' of y")
+        #expect(title(["branch 'repo"], known: ["branch 'repo"]) == "Merge branch 'repo")
+        #expect(title(["/tmp/r'"]) == "Merge /tmp/r'")
+        // This repository's HEAD, and its branches, have no source.
+        #expect(title([".", "branch 'la' of .", "branch 'lb' of ."]) == "Merge HEAD, branches 'la' and 'lb'")
+        // Any other ref is named as a commit.
+        #expect(title(["'refs/x' of u", "branch 'a' of u"]) == "Merge branch 'a', commit 'refs/x' of u")
+        // A remote's HEAD joins its source's group whatever is in it.
+        #expect(title(["'refs/x' of u", "u", "branch 'a' of u"]) == "Merge HEAD, branch 'a', commit 'refs/x' of u")
+        let local = SwiftGit.GitClient.mergeTitle(["branch 'a'", "commit '1234567'", "tag 'v1'"].map {
+            SwiftGit.GitClient.MergeTitleEntry(name: $0, source: nil)
+        })
+        #expect(local == "Merge branch 'a', tag 'v1'; commit '1234567'")
+        // As fmt-merge-msg reads FETCH_HEAD: this repository's HEAD
+        // alone is `.`, beside its refs `HEAD`.
+        let fetched = { (lines: [String]) in
+            SwiftGit.GitClient.mergeTitle(lines.map(SwiftGit.GitClient.fmtMergeMsgEntry))
+        }
+        #expect(fetched(["."]) == "Merge .")
+        #expect(fetched([".", "branch 'a' of ."]) == "Merge HEAD, branch 'a'")
+    }
+
     @Test("merge.suppressDest takes git's globs")
     func suppressDestGlobs() {
         for (pattern, branch, matches) in [
