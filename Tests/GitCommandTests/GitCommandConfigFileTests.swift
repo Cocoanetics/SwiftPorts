@@ -199,7 +199,8 @@ struct GitCommandConfigFileTests: ConfigTestHelpers {
             try? FileManager.default.removeItem(at: root)
             try? FileManager.default.removeItem(at: outside)
         }
-        for args in [["--global", "--get", "a.b"], ["--global", "a.b", "x"], ["--global", "--list"]] {
+        // The unscoped read outside a repository reads it too.
+        for args in [["--global", "--get", "a.b"], ["--global", "a.b", "x"], ["--global", "--list"], ["a.b"]] {
             await #expect(throws: Sandbox.Denial.self) {
                 try await self.git(["config"] + args, root: root, home: home, work: work,
                                    environment: ["HOME": outside.path])

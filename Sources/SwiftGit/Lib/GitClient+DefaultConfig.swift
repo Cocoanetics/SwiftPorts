@@ -113,63 +113,76 @@ extension GitClient {
         scope: ConfigScope?, missing: MissingConfigFile = .fail, _ body: (OpaquePointer?) throws -> T
     ) async throws -> T {
         try await Shell.authorize(workingDirectory)
-        // A file the environment names is the user's pick, not libgit2's
-        // search: a sandbox must allow it.
-        if let scope, scope != .local, let named = Self.configFileOverride(scope), !named.isEmpty {
-            try await Shell.authorize(URL(fileURLWithPath: location(of: named)))
-        } else if scope != .system, scope != .local {
-            // The global file is under the home libgit2 is pointed at: the
-            // environment's, which may be outside the sandbox.
-            let home = Libgit2Sandboxing.shared.home(for: Shell.current.sandbox)
-            try await Shell.authorize(URL(fileURLWithPath: home).appendingPathComponent(".gitconfig"))
-        }
+        try await authorizeConfigFile(of: scope)
         return try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
             var base: OpaquePointer?
             try Self.check(git_config_open_default(&base))
             defer { git_config_free(base) }
             guard let scope, scope != .local else { return try body(base) }
-            var file: OpaquePointer?
+            let file = try self.openScopedConfig(scope, base: base, missing: missing)
             defer { git_config_free(file) }
-            let path = Self.configFilePath(scope)
-            let level = scope == .global ? GIT_CONFIG_LEVEL_GLOBAL : GIT_CONFIG_LEVEL_SYSTEM
-            if self.configFileExists(scope) {
-                if Self.configFileOverride(scope) == nil && scope == .global {
-                    try Self.check(git_config_open_global(&file, base))
-                } else {
-                    // A file that is there but can't be read: git's words.
-                    guard FileManager.default.isReadableFile(atPath: self.location(of: path)) else {
-                        throw Libgit2Error(
-                            code: GIT_EUSER.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
-                            message: "unable to access '\(path)': Permission denied")
-                    }
-                    try Self.check(git_config_new(&file))
-                    try Self.check(git_config_add_file_ondisk(file, self.location(of: path), level, nil, 1))
-                }
-            } else {
-                switch missing {
-                case .fail:
-                    throw Libgit2Error(
-                        code: GIT_ENOTFOUND.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
-                        message: "unable to read config file '\(path)': No such file or directory")
-                case .empty:
-                    try Self.check(git_config_new(&file))
-                case .emptyForWrite:
-                    try self.requireDirectory(of: path)
-                    try Self.check(git_config_new(&file))
-                case .create:
-                    try self.requireDirectory(of: path)
-                    // git can't write a file called `''` either.
-                    guard !path.isEmpty else {
-                        throw Libgit2Error(
-                            code: GIT_EEXISTS.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
-                            message: "could not write config file : Is a directory")
-                    }
-                    try Self.check(git_config_new(&file))
-                    try Self.check(git_config_add_file_ondisk(file, self.location(of: path), level, nil, 1))
-                }
-            }
             return try body(file)
         }
+    }
+
+    /// A file the environment names is the user's pick, not libgit2's
+    /// search, and the global file sits under the home libgit2 is pointed
+    /// at, which may be outside the sandbox: both must be allowed.
+    private func authorizeConfigFile(of scope: ConfigScope?) async throws {
+        guard scope != .local else { return }
+        if let scope, let named = Self.configFileOverride(scope), !named.isEmpty {
+            try await Shell.authorize(URL(fileURLWithPath: location(of: named)))
+        } else if scope != .system {
+            let home = Libgit2Sandboxing.shared.home(for: Shell.current.sandbox)
+            try await Shell.authorize(URL(fileURLWithPath: home).appendingPathComponent(".gitconfig"))
+        }
+    }
+
+    /// The config of one scope's file, which the caller frees. An absent
+    /// file is handled as `missing` says.
+    private func openScopedConfig(
+        _ scope: ConfigScope, base: OpaquePointer?, missing: MissingConfigFile
+    ) throws -> OpaquePointer? {
+        var file: OpaquePointer?
+        let path = Self.configFilePath(scope)
+        let level = scope == .global ? GIT_CONFIG_LEVEL_GLOBAL : GIT_CONFIG_LEVEL_SYSTEM
+        if configFileExists(scope) {
+            if Self.configFileOverride(scope) == nil && scope == .global {
+                try Self.check(git_config_open_global(&file, base))
+                return file
+            }
+            // A file that is there but can't be read: git's words.
+            guard FileManager.default.isReadableFile(atPath: location(of: path)) else {
+                throw Libgit2Error(
+                    code: GIT_EUSER.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
+                    message: "unable to access '\(path)': Permission denied")
+            }
+        } else {
+            switch missing {
+            case .fail:
+                throw Libgit2Error(
+                    code: GIT_ENOTFOUND.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
+                    message: "unable to read config file '\(path)': No such file or directory")
+            case .empty:
+                try Self.check(git_config_new(&file))
+                return file
+            case .emptyForWrite:
+                try requireDirectory(of: path)
+                try Self.check(git_config_new(&file))
+                return file
+            case .create:
+                try requireDirectory(of: path)
+                // git can't write a file called `''` either.
+                guard !path.isEmpty else {
+                    throw Libgit2Error(
+                        code: GIT_EEXISTS.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
+                        message: "could not write config file : Is a directory")
+                }
+            }
+        }
+        try Self.check(git_config_new(&file))
+        try Self.check(git_config_add_file_ondisk(file, location(of: path), level, nil, 1))
+        return file
     }
 
     static func configString(_ name: String, in config: OpaquePointer?) throws -> String? {
