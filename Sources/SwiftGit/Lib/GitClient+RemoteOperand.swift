@@ -112,6 +112,11 @@ extension GitClient {
     /// (after `url.<base>.insteadOf`), or for a push its push URL when it
     /// has one, as `git_remote__urlfordirection` picks it. GitKit keeps
     /// its repository handle to itself, so this opens its own.
+    ///
+    /// An empty value resets the list it ends, as git reads it: no push
+    /// URL means pushing to the URL, and a remote left without a URL is
+    /// no repository git can reach — never the top of the work tree an
+    /// empty relative path would resolve to.
     static func configuredLocation(of name: String, for use: RemoteUse, in directory: URL) throws -> String {
         var repo: OpaquePointer?
         var remote: OpaquePointer?
@@ -121,11 +126,14 @@ extension GitClient {
         }
         try check(git_repository_open_ext(&repo, directory.path, 0, nil))
         try check(git_remote_lookup(&remote, repo, name))
-        let pushURL = use == .push ? git_remote_pushurl(remote) : nil
-        guard let location = pushURL ?? git_remote_url(remote) else {
-            throw Libgit2Error(code: -1, klass: 0, message: "remote '\(name)' has no URL")
+        func value(_ pointer: UnsafePointer<CChar>?) -> String? {
+            pointer.map { String(cString: $0) }.flatMap { $0.isEmpty ? nil : $0 }
         }
-        return String(cString: location)
+        let pushURL = use == .push ? value(git_remote_pushurl(remote)) : nil
+        guard let location = pushURL ?? value(git_remote_url(remote)) else {
+            throw RemoteRepositoryError.notARepository(name)
+        }
+        return location
     }
 
     /// Where libgit2 connects for `spelling`, a URL or path as it gets it:
@@ -397,6 +405,27 @@ extension GitClient {
     public func remoteSetURL(name: String, remote: String) async throws {
         try await withRepository { try $0.remoteSetURL(name: name, remote: remote) }
     }
+}
+
+/// A remote that leads to no repository.
+public enum RemoteRepositoryError: Error, LocalizedError, Equatable {
+    /// A configured remote without a URL, which git reads as a path,
+    /// and finds nothing at.
+    case notARepository(String)
+
+    /// What git prints, `fatal:` and all.
+    public var lines: [String] {
+        switch self {
+        case .notARepository(let remote):
+            ["fatal: '\(remote)' does not appear to be a git repository",
+             "fatal: Could not read from remote repository.",
+             "",
+             "Please make sure you have the correct access rights",
+             "and the repository exists."]
+        }
+    }
+
+    public var errorDescription: String? { lines.joined(separator: "\n") }
 }
 
 /// A remote git has no transport for.

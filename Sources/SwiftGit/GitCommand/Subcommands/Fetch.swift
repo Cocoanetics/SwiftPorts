@@ -96,6 +96,8 @@ struct Fetch: AsyncParsableCommand {
             }
         } catch let error as UnsupportedTransportError {
             throw CLIError(error)
+        } catch let error as RemoteRepositoryError {
+            throw CLIError(error)
         } catch is FetchRejectedError {
             // The refused refs' lines are out; git adds nothing to them.
             throw CLIError.stderr([], exitCode: 1)

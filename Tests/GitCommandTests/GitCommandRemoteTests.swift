@@ -787,6 +787,35 @@ struct GitCommandRemoteTests {
         try await same(["push", "palias:dst.git", "main"])
     }
 
+    @Test("an empty URL resets the remote's URLs, as git reads it")
+    func emptyConfiguredURL() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let twin = tmp("GitRemoteTwin")
+        try systemGit(["clone", "-q", remote.path, twin.path], in: clone)
+        let mirror = tmp("GitRemoteMirror"), twinMirror = clone.deletingLastPathComponent()
+            .appendingPathComponent(mirror.lastPathComponent + "-twin")
+        for (bare, repo) in [(mirror, clone), (twinMirror, twin)] {
+            try systemGit(["init", "-q", "--bare", "-b", "main", bare.path], in: repo)
+            // No URL left: git reads `e` as a path, and finds no repository.
+            try systemGit(["config", "remote.e.url", ""], in: repo)
+            try systemGit(["config", "remote.e.fetch", "+refs/heads/*:refs/remotes/e/*"], in: repo)
+            try systemGit(["config", "remote.q.url", bare.path], in: repo)
+            try systemGit(["config", "--add", "remote.q.url", ""], in: repo)
+            // No push URL left: a push goes to the URL.
+            try systemGit(["config", "remote.p.url", "../\(bare.lastPathComponent)"], in: repo)
+            try systemGit(["config", "remote.p.pushurl", ""], in: repo)
+        }
+        let typed = "../\(mirror.lastPathComponent)", twinTyped = typed + "-twin"
+        for args in [["fetch", "e"], ["push", "e", "main"], ["fetch", "q"], ["push", "p", "main"]] {
+            let expected = try systemGitStderr(args, in: twin)
+            let actual = try await gitStderr(args, in: clone)
+            #expect(actual.stderr == expected.stderr.replacingOccurrences(of: twinTyped, with: typed),
+                    "git \(args.joined(separator: " "))")
+            #expect(actual.status == expected.status, "git \(args.joined(separator: " "))")
+        }
+        #expect(try systemGit(["rev-parse", "main"], in: mirror) == systemGit(["rev-parse", "main"], in: clone))
+    }
+
     @Test("under a path-mapped sandbox, a configured relative remote fetches from the mapped work tree")
     func fetchConfiguredRelativeRemoteUnderPathMapping() async throws {
         let (remote, clone) = try makeRemoteAndClone()

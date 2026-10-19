@@ -109,6 +109,8 @@ struct Push: AsyncParsableCommand {
                 switches: settings.advice)
         } catch let error as UnsupportedTransportError {
             throw CLIError(error)
+        } catch let error as RemoteRepositoryError {
+            throw CLIError(error)
         } catch let refused as PushRefusedError {
             // Refused before anything was sent, in git's words.
             throw PushRejectionAdvice.error(for: refused, switches: settings.advice)
