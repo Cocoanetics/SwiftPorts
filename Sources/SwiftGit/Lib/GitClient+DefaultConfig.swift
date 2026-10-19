@@ -118,11 +118,16 @@ extension GitClient {
         try await Shell.authorize(workingDirectory)
         try await authorizeConfigFile(of: scope, writing: missing == .create || missing == .emptyForWrite)
         return try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
-            var base: OpaquePointer?
-            try Self.check(git_config_open_default(&base))
-            defer { git_config_free(base) }
-            guard let scope, scope != .local else { return try body(base) }
-            let file = try self.openScopedConfig(scope, base: base, missing: missing)
+            // A scope's own file is opened by itself: the default config
+            // would parse the files it supersedes (a bad ~/.gitconfig
+            // under GIT_CONFIG_GLOBAL) as well.
+            guard let scope, scope != .local else {
+                var base: OpaquePointer?
+                try Self.check(git_config_open_default(&base))
+                defer { git_config_free(base) }
+                return try body(base)
+            }
+            let file = try self.openScopedConfig(scope, missing: missing)
             defer { git_config_free(file) }
             return try body(file)
         }
@@ -149,9 +154,7 @@ extension GitClient {
 
     /// The config of one scope's file, which the caller frees. An absent
     /// file is handled as `missing` says.
-    private func openScopedConfig(
-        _ scope: ConfigScope, base: OpaquePointer?, missing: MissingConfigFile
-    ) throws -> OpaquePointer? {
+    private func openScopedConfig(_ scope: ConfigScope, missing: MissingConfigFile) throws -> OpaquePointer? {
         var file: OpaquePointer?
         let path = Self.configFilePath(scope)
         let level = scope == .global ? GIT_CONFIG_LEVEL_GLOBAL : GIT_CONFIG_LEVEL_SYSTEM

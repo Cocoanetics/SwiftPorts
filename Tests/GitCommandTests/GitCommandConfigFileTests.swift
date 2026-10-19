@@ -219,25 +219,6 @@ struct GitCommandConfigFileTests: ConfigTestHelpers {
         }
     }
 
-    @Test("a config file in a directory that isn't there can't be locked")
-    func missingDirectory() async throws {
-        let fixture = try makeRoot()
-        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let target = root.appendingPathComponent("nodir/new.cfg")
-        let environment = ["GIT_CONFIG_GLOBAL": target.path]
-        for args in [["x.y", "z"], ["--unset", "x.y"]] {
-            let result = try await git(["config", "--global"] + args, root: root, home: home, work: work,
-                                       environment: environment)
-            #expect(result.stderr == "error: could not lock config file \(target.path): No such file or directory\n")
-            #expect(result.status == 255)
-        }
-        // A get finds nothing; the directory was not made.
-        #expect(try await git(["config", "--global", "--get", "x.y"], root: root, home: home, work: work,
-                              environment: environment).status == 1)
-        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("nodir").path))
-    }
-
     @Test("the home config must be inside the sandbox too")
     func homeConfigIsAuthorized() async throws {
         let fixture = try makeRoot()

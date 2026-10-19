@@ -42,6 +42,18 @@ struct Config: AsyncParsableCommand {
         return .local
     }
 
+    /// git's "bad config line 3 in file <path>" for libgit2's "failed to
+    /// parse config file: <why> (in <path>:3)", else nil.
+    static func badConfigLine(in message: String) -> String? {
+        guard message.hasPrefix("failed to parse config file:"),
+              let regex = try? NSRegularExpression(pattern: #"\(in (.+):(\d+)(?:, column \d+)?\)$"#),
+              let match = regex.firstMatch(in: message, range: NSRange(message.startIndex..., in: message)),
+              let path = Range(match.range(at: 1), in: message),
+              let line = Range(match.range(at: 2), in: message)
+        else { return nil }
+        return "bad config line \(message[line]) in file \(message[path])"
+    }
+
     /// Whether this call changes the config.
     private var writes: Bool {
         unset || (!list && args.count == 2)
@@ -55,6 +67,9 @@ struct Config: AsyncParsableCommand {
     func run() async throws {
         do {
             try await configure()
+        } catch let error as Libgit2Error where Self.badConfigLine(in: error.message) != nil {
+            // A file with invalid syntax.
+            throw CLIError.stderr("fatal: \(Self.badConfigLine(in: error.message) ?? "")", exitCode: 128)
         } catch let error as Libgit2Error where error.message.hasPrefix("unable to read config file") {
             throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)
         } catch let error as Libgit2Error where unset && error.message.contains("not unique") {
