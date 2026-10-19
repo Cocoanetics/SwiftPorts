@@ -262,6 +262,8 @@ extension GitClient {
     /// names (`HEAD`), so the name is checked under `refs/`, which keeps
     /// every rule for its components.
     private static func isRefName(_ name: Substring, pattern: Bool) -> Bool {
+        // git forbids a refname that is `@` alone, which `refs/@` would hide.
+        guard name != "@" else { return false }
         Libgit2.ensureInitialized()
         let candidate = name.hasPrefix("refs/") ? String(name) : "refs/\(name)"
         let flags = pattern ? UInt32(GIT_REFERENCE_FORMAT_REFSPEC_PATTERN.rawValue) : 0

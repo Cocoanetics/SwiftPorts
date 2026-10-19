@@ -987,7 +987,7 @@ struct GitCommandRemoteTests {
 
     @Test("a malformed refspec, typed or configured, is refused as git refuses it")
     func pushInvalidRefspec() async throws {
-        for bad in ["", " ", "main:", "refs/heads/*:refs/heads/x"] {
+        for bad in ["", " ", "main:", "refs/heads/*:refs/heads/x", "main:@"] {
             let (_, clone) = try makeRemoteAndClone()
             do {
                 try await git(["push", "origin", bad], in: clone)
