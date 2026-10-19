@@ -292,15 +292,6 @@ struct Merge: AsyncParsableCommand {
         return path
     }
 
-    /// ` create mode …` and ` delete mode …` lines in path order, as
-    /// git's diffstat summary lists them.
-    static func modeLines(_ added: [String], _ deleted: [String]) -> [String] {
-        func path(_ line: String) -> String {
-            line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true).dropFirst(3).first.map(String.init) ?? line
-        }
-        return (added + deleted).sorted { Array(path($0).utf8).lexicographicallyPrecedes(Array(path($1).utf8)) }
-    }
-
     static func printOutcome(_ outcome: MergeOutcome) throws {
         switch outcome {
         case .alreadyUpToDate:
@@ -331,5 +322,43 @@ struct Merge: AsyncParsableCommand {
             lines.append("Automatic merge failed; fix conflicts and then commit the result.")
             throw CLIError.stderr(lines, exitCode: 1)
         }
+    }
+}
+
+extension Merge {
+
+    /// ` create mode …` and ` delete mode …` lines in path order, as
+    /// git's diffstat summary lists them: by the paths' bytes, a quoted
+    /// path's as they are before quoting.
+    static func modeLines(_ added: [String], _ deleted: [String]) -> [String] {
+        func path(_ line: String) -> [UInt8] {
+            let text = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true).dropFirst(3).first
+                .map(String.init) ?? line
+            return unquoted(text)
+        }
+        return (added + deleted).sorted { path($0).lexicographicallyPrecedes(path($1)) }
+    }
+
+    /// The bytes of a path git quoted (quote_c_style), or of one it
+    /// didn't.
+    static func unquoted(_ text: String) -> [UInt8] {
+        let bytes = Array(text.utf8)
+        guard bytes.count >= 2, bytes.first == 0x22, bytes.last == 0x22 else { return bytes }
+        let escapes: [UInt8: UInt8] = [0x61: 7, 0x62: 8, 0x74: 9, 0x6E: 10, 0x76: 11, 0x66: 12, 0x72: 13]
+        var out: [UInt8] = []
+        var cursor = 1
+        while cursor < bytes.count - 1 {
+            let byte = bytes[cursor]
+            guard byte == 0x5C, cursor + 1 < bytes.count - 1 else { out.append(byte); cursor += 1; continue }
+            let next = bytes[cursor + 1]
+            if (0x30...0x37).contains(next), cursor + 3 < bytes.count {
+                out.append(bytes[(cursor + 1)...(cursor + 3)].reduce(0) { $0 &* 8 &+ ($1 &- 0x30) })
+                cursor += 4
+            } else {
+                out.append(escapes[next] ?? next)
+                cursor += 2
+            }
+        }
+        return out
     }
 }
