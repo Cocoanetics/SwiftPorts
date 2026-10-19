@@ -972,22 +972,46 @@ struct GitCommandRemoteTests {
         }
     }
 
-    @Test("an empty refspec, typed or configured, is refused as git refuses it")
-    func pushEmptyRefspec() async throws {
-        let (_, clone) = try makeRemoteAndClone()
-        for args in [["push", "origin", ""]] {
-            await #expect(throws: CLIError.self) { try await git(args, in: clone) }
-        }
-        try systemGit(["config", "--add", "remote.origin.push", ""], in: clone)
-        for args in [["push"], ["push", "-f"]] {
+    @Test("a malformed refspec, typed or configured, is refused as git refuses it")
+    func pushInvalidRefspec() async throws {
+        for bad in ["", " ", "main:", "refs/heads/*:refs/heads/x"] {
+            let (_, clone) = try makeRemoteAndClone()
             do {
-                try await git(args, in: clone)
-                Issue.record("expected \(args) to fail")
+                try await git(["push", "origin", bad], in: clone)
+                Issue.record("expected \(bad) to fail")
             } catch let error as CLIError {
-                #expect(error.lines == ["fatal: invalid refspec ''"])
+                #expect(error.lines == ["fatal: invalid refspec '\(bad)'"])
                 #expect(error.exitCode == 128)
             }
+            // Configured, with or without -f, which mustn't change it.
+            try systemGit(["config", "--add", "remote.origin.push", bad], in: clone)
+            for args in [["push"], ["push", "-f"]] {
+                do {
+                    try await git(args, in: clone)
+                    Issue.record("expected \(args) to fail")
+                } catch let error as CLIError {
+                    #expect(error.lines == ["fatal: invalid refspec '\(bad)'"])
+                }
+            }
         }
+        // What git takes stays taken.
+        #expect(GitClient.isValidPushRefspec("HEAD~1:refs/heads/older"))
+        #expect(GitClient.isValidPushRefspec("+refs/heads/*:refs/heads/copy/*"))
+        #expect(GitClient.isValidPushRefspec(":dev"))
+        #expect(GitClient.isValidPushRefspec("+:"))
+        #expect(GitClient.isValidPushRefspec("v1.0"))
+    }
+
+    @Test("a lease value can't pass for the bare or negated forms")
+    func pushLeaseValueIsNotAForm() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = try diverge(remote: remote, clone: clone)
+        // Unlike the bare flag, this leases a ref named so, which nothing
+        // pushed matches: the push is refused as without a lease.
+        await #expect(throws: CLIError.self) {
+            try await git(["push", "--force-with-lease=\(Push.leaseAll)", "origin", "main"], in: clone)
+        }
+        #expect(try systemGit(["rev-parse", "main"], in: remote) == systemGit(["rev-parse", "main"], in: other))
     }
 
     @Test("a full object ID for <expect> is taken as given; all zeros expects the ref absent")

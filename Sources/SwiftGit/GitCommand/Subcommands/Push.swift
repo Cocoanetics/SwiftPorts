@@ -78,9 +78,10 @@ struct Push: AsyncParsableCommand {
         // What the remote is configured to push, when that's what goes.
         let configured = pushRefspecs.isEmpty
             ? try await client.configGetAll("remote.\(plan.remote).push") : []
-        // git refuses an empty refspec, typed or configured.
-        if (pushRefspecs + configured).contains("") {
-            throw CLIError.stderr("fatal: invalid refspec ''", exitCode: 128)
+        // git refuses a malformed refspec, typed or configured, before
+        // `--force` would touch it.
+        if let bad = (pushRefspecs + configured).first(where: { !SwiftGit.GitClient.isValidPushRefspec($0) }) {
+            throw CLIError.stderr("fatal: invalid refspec '\(bad)'", exitCode: 128)
         }
         if force {
             // `--force` forces the configured refspecs too, so they're
@@ -122,8 +123,12 @@ struct Push: AsyncParsableCommand {
     /// usage error when it names no object.
     static func leases(from options: [String], client: SwiftGit.GitClient) async throws -> PushLeases? {
         var leases = PushLeases()
-        for option in options {
-            switch option {
+        for tagged in options {
+            // `GitCommand.preprocess` tags each `=<refname>[:<expect>]`
+            // given with a leading `=`, so none can pass for the bare or
+            // negated forms, which never start with one.
+            let option = tagged.hasPrefix("=") ? String(tagged.dropFirst()) : tagged
+            switch tagged {
             case leaseAll:
                 leases.trackingForRest = true
             case leaseNone:

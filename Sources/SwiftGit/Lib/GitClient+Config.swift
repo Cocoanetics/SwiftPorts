@@ -194,6 +194,43 @@ extension GitClient {
         return nil
     }
 
+    /// Whether git takes `refspec` as a push refspec (refspec.c's
+    /// `parse_refspec`): `:` (matching), else a source and an optional
+    /// destination, both patterns or neither. The source may be empty
+    /// (a deletion), an object ID or any revision, but must be a ref
+    /// name when it's a pattern or there's no destination; a destination
+    /// must be a ref name. A negative refspec is left to GitKit.
+    public static func isValidPushRefspec(_ refspec: String) -> Bool {
+        var body = Substring(refspec)
+        if body.hasPrefix("+") { body = body.dropFirst() }
+        if body.hasPrefix("^") { return true }
+        if body == ":" { return true }
+        let colon = body.lastIndex(of: ":")
+        let source = colon.map { body[..<$0] } ?? body
+        let destination = colon.map { body[body.index(after: $0)...] }
+        let globDestination = destination?.contains("*") ?? false
+        let globSource = source.contains("*")
+        if globSource, destination != nil, !globDestination { return false }
+        if !globSource, globDestination { return false }
+        /// git's check_refname_format with one-level names allowed.
+        /// libgit2's ALLOW_ONELEVEL takes only all-caps names (`HEAD`),
+        /// so the name is checked under `refs/`, which keeps every rule
+        /// for its components.
+        func isRefName(_ name: Substring) -> Bool {
+            Libgit2.ensureInitialized()
+            let candidate = name.hasPrefix("refs/") ? String(name) : "refs/\(name)"
+            let flags = globSource ? UInt32(GIT_REFERENCE_FORMAT_REFSPEC_PATTERN.rawValue) : 0
+            var buffer = [CChar](repeating: 0, count: candidate.utf8.count + 1)
+            guard git_reference_normalize_name(&buffer, buffer.count, candidate, flags) == 0 else {
+                return false
+            }
+            return String(cString: buffer) == candidate
+        }
+        if globSource, !isRefName(source) { return false }
+        guard let destination else { return isRefName(source) }
+        return !destination.isEmpty && isRefName(destination)
+    }
+
     /// A boolean config value as git reads one (`true`/`yes`/`on`, any
     /// nonzero integer, a key without a value), or `nil` when unset.
     /// Anything else throws git's "bad boolean config value".

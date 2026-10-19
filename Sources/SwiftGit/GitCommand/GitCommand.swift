@@ -115,6 +115,10 @@ public struct GitCommand: AsyncParsableCommand {
                 }
             } else if !afterDoubleDash, subcommand == "push", arg == "--force-with-lease=" {
                 out.append("--force-with-lease=\(Push.leaseEmpty)")
+            } else if !afterDoubleDash, subcommand == "push", arg.hasPrefix("--force-with-lease=") {
+                // The user's own value, tagged so no value can pass for
+                // one of the forms above.
+                out.append("--force-with-lease==\(arg.dropFirst("--force-with-lease=".count))")
             } else if !afterDoubleDash, subcommand == "push", arg == "--no-force-with-lease" {
                 out.append("--force-with-lease=\(Push.leaseNone)")
             } else {
