@@ -49,5 +49,45 @@ struct GitCommandConfigErrorTests: ConfigTestHelpers {
                               environment: environment).status == 1)
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("nodir").path))
     }
+
+    @Test("an unwritable directory and an unreadable file, for a change")
+    func unwritableAndUnreadable() async throws {
+        // Root ignores file modes.
+        guard getuid() != 0 else { return }
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        let locked = root.appendingPathComponent("locked")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        let inLocked = locked.appendingPathComponent("cfg")
+        try "[a]\n\tb = c\n".write(to: inLocked, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
+
+        // The lock comes first: an unset fails the same whether or not the key is there.
+        for key in ["x.y", "a.b"] {
+            let result = try await git(["config", "--global", "--unset", key], root: root, home: home, work: work,
+                                       environment: ["GIT_CONFIG_GLOBAL": inLocked.path])
+            #expect(result.stderr == "error: could not lock config file \(inLocked.path): Permission denied\n")
+            #expect(result.status == 255)
+        }
+
+        // An unreadable file can't be opened for a change.
+        let unreadable = root.appendingPathComponent("unreadable.cfg")
+        try "[a]\n\tb = c\n".write(to: unreadable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadable.path)
+        for args in [["x.y", "z"], ["--unset", "a.b"]] {
+            let result = try await git(["config", "--global"] + args, root: root, home: home, work: work,
+                                       environment: ["GIT_CONFIG_GLOBAL": unreadable.path])
+            #expect(result.stderr == """
+                warning: unable to access '\(unreadable.path)': Permission denied
+                error: opening \(unreadable.path): Permission denied
+
+                """)
+            #expect(result.status == 3)
+        }
+    }
 }
 #endif

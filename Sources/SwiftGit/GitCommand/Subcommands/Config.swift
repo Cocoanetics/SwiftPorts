@@ -67,40 +67,63 @@ struct Config: AsyncParsableCommand {
     func run() async throws {
         do {
             try await configure()
-        } catch let error as Libgit2Error where Self.badConfigLine(in: error.message) != nil {
-            // A file with invalid syntax.
-            throw CLIError.stderr("fatal: \(Self.badConfigLine(in: error.message) ?? "")", exitCode: 128)
-        } catch let error as Libgit2Error where error.message.hasPrefix("unable to read config file") {
-            throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)
-        } catch let error as Libgit2Error where unset && error.message.contains("not unique") {
+        } catch let error as Libgit2Error {
+            throw translated(error) ?? error
+        }
+    }
+
+    /// git's wording and exit status for a libgit2 failure, else nil.
+    private func translated(_ error: Libgit2Error) -> CLIError? {
+        let message = error.message
+        if let line = Self.badConfigLine(in: message) {
+            return CLIError.stderr("fatal: \(line)", exitCode: 128)
+        }
+        if message.hasPrefix("unable to read config file") {
+            return CLIError.stderr("fatal: \(message)", exitCode: 128)
+        }
+        if unset && message.contains("not unique") {
             // More than one line has the key: git changes nothing.
-            throw CLIError.stderr("warning: \(args.first ?? "") has multiple values", exitCode: 5)
-        } catch let error as Libgit2Error where error.message.hasPrefix("unable to access") {
-            // An existing file that can't be read: fatal for a list, a
-            // warning and "not found" for a get.
-            if list || writes { throw CLIError.stderr("fatal: \(error.message)", exitCode: 128) }
-            Shell.current.stderr("warning: \(error.message)\n")
-            throw CLIError(lines: [], exitCode: 1)
-        } catch let error as Libgit2Error where error.message.hasPrefix("could not lock config file") {
-            // The file's directory isn't there.
-            throw CLIError.stderr("error: \(error.message)", exitCode: 255)
-        } catch let error as Libgit2Error where error.message.hasPrefix("could not write config file") {
+            return CLIError.stderr("warning: \(args.first ?? "") has multiple values", exitCode: 5)
+        }
+        if message.hasPrefix("unable to access") { return unreadable(message) }
+        if message.hasPrefix("could not lock config file") {
+            return CLIError.stderr("error: \(message)", exitCode: 255)
+        }
+        if message.hasPrefix("could not write config file") {
             // A selected file that is no file (`GIT_CONFIG_GLOBAL=`).
-            throw CLIError.stderr("error: \(error.message)", exitCode: 4)
-        } catch let error as Libgit2Error where error.message.contains("Permission denied") && scope != .local {
-            // The scope's file can't be written or read, as git words it.
-            let file = GitClient.configFile(for: scope)
-            if writes {
-                throw CLIError.stderr("error: could not lock config file \(file): Permission denied", exitCode: 255)
-            }
-            throw CLIError.stderr("fatal: unable to access '\(file)': Permission denied", exitCode: 128)
-        } catch let error as Libgit2Error where GitClient.isNoRepository(error) {
+            return CLIError.stderr("error: \(message)", exitCode: 4)
+        }
+        if message.contains("Permission denied") && scope != .local { return permissionDenied() }
+        if GitClient.isNoRepository(error) {
             // `--local`, or a write with no scope, needs a repository.
-            throw CLIError.stderr(
+            return CLIError.stderr(
                 local ? "fatal: --local can only be used inside a git repository"
                       : "fatal: not in a git directory",
                 exitCode: 128)
         }
+        return nil
+    }
+
+    /// An existing file that can't be read: git warns, then a change
+    /// can't open it, a list is fatal, and a get finds nothing.
+    private func unreadable(_ message: String) -> CLIError {
+        if writes {
+            let file = GitClient.configFile(for: scope)
+            return CLIError.stderr(
+                ["warning: \(message)", "error: opening \(file): Permission denied"], exitCode: 3)
+        }
+        if list { return CLIError.stderr("fatal: \(message)", exitCode: 128) }
+        Shell.current.stderr("warning: \(message)\n")
+        return CLIError(lines: [], exitCode: 1)
+    }
+
+    /// The scope's file can't be written or read, as git words it.
+    private func permissionDenied() -> CLIError {
+        let file = GitClient.configFile(for: scope)
+        if writes {
+            return CLIError.stderr("error: could not lock config file \(file): Permission denied", exitCode: 255)
+        }
+        return CLIError.stderr("fatal: unable to access '\(file)': Permission denied", exitCode: 128)
     }
 
     private func configure() async throws {

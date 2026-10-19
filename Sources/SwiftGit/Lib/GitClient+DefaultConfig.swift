@@ -38,16 +38,19 @@ extension GitClient {
         return !path.isEmpty && FileManager.default.fileExists(atPath: location(of: path))
     }
 
-    /// git's lock failure for a config file whose directory isn't there.
+    /// git's lock failure for a config file it can't lock: its directory
+    /// isn't there, or isn't writable (the lock is a file next to it).
     func requireDirectory(of path: String) throws {
         guard !path.isEmpty else { return }
         let directory = URL(fileURLWithPath: location(of: path)).deletingLastPathComponent().path
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue
-        else {
+        let exists = FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory)
+            && isDirectory.boolValue
+        guard exists, FileManager.default.isWritableFile(atPath: directory) else {
             throw Libgit2Error(
                 code: GIT_ENOTFOUND.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
-                message: "could not lock config file \(path): No such file or directory")
+                message: "could not lock config file \(path): "
+                    + (exists ? "Permission denied" : "No such file or directory"))
         }
     }
 
