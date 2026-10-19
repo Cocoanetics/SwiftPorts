@@ -183,7 +183,9 @@ extension GitClient {
     /// The line of `file` where `key` (`remote.origin.push`) is written
     /// without a value, counting from 1.
     private static func valuelessLine(of key: String, in file: URL) -> Int? {
-        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        guard var text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        // git skips a UTF-8 byte order mark at the start of a file.
+        if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         let parts = key.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count >= 3 else { return nil }
         let subsection = parts.dropFirst().dropLast().joined(separator: ".")

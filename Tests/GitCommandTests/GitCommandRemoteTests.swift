@@ -955,6 +955,21 @@ struct GitCommandRemoteTests {
         }
     }
 
+    @Test("a bare push key in a config that starts with a byte order mark")
+    func pushValuelessRefspecBOM() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let config = clone.appendingPathComponent(".git/config")
+        let body = "[remote \"origin\"]\n\tpush\n" + (try String(contentsOf: config, encoding: .utf8))
+        try (Data([0xEF, 0xBB, 0xBF]) + Data(body.utf8)).write(to: config)
+        do {
+            try await git(["push", "-f"], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.last
+                    == "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line 2")
+        }
+    }
+
     @Test("configGetAll reads a key without a value as empty, as git config --get-all does")
     func configGetAllValueless() async throws {
         let (_, clone) = try makeRemoteAndClone()
