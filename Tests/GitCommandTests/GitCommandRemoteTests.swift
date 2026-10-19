@@ -938,18 +938,20 @@ struct GitCommandRemoteTests {
                 #expect(error.exitCode == 128)
             }
         }
-        // A remote whose name is escaped in its header.
-        try original.write(to: config, atomically: true, encoding: .utf8)
-        try systemGit(["remote", "add", "orig\"in", "../elsewhere"], in: clone)
-        let escaped = try String(contentsOf: config, encoding: .utf8) + "[remote \"orig\\\"in\"]\n\tpush\n"
-        try escaped.write(to: config, atomically: true, encoding: .utf8)
-        let line = escaped.split(separator: "\n", omittingEmptySubsequences: false).count - 1
-        do {
-            try await git(["push", "-f", "origin", "main"], in: clone)
-            Issue.record("expected the push to fail")
-        } catch let error as CLIError {
-            #expect(error.lines.last
-                    == "fatal: bad config variable 'remote.orig\"in.push' in file '.git/config' at line \(line)")
+        // Remotes whose names are escaped in their header, or hold a `]`.
+        for (name, header) in [("orig\"in", "[remote \"orig\\\"in\"]"), ("orig]in", "[remote \"orig]in\"]")] {
+            try original.write(to: config, atomically: true, encoding: .utf8)
+            try systemGit(["remote", "add", name, "../elsewhere"], in: clone)
+            let text = try String(contentsOf: config, encoding: .utf8) + "\(header)\n\tpush\n"
+            try text.write(to: config, atomically: true, encoding: .utf8)
+            let line = text.split(separator: "\n", omittingEmptySubsequences: false).count - 1
+            do {
+                try await git(["push", "-f", "origin", "main"], in: clone)
+                Issue.record("expected the push to fail")
+            } catch let error as CLIError {
+                #expect(error.lines.last
+                        == "fatal: bad config variable 'remote.\(name).push' in file '.git/config' at line \(line)")
+            }
         }
     }
 

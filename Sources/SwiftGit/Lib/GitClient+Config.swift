@@ -111,6 +111,27 @@ extension GitClient {
         return (first.key, file, line)
     }
 
+    /// What's between a header line's `[` and its `]`, a `]` inside the
+    /// quoted subsection (`[remote "orig]in"]`) not counting.
+    private static func sectionHeader(_ line: String) -> Substring {
+        let body = line.dropFirst()
+        var quoted = false
+        var escaped = false
+        for index in body.indices {
+            let character = body[index]
+            if escaped {
+                escaped = false
+            } else if quoted, character == "\\" {
+                escaped = true
+            } else if character == "\"" {
+                quoted.toggle()
+            } else if character == "]", !quoted {
+                return body[..<index]
+            }
+        }
+        return body
+    }
+
     /// A quoted subsection as git reads it: `"orig\"in"` is `orig"in`,
     /// a backslash taking the next character as it is.
     private static func decodedSubsection(_ quoted: Substring) -> String {
@@ -149,7 +170,7 @@ extension GitClient {
             if line.hasPrefix("[") {
                 // `[remote "origin"]`: the section ignores case, the
                 // subsection doesn't.
-                let header = line.dropFirst().prefix { $0 != "]" }
+                let header = Self.sectionHeader(line)
                 // Spaces and tabs both separate a section from its
                 // subsection.
                 let pieces = header.split(maxSplits: 1, whereSeparator: { $0 == " " || $0 == "\t" })
