@@ -56,17 +56,40 @@ extension GitClient {
     }
 
     /// Walk every config entry visible to the repo — matches `git config --list`.
-    /// Outside a repository, lists the global and system config. With
-    /// `--global` or `--system`, just that file, which must exist.
-    public func configList(scope: ConfigScope? = nil) async throws -> [(name: String, value: String)] {
+    public func configList() async throws -> [(name: String, value: String)] {
+        try await withRepository { try $0.configList() }
+    }
+
+    /// The lines `git config --list` prints, in its order: lowest level
+    /// first, a key without a value as just its name. With `--global` or
+    /// `--system` that file only (which must exist), with `--local` the
+    /// repository's own; with no scope, every level, and outside a
+    /// repository the global and system config.
+    public func configLines(scope: ConfigScope? = nil) async throws -> [String] {
         if scope == .global || scope == .system {
-            return try await withDefaultConfig(scope: scope, missing: .fail) { try Self.configEntries(in: $0) }
+            return try await withDefaultConfig(scope: scope, missing: .fail) { try Self.configLines(in: $0) }
         }
-        do {
-            return try await withRepository { try $0.configList() }
-        } catch let error as Libgit2Error where scope == nil && Self.isNoRepository(error) {
-            return try await withDefaultConfig(scope: nil, missing: .empty) { try Self.configEntries(in: $0) }
+        try await Shell.authorize(workingDirectory)
+        let inRepository: [String]? = try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+            var repo: OpaquePointer?
+            var config: OpaquePointer?
+            defer {
+                git_config_free(config)
+                git_repository_free(repo)
+            }
+            let opened = git_repository_open_ext(&repo, workingDirectory.path, 0, nil)
+            if opened == GIT_ENOTFOUND.rawValue { return nil }
+            try Self.check(opened)
+            try Self.check(git_repository_config_snapshot(&config, repo))
+            return try Self.configLines(in: config, level: scope == .local ? GIT_CONFIG_LEVEL_LOCAL : nil)
         }
+        if let inRepository { return inRepository }
+        if scope == .local {
+            throw Libgit2Error(
+                code: GIT_ENOTFOUND.rawValue, klass: Int32(GIT_ERROR_REPOSITORY.rawValue),
+                message: "could not find repository at '\(workingDirectory.path)'")
+        }
+        return try await withDefaultConfig(scope: nil, missing: .empty) { try Self.configLines(in: $0) }
     }
 
     /// Whether `error` is libgit2 not finding a repository to open.

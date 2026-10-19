@@ -52,6 +52,9 @@ struct Config: AsyncParsableCommand {
             try await configure()
         } catch let error as Libgit2Error where error.message.hasPrefix("unable to read config file") {
             throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)
+        } catch let error as Libgit2Error where error.message.hasPrefix("could not write config file") {
+            // A selected file that is no file (`GIT_CONFIG_GLOBAL=`).
+            throw CLIError.stderr("error: \(error.message)", exitCode: 4)
         } catch let error as Libgit2Error where system && error.message.contains("Permission denied") {
             // A write that can't create the system file, as git words it.
             throw CLIError.stderr(
@@ -69,9 +72,8 @@ struct Config: AsyncParsableCommand {
         let client = CommandContext.gitClient()
 
         if list {
-            let entries = try await client.configList(scope: readScope)
-            for (name, value) in entries {
-                Shell.print("\(name)=\(value)")
+            for line in try await client.configLines(scope: readScope) {
+                Shell.print(line)
             }
             return
         }

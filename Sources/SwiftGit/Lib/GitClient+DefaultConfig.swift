@@ -19,12 +19,23 @@ extension GitClient {
         case fail
     }
 
-    /// Whether the global file is there: `~/.gitconfig` or the XDG one, as
-    /// git looks. The system file is judged by its path alone, as an
-    /// explicit `--system` also reads it when `GIT_CONFIG_NOSYSTEM` has
-    /// emptied libgit2's search path.
+    /// The file `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM` names for `scope`,
+    /// which git takes as is: an empty value is a file called `''`.
+    private static func configFileOverride(_ scope: ConfigScope) -> String? {
+        let variable = scope == .global ? "GIT_CONFIG_GLOBAL" : "GIT_CONFIG_SYSTEM"
+        return Shell.current.environment[variable]
+    }
+
+    /// Whether the scope's file is there. A file the environment names, and
+    /// the system file, are judged by their path alone (an explicit
+    /// `--system` also reads it when `GIT_CONFIG_NOSYSTEM` has emptied
+    /// libgit2's search path); the global one is `~/.gitconfig` or the XDG
+    /// file, as git looks.
     private static func configFileExists(_ scope: ConfigScope) -> Bool {
-        if scope == .system { return FileManager.default.fileExists(atPath: configFilePath(scope)) }
+        if configFileOverride(scope) != nil || scope == .system {
+            let path = configFilePath(scope)
+            return !path.isEmpty && FileManager.default.fileExists(atPath: path)
+        }
         var path = git_buf()
         defer { git_buf_dispose(&path) }
         if git_config_find_global(&path) == 0 { return true }
@@ -35,15 +46,16 @@ extension GitClient {
 
     /// The path git names for a scope's file.
     static func configFilePath(_ scope: ConfigScope) -> String {
-        scope == .global ? Libgit2Sandboxing.shared.globalHome + "/.gitconfig" : systemConfigPath()
+        if let path = configFileOverride(scope) { return path }
+        return scope == .global ? Libgit2Sandboxing.shared.globalHome + "/.gitconfig" : systemConfigPath()
     }
 
-    /// Where the system config is: `GIT_CONFIG_SYSTEM`, else libgit2's search path for
-    /// that level, or, when the level is disabled (`GIT_CONFIG_NOSYSTEM`,
-    /// which an explicit `--system` ignores in git too), the usual place.
+    /// Where the system config is: `GIT_CONFIG_SYSTEM`, else libgit2's
+    /// search path for that level, or, when the level is disabled
+    /// (`GIT_CONFIG_NOSYSTEM`, which an explicit `--system` ignores in git
+    /// too), the usual place.
     public static func systemConfigPath() -> String {
-        // `GIT_CONFIG_SYSTEM` names the system file outright.
-        if let path = Shell.current.environment["GIT_CONFIG_SYSTEM"], !path.isEmpty { return path }
+        if let path = configFileOverride(.system) { return path }
         var buffer = [CChar](repeating: 0, count: 4096)
         let level = Int32(GIT_CONFIG_LEVEL_SYSTEM.rawValue)
         if swiftports_libgit2_get_search_path(level, &buffer, UInt(buffer.count)) == 0 {
@@ -77,17 +89,16 @@ extension GitClient {
             guard let scope, scope != .local else { return try body(base) }
             var file: OpaquePointer?
             defer { git_config_free(file) }
-            let isGlobal = scope == .global
+            let path = Self.configFilePath(scope)
+            let level = scope == .global ? GIT_CONFIG_LEVEL_GLOBAL : GIT_CONFIG_LEVEL_SYSTEM
             if Self.configFileExists(scope) {
-                if isGlobal {
+                if Self.configFileOverride(scope) == nil && scope == .global {
                     try Self.check(git_config_open_global(&file, base))
                 } else {
                     try Self.check(git_config_new(&file))
-                    try Self.check(git_config_add_file_ondisk(
-                        file, Self.configFilePath(scope), GIT_CONFIG_LEVEL_SYSTEM, nil, 1))
+                    try Self.check(git_config_add_file_ondisk(file, path, level, nil, 1))
                 }
             } else {
-                let path = Self.configFilePath(scope)
                 switch missing {
                 case .fail:
                     throw Libgit2Error(
@@ -96,9 +107,14 @@ extension GitClient {
                 case .empty:
                     try Self.check(git_config_new(&file))
                 case .create:
+                    // git can't write a file called `''` either.
+                    guard !path.isEmpty else {
+                        throw Libgit2Error(
+                            code: GIT_EEXISTS.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
+                            message: "could not write config file : Is a directory")
+                    }
                     try Self.check(git_config_new(&file))
-                    try Self.check(git_config_add_file_ondisk(
-                        file, path, isGlobal ? GIT_CONFIG_LEVEL_GLOBAL : GIT_CONFIG_LEVEL_SYSTEM, nil, 1))
+                    try Self.check(git_config_add_file_ondisk(file, path, level, nil, 1))
                 }
             }
             return try body(file)
@@ -114,20 +130,26 @@ extension GitClient {
         return buffer.ptr.map { String(cString: $0) }
     }
 
-    static func configEntries(in config: OpaquePointer?) throws -> [(name: String, value: String)] {
+    /// What `git config --list` prints for `config`'s entries, lowest level
+    /// first (libgit2 iterates the highest first) and each file top to
+    /// bottom: `name=value`, or just `name` for a key without a value.
+    /// With `level`, only that level's entries.
+    static func configLines(in config: OpaquePointer?, level only: git_config_level_t? = nil) throws -> [String] {
         var iterator: UnsafeMutablePointer<git_config_iterator>?
         try check(git_config_iterator_new(&iterator, config))
         defer { git_config_iterator_free(iterator) }
-        var entries: [(name: String, value: String)] = []
+        struct Listed { let level: Int32, offset: Int, line: String }
+        var entries: [Listed] = []
         while true {
             var entry: UnsafeMutablePointer<git_config_entry>?
             let result = git_config_next(&entry, iterator)
             if result == GIT_ITEROVER.rawValue { break }
             try check(result)
-            if let entry = entry?.pointee, let name = entry.name, let value = entry.value {
-                entries.append((String(cString: name), String(cString: value)))
-            }
+            guard let entry = entry?.pointee, let name = entry.name else { continue }
+            if let only, entry.level != only { continue }
+            let line = entry.value.map { "\(String(cString: name))=\(String(cString: $0))" } ?? String(cString: name)
+            entries.append(Listed(level: Int32(entry.level.rawValue), offset: entries.count, line: line))
         }
-        return entries
+        return entries.sorted { ($0.level, $0.offset) < ($1.level, $1.offset) }.map(\.line)
     }
 }

@@ -195,6 +195,85 @@ struct GitCommandConfigTests {
         #expect(try await run(["--system", "--get", "a.b"]).status == 1)
     }
 
+    @Test("GIT_CONFIG_GLOBAL names the global file")
+    func globalFileFromTheEnvironment() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "[h]\n\tx = home\n".write(
+            to: home.appendingPathComponent(".gitconfig"), atomically: true, encoding: .utf8)
+        let chosen = root.appendingPathComponent("chosen.cfg")
+        try "[o]\n\ty = override\n".write(to: chosen, atomically: true, encoding: .utf8)
+        func run(_ args: [String], _ file: URL = chosen) async throws -> Output {
+            try await git(["config"] + args, root: root, home: home, work: work,
+                          environment: ["GIT_CONFIG_GLOBAL": file.path])
+        }
+
+        #expect(try await run(["--global", "--list"]).stdout == "o.y=override\n")
+        #expect(try await run(["--global", "--get", "o.y"]).stdout == "override\n")
+        #expect(try await run(["--global", "--get", "h.x"]).status == 1)
+
+        // A write goes to that file, not to ~/.gitconfig.
+        let other = root.appendingPathComponent("new.cfg")
+        #expect(try await run(["--global", "a.b", "c"], other).status == 0)
+        #expect(try String(contentsOf: other, encoding: .utf8) == "[a]\n\tb = c\n")
+        #expect(try String(contentsOf: home.appendingPathComponent(".gitconfig"), encoding: .utf8)
+                == "[h]\n\tx = home\n")
+
+        // A named file that isn't there is the error of git's.
+        let none = root.appendingPathComponent("none.cfg")
+        let missing = try await run(["--global", "--list"], none)
+        #expect(missing.stderr == "fatal: unable to read config file '\(none.path)': No such file or directory\n")
+        #expect(missing.status == 128)
+    }
+
+    @Test("an empty GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM names a file called ''")
+    func emptyConfigFileName() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for (flag, variable) in [("--global", "GIT_CONFIG_GLOBAL"), ("--system", "GIT_CONFIG_SYSTEM")] {
+            let environment = [variable: ""]
+            let list = try await git(["config", flag, "--list"], root: root, home: home, work: work,
+                                     environment: environment)
+            #expect(list.stderr == "fatal: unable to read config file '': No such file or directory\n")
+            #expect(list.status == 128)
+            let write = try await git(["config", flag, "a.b", "c"], root: root, home: home, work: work,
+                                      environment: environment)
+            #expect(write.stderr == "error: could not write config file : Is a directory\n")
+            #expect(write.status == 4)
+        }
+    }
+
+    @Test("--list prints the lowest level first, and a key without a value as its name")
+    func listOrderAndValuelessEntries() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "[g]\n\tx = 1\n[foo]\n\tbar\n[e]\n\tempty =\n".write(
+            to: home.appendingPathComponent(".gitconfig"), atomically: true, encoding: .utf8)
+        let global = try await git(["config", "--global", "--list"], root: root, home: home, work: work)
+        #expect(global.stdout == "g.x=1\nfoo.bar\ne.empty=\n")
+
+        let initRepo = Process()
+        initRepo.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        initRepo.arguments = ["git", "init", "-q"]
+        initRepo.currentDirectoryURL = work
+        try initRepo.run()
+        initRepo.waitUntilExit()
+        try "\n[l]\n\ty = 2\n".appendingToFile(work.appendingPathComponent(".git/config"))
+
+        // In a repository: the global entries, then the repository's own.
+        let all = try await git(["config", "--list"], root: root, home: home, work: work)
+        let lines = all.stdout.split(separator: "\n").map(String.init)
+        let globalAt = try #require(lines.firstIndex(of: "foo.bar"))
+        let localAt = try #require(lines.firstIndex(of: "l.y=2"))
+        #expect(globalAt < localAt)
+        // --local: the repository's file only.
+        let local = try await git(["config", "--local", "--list"], root: root, home: home, work: work)
+        #expect(local.stdout.contains("l.y=2\n") && !local.stdout.contains("g.x=1"))
+    }
+
     @Test("a plain write or --local needs a repository")
     func writesNeedARepository() async throws {
         let fixture = try makeRoot()
