@@ -1845,6 +1845,8 @@ struct GitCommandRemoteTests {
         #expect(title([".", "branch 'la' of .", "branch 'lb' of ."]) == "Merge HEAD, branches 'la' and 'lb'")
         // Any other ref is named as a commit.
         #expect(title(["'refs/x' of u", "branch 'a' of u"]) == "Merge branch 'a', commit 'refs/x' of u")
+        // A remote's HEAD joins its source's group whatever is in it.
+        #expect(title(["'refs/x' of u", "u", "branch 'a' of u"]) == "Merge HEAD, branch 'a', commit 'refs/x' of u")
         let local = SwiftGit.GitClient.mergeTitle(["branch 'a'", "commit '1234567'", "tag 'v1'"].map {
             SwiftGit.GitClient.MergeTitleEntry(name: $0, source: nil)
         })

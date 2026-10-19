@@ -265,9 +265,13 @@ struct Merge: AsyncParsableCommand {
     /// that is spelled, `/var/…` rather than `/private/var/…`.
     static func asSeen(_ path: String) -> String {
         func resolved(_ path: String) -> String? {
+            #if os(Android) || os(Windows)
+            return path
+            #else
             guard let real = realpath(path, nil) else { return nil }
             defer { free(real) }
             return String(cString: real)
+            #endif
         }
         // The working directory as git spells it: $PWD where it names
         // the same directory.

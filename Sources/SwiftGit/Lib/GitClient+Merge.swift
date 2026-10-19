@@ -330,7 +330,9 @@ extension GitClient {
             guard let name = entry.name else {
                 // A source's own HEAD leads its group as `HEAD`, or names
                 // the source alone.
-                if let index = groups.firstIndex(where: { $0.source == source && $0.commits.isEmpty }) {
+                // A source keeps one group whatever it already holds; this
+                // repository's commits named alone each have their own.
+                if let index = groups.firstIndex(where: { $0.source == source && (source != nil || $0.commits.isEmpty) }) {
                     groups[index].head = true
                 } else {
                     groups.append(Group(source: source, head: true))
