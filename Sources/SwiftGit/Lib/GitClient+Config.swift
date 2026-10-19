@@ -194,10 +194,17 @@ extension GitClient {
         let subsection = parts.dropFirst().dropLast().joined(separator: ".")
         let variable = String(parts.last!)
         var inSection = false
+        // Whether the previous line's value goes on (`value\`).
+        var continued = false
         // Swift reads `\r\n` as one Character: split on any newline.
         for (index, raw) in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).enumerated() {
             // A CRLF file's lines end in `\r` as well.
             let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isContinuation = continued
+            // An odd run of trailing backslashes carries the value on.
+            continued = (isContinuation || line.contains("="))
+                && line.reversed().prefix { $0 == "\\" }.count % 2 == 1
+            if isContinuation { continue }
             if line.hasPrefix("[") {
                 // `[remote "origin"]`: the section ignores case, the
                 // subsection doesn't.
