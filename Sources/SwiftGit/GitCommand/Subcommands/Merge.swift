@@ -215,11 +215,12 @@ struct Merge: AsyncParsableCommand {
 
         let failed = "Merge with strategy octopus failed."
         switch result.outcome {
-        case .mergeCommit(_, let summary, let added, let deleted):
+        case .mergeCommit(_, let summary, _, _, let lines):
             guard !quiet else { return }
             Shell.print("Merge made by the 'octopus' strategy.")
             Shell.print(summary)
-            for line in modeLines(added, deleted) { Shell.print(line) }
+            // Created, deleted, renamed, mode changed: git's summary.
+            for line in lines { Shell.print(line) }
         case .conflicts:
             Shell.print("Automatic merge failed; fix conflicts and then commit the result.")
             throw CLIError.stderr([], exitCode: 1)
