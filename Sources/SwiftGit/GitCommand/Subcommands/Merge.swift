@@ -234,6 +234,11 @@ struct Merge: AsyncParsableCommand {
             throw CLIError.stderr(held ? [unable + ".", "",
                 "Another git process seems to be running in this repository, or the lock file may be stale"]
                 : [unable], exitCode: 128)
+        case .headMissing(let ref):
+            // The branch HEAD names went away meanwhile.
+            if !quiet { Shell.print("Merge made by the 'octopus' strategy.") }
+            throw CLIError.stderr(["fatal: update_ref failed for ref 'HEAD': cannot lock ref 'HEAD': "
+                + "unable to resolve reference '" + ref + "'"], exitCode: 128)
         case .headMoved(let expected, let actual):
             // Something moved HEAD's ref meanwhile: git's update_ref
             // refuses, leaving the merge staged.
