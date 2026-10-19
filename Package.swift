@@ -429,8 +429,11 @@ let package = Package(
         // resolved, showing the remote as configured or typed, so a
         // relative remote opens from the top of the work tree, as in git,
         // and the gate authorizes exactly where libgit2 connects.
+        // GitKit 2.7.0 adds per-ref force-with-lease (`PushLeases`) and
+        // which tags a fetch brings (`FetchTags`), which `git push
+        // --force-with-lease` and `git fetch --tags`/`--no-tags` need.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.6.0",
+                 from: "2.7.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
