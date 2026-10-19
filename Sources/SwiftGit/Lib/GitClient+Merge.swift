@@ -264,6 +264,23 @@ extension GitClient {
         return text
     }
 
+    /// Whether the index holds unmerged entries, which git's `merge` and
+    /// `pull` refuse to start over, ahead of any `MERGE_HEAD`.
+    public func hasUnmergedEntries() async throws -> Bool {
+        try await withRepository { _ in
+            var repo: OpaquePointer?
+            var index: OpaquePointer?
+            defer {
+                git_index_free(index)
+                git_repository_free(repo)
+            }
+            try Self.check(git_repository_open_ext(&repo, workingDirectory.path, 0, nil))
+            try Self.check(git_repository_index(&index, repo))
+            try Self.check(git_index_read(index, 1))
+            return git_index_has_conflicts(index) != 0
+        }
+    }
+
     /// The message of annotated tag object `oid`, without a signature
     /// and trailing whitespace; `nil` when `oid` is no tag object.
     func annotatedTagMessage(_ oid: String) async throws -> String? {

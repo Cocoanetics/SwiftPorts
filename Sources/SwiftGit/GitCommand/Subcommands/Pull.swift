@@ -75,6 +75,9 @@ struct Pull: AsyncParsableCommand {
 
     private func pull() async throws {
         let client = CommandContext.gitClient(quiet: quiet)
+        // Unmerged entries stop a pull first, a merge waiting to be
+        // concluded next, both before it fetches.
+        try await Merge.refuseUnmergedEntries(client: client, verb: "Pulling")
         // A merge waiting to be concluded stops a pull before it fetches.
         if let gitDir = try await client.gitDir(),
            FileManager.default.fileExists(atPath: gitDir + "/MERGE_HEAD") {

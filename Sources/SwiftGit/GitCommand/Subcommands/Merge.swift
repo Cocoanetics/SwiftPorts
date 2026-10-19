@@ -51,6 +51,8 @@ struct Merge: AsyncParsableCommand {
             throw CLIError.stderr("fatal: this operation must be run in a work tree", exitCode: 128)
         }
 
+        // Unmerged entries come first, then a merge waiting to be concluded.
+        try await Self.refuseUnmergedEntries(client: client, verb: "Merging")
         // git won't start a merge while another waits to be concluded.
         if let gitDir = try await client.gitDir() {
             for (file, operation) in [("MERGE_HEAD", "merge"), ("CHERRY_PICK_HEAD", "cherry-pick")]
@@ -331,6 +333,23 @@ struct Merge: AsyncParsableCommand {
 }
 
 extension Merge {
+
+    /// Fail as git's `die_resolve_conflict` does when the index holds
+    /// unmerged entries: `verb` is `Merging` or `Pulling`; the hint
+    /// lines are advice (`advice.resolveConflict`, `GIT_ADVICE`).
+    static func refuseUnmergedEntries(client: SwiftGit.GitClient, verb: String) async throws {
+        guard try await client.hasUnmergedEntries() else { return }
+        var advise = try await client.configBool("advice.resolveConflict") ?? true
+        if advise, let environment = Shell.current.environment["GIT_ADVICE"] {
+            advise = try SwiftGit.GitClient.parseGitBoolEnvironment(environment, name: "GIT_ADVICE")
+        }
+        throw CLIError.stderr(
+            ["error: \(verb) is not possible because you have unmerged files."]
+                + (advise ? ["hint: Fix them up in the work tree, and then use 'git add/rm <file>'",
+                             "hint: as appropriate to mark resolution and make a commit."] : [])
+                + ["fatal: Exiting because of an unresolved conflict."], exitCode: 128)
+    }
+
 
     /// ` create mode …` and ` delete mode …` lines in path order, as
     /// git's diffstat summary lists them: by the paths' bytes, a quoted

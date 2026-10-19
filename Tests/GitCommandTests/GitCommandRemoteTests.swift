@@ -2638,6 +2638,21 @@ struct GitCommandRemoteTests {
         }
     }
 
+    @Test("unmerged files come first, ahead of MERGE_HEAD, in merge and pull, with or without the advice")
+    func unmergedFilesFirst() async throws {
+        let clone = try makeOctopusRemoteAndClone()
+        try systemGit(["merge", "-q", "a"], in: clone)
+        // x changes the same line as a: the merge stops with f unmerged and MERGE_HEAD written.
+        _ = try systemGitStatus(["merge", "x"], in: clone)
+        #expect(FileManager.default.fileExists(atPath: clone.appendingPathComponent(".git/MERGE_HEAD").path))
+        for advice in ["true", "false"] {
+            try systemGit(["config", "advice.resolveConflict", advice], in: clone)
+            try await expectLikeGit(["merge", "b"], in: clone)
+            try await expectLikeGit(["merge", "b", "x"], in: clone)
+            try await expectLikeGit(["pull", "--no-rebase", "origin", "b"], in: clone)
+        }
+    }
+
     @Test("merge titles group FETCH_HEAD's descriptions as fmt-merge-msg does")
     func mergeTitles() {
         func title(_ descriptions: [String], known: [String] = []) -> String {
