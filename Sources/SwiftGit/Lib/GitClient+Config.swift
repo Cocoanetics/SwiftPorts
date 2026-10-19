@@ -32,6 +32,7 @@ extension GitClient {
     public func configSet(_ name: String, _ value: String, scope: ConfigScope = .local) async throws {
         if scope == .global || scope == .system {
             try await withDefaultConfig(scope: scope, missing: .create) { config in
+                try self.requireDirectory(of: Self.configFilePath(scope))
                 try Self.check(git_config_set_string(config, name, value))
             }
             return

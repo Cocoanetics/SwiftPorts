@@ -56,7 +56,7 @@ struct Config: AsyncParsableCommand {
 
     /// Whether this call changes the config.
     private var writes: Bool {
-        unset || (!list && args.count == 2)
+        unset || (!list && !get && args.count == 2)
     }
 
     /// A read without a scope flag sees every level, as git's does.
@@ -132,6 +132,15 @@ struct Config: AsyncParsableCommand {
         return CLIError.stderr("fatal: unable to access '\(file)': Permission denied", exitCode: 128)
     }
 
+    /// `--get <name> <value-pattern>`: the value if it matches, else status 1.
+    private func printValue(of name: String, matching pattern: String, with client: GitClient) async throws {
+        let found = try await client.configGet(name, scope: readScope) ?? ""
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              regex.firstMatch(in: found, range: NSRange(found.startIndex..., in: found)) != nil
+        else { throw CLIError(lines: [], exitCode: 1) }
+        Shell.print(found)
+    }
+
     private func configure() async throws {
         let client = CommandContext.gitClient()
 
@@ -151,6 +160,12 @@ struct Config: AsyncParsableCommand {
             guard try await client.configUnset(name, scope: scope) else {
                 throw CLIError(lines: [], exitCode: 5)
             }
+            return
+        }
+
+        // `--get <name> <value-pattern>` reads; it is never a set.
+        if get && args.count == 2 {
+            try await printValue(of: args[0], matching: args[1], with: client)
             return
         }
 

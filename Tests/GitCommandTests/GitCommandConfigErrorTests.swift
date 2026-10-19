@@ -122,5 +122,33 @@ struct GitCommandConfigErrorTests: ConfigTestHelpers {
         #expect(set.status == 5)
         #expect(try String(contentsOf: file, encoding: .utf8) == before)
     }
+
+    @Test("a lock another process holds, and a value-pattern read that must not write")
+    func lockHeldAndValuePattern() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = home.appendingPathComponent(".gitconfig")
+        let contents = "[a]\n\tb = hello\n"
+        try contents.write(to: file, atomically: true, encoding: .utf8)
+        func run(_ args: [String]) async throws -> ConfigOutput {
+            try await git(["config", "--global"] + args, root: root, home: home, work: work)
+        }
+
+        // --get <name> <value-pattern> reads, and never changes the file.
+        #expect(try await run(["--get", "a.b", "hel+"]).stdout == "hello\n")
+        #expect(try await run(["--get", "a.b", "zzz"]).status == 1)
+        #expect(try String(contentsOf: file, encoding: .utf8) == contents)
+
+        // A held lock stops a change, whether or not the key is there.
+        let lock = home.appendingPathComponent(".gitconfig.lock")
+        try "".write(to: lock, atomically: true, encoding: .utf8)
+        for args in [["x.y", "z"], ["--unset", "x.y"], ["--unset", "a.b"]] {
+            let result = try await run(args)
+            #expect(result.stderr == "error: could not lock config file \(file.path): File exists\n")
+            #expect(result.status == 255)
+        }
+        #expect(try String(contentsOf: file, encoding: .utf8) == contents)
+    }
 }
 #endif
