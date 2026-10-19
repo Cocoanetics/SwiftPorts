@@ -789,29 +789,41 @@ struct GitCommandRemoteTests {
 
     @Test("an empty URL resets the remote's URLs, as git reads it")
     func emptyConfiguredURL() async throws {
-        let (remote, clone) = try makeRemoteAndClone()
-        let twin = tmp("GitRemoteTwin")
-        try systemGit(["clone", "-q", remote.path, twin.path], in: clone)
-        let mirror = tmp("GitRemoteMirror"), twinMirror = clone.deletingLastPathComponent()
-            .appendingPathComponent(mirror.lastPathComponent + "-twin")
-        for (bare, repo) in [(mirror, clone), (twinMirror, twin)] {
-            try systemGit(["init", "-q", "--bare", "-b", "main", bare.path], in: repo)
-            // No URL left: git reads `e` as a path, and finds no repository.
-            try systemGit(["config", "remote.e.url", ""], in: repo)
-            try systemGit(["config", "remote.e.fetch", "+refs/heads/*:refs/remotes/e/*"], in: repo)
-            try systemGit(["config", "remote.q.url", bare.path], in: repo)
-            try systemGit(["config", "--add", "remote.q.url", ""], in: repo)
-            // No push URL left: a push goes to the URL.
-            try systemGit(["config", "remote.p.url", "../\(bare.lastPathComponent)"], in: repo)
-            try systemGit(["config", "remote.p.pushurl", ""], in: repo)
+        // git 2.54's output: before git 2.46 an empty value didn't reset
+        // the list, so CI's older system git can't stand in for it here.
+        let (_, clone) = try makeRemoteAndClone()
+        let mirror = tmp("GitRemoteMirror")
+        try systemGit(["init", "-q", "--bare", "-b", "main", mirror.path], in: clone)
+        // No URL left: git reads `e` as a path, and finds no repository.
+        try systemGit(["config", "remote.e.url", ""], in: clone)
+        try systemGit(["config", "remote.e.fetch", "+refs/heads/*:refs/remotes/e/*"], in: clone)
+        try systemGit(["config", "remote.q.url", mirror.path], in: clone)
+        try systemGit(["config", "--add", "remote.q.url", ""], in: clone)
+        // No push URL left: a push goes to the URL.
+        let typed = "../\(mirror.lastPathComponent)"
+        try systemGit(["config", "remote.p.url", typed], in: clone)
+        try systemGit(["config", "remote.p.pushurl", ""], in: clone)
+
+        func notARepository(_ name: String) -> String {
+            """
+            fatal: '\(name)' does not appear to be a git repository
+            fatal: Could not read from remote repository.
+
+            Please make sure you have the correct access rights
+            and the repository exists.
+
+            """
         }
-        let typed = "../\(mirror.lastPathComponent)", twinTyped = typed + "-twin"
-        for args in [["fetch", "e"], ["push", "e", "main"], ["fetch", "q"], ["push", "p", "main"]] {
-            let expected = try systemGitStderr(args, in: twin)
+        let cases: [(args: [String], stderr: String, status: Int32)] = [
+            (["fetch", "e"], notARepository("e"), 128),
+            (["push", "e", "main"], notARepository("e"), 128),
+            (["fetch", "q"], notARepository("q"), 128),
+            (["push", "p", "main"], "To \(typed)\n * [new branch]      main -> main\n", 0),
+        ]
+        for (args, stderr, status) in cases {
             let actual = try await gitStderr(args, in: clone)
-            #expect(actual.stderr == expected.stderr.replacingOccurrences(of: twinTyped, with: typed),
-                    "git \(args.joined(separator: " "))")
-            #expect(actual.status == expected.status, "git \(args.joined(separator: " "))")
+            #expect(actual.stderr == stderr, "git \(args.joined(separator: " "))")
+            #expect(actual.status == status, "git \(args.joined(separator: " "))")
         }
         #expect(try systemGit(["rev-parse", "main"], in: mirror) == systemGit(["rev-parse", "main"], in: clone))
     }
