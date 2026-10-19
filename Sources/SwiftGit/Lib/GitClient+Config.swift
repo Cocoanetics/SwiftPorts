@@ -241,7 +241,9 @@ extension GitClient {
         }
         if body == ":" { return true }
         let colon = body.lastIndex(of: ":")
-        let source = colon.map { body[..<$0] } ?? body
+        var source = colon.map { body[..<$0] } ?? body
+        // git reads a source of `@` alone as HEAD.
+        if source == "@" { source = "HEAD" }
         let destination = colon.map { body[body.index(after: $0)...] }
         let globDestination = destination?.contains("*") ?? false
         let globSource = source.contains("*")
@@ -250,6 +252,15 @@ extension GitClient {
         if globSource, !isRefName(source, pattern: true) { return false }
         guard let destination else { return isRefName(source, pattern: globSource) }
         return !destination.isEmpty && isRefName(destination, pattern: globSource)
+    }
+
+    /// `refspec` with a source of `@` alone spelled out as HEAD, as
+    /// git's parse_refspec reads it (`@:refs/heads/x`, `+@`).
+    public static func pushRefspecReadingAtAsHead(_ refspec: String) -> String {
+        let forced = refspec.hasPrefix("+")
+        let body = forced ? refspec.dropFirst() : Substring(refspec)
+        guard body == "@" || body.hasPrefix("@:") else { return refspec }
+        return (forced ? "+" : "") + "HEAD" + body.dropFirst()
     }
 
     private static func isASCIIHex(_ byte: UInt8) -> Bool {

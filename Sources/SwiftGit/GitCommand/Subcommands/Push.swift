@@ -74,10 +74,13 @@ struct Push: AsyncParsableCommand {
             ? try await DefaultPush.plan(client: client, remote: remoteName, settings: settings)
             : DefaultPush.Plan(remote: remoteName ?? "origin", refspecs: refspecs, setUpstream: false)
         let upstream = setUpstream || plan.setUpstream
-        var pushRefspecs = plan.refspecs
+        // git reads a source of `@` alone as HEAD.
+        var pushRefspecs = plan.refspecs.map(SwiftGit.GitClient.pushRefspecReadingAtAsHead)
         // What the remote is configured to push, when that's what goes.
         let configured = pushRefspecs.isEmpty
-            ? try await client.configGetAll("remote.\(plan.remote).push") : []
+            ? try await client.configGetAll("remote.\(plan.remote).push")
+                .map(SwiftGit.GitClient.pushRefspecReadingAtAsHead)
+            : []
         // git refuses a malformed refspec before `--force` would touch
         // it: every remote's configured ones as it reads its config,
         // whether or not they're pushed, then those typed.

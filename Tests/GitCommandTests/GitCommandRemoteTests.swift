@@ -1024,12 +1024,27 @@ struct GitCommandRemoteTests {
         #expect(GitClient.isValidPushRefspec(":dev"))
         #expect(GitClient.isValidPushRefspec("+:"))
         #expect(GitClient.isValidPushRefspec("v1.0"))
+        // `@` alone is HEAD as a source, nothing as a destination.
+        #expect(GitClient.isValidPushRefspec("@"))
+        #expect(GitClient.isValidPushRefspec("+@:refs/heads/at"))
+        #expect(GitClient.pushRefspecReadingAtAsHead("@") == "HEAD")
+        #expect(GitClient.pushRefspecReadingAtAsHead("+@:refs/heads/at") == "+HEAD:refs/heads/at")
+        #expect(GitClient.pushRefspecReadingAtAsHead("@foo") == "@foo")
         // A negative refspec is a ref name or pattern alone.
         #expect(GitClient.isValidPushRefspec("^refs/heads/dev"))
         #expect(GitClient.isValidPushRefspec("^refs/heads/d*"))
         for bad in ["^", "+^main", "^main:dest", "^" + String(repeating: "a", count: 40)] {
             #expect(!GitClient.isValidPushRefspec(bad), "\(bad)")
         }
+    }
+
+    @Test("git push reads a source of @ as HEAD")
+    func pushAtAsHead() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        let output = try await git(["push", "origin", "@:refs/heads/at"], in: clone)
+        #expect(output.stderr == "To \(url)\n * [new branch]      HEAD -> at\n")
+        #expect(try systemGit(["rev-parse", "at"], in: remote) == systemGit(["rev-parse", "HEAD"], in: clone))
     }
 
     @Test("a lease value can't pass for the bare or negated forms")
