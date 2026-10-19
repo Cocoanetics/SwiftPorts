@@ -183,7 +183,10 @@ extension GitClient {
     /// The line of `file` where `key` (`remote.origin.push`) is written
     /// without a value, counting from 1.
     private static func valuelessLine(of key: String, in file: URL) -> Int? {
-        guard var text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        // git reads config as bytes: a value that isn't UTF-8 doesn't stop
+        // it, nor the line count here.
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        var text = String(decoding: data, as: UTF8.self)
         // git skips a UTF-8 byte order mark at the start of a file.
         if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         let parts = key.split(separator: ".", omittingEmptySubsequences: false)
