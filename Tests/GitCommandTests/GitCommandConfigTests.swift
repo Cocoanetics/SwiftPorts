@@ -14,20 +14,30 @@ import SwiftGit
 struct GitCommandConfigTests {
 
     /// A sandbox root with a `home` (no `.gitconfig` yet) and a plain `work` directory.
-    private func makeRoot() throws -> (root: URL, home: URL, work: URL) {
+    struct Fixture {
+        let root: URL, home: URL, work: URL
+    }
+
+    /// What a `git` run printed, and its exit status.
+    struct Output {
+        let stdout: String, stderr: String, status: Int32
+    }
+
+    private func makeRoot() throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitConfigOutside-\(UUID().uuidString)")
         let home = root.appendingPathComponent("home"), work = root.appendingPathComponent("work")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-        return (root.resolvingSymlinksInPath(), home.resolvingSymlinksInPath(), work.resolvingSymlinksInPath())
+        return Fixture(root: root.resolvingSymlinksInPath(), home: home.resolvingSymlinksInPath(),
+                       work: work.resolvingSymlinksInPath())
     }
 
     /// `git <args>` in `work` under a sandbox whose home is `home`: stdout,
     /// stderr (an error's lines included) and the exit status.
     private func git(
         _ args: [String], root: URL, home: URL, work: URL
-    ) async throws -> (stdout: String, stderr: String, status: Int32) {
+    ) async throws -> Output {
         let out = OutputSink(), err = OutputSink()
         let shell = Shell(
             stdout: out, stderr: err,
@@ -46,14 +56,15 @@ struct GitCommandConfigTests {
         out.finish()
         err.finish()
         let printed = await err.readAllString() + (failure?.lines.map { $0 + "\n" }.joined() ?? "")
-        return (await out.readAllString(), printed, failure?.exitCode ?? 0)
+        return Output(stdout: await out.readAllString(), stderr: printed, status: failure?.exitCode ?? 0)
     }
 
     @Test("--global works anywhere, and starts ~/.gitconfig")
     func globalOutsideARepository() async throws {
-        let (root, home, work) = try makeRoot()
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
         defer { try? FileManager.default.removeItem(at: root) }
-        func run(_ args: [String]) async throws -> (stdout: String, stderr: String, status: Int32) {
+        func run(_ args: [String]) async throws -> Output {
             try await git(["config"] + args, root: root, home: home, work: work)
         }
 
@@ -76,16 +87,17 @@ struct GitCommandConfigTests {
 
     @Test("a plain read inside a repository sees the global value too")
     func plainReadIsMerged() async throws {
-        let (root, home, work) = try makeRoot()
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
         defer { try? FileManager.default.removeItem(at: root) }
         try "[user]\n\tname = Global Name\n".write(
             to: home.appendingPathComponent(".gitconfig"), atomically: true, encoding: .utf8)
-        let init_ = Process()
-        init_.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        init_.arguments = ["git", "init", "-q"]
-        init_.currentDirectoryURL = work
-        try init_.run()
-        init_.waitUntilExit()
+        let initRepo = Process()
+        initRepo.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        initRepo.arguments = ["git", "init", "-q"]
+        initRepo.currentDirectoryURL = work
+        try initRepo.run()
+        initRepo.waitUntilExit()
 
         let merged = try await git(["config", "user.name"], root: root, home: home, work: work)
         #expect(merged.stdout == "Global Name\n")
@@ -94,9 +106,64 @@ struct GitCommandConfigTests {
         #expect(local.status == 1)
     }
 
+    @Test("a missing global file is an empty config for a get or unset, and an error to list")
+    func missingGlobalFile() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func run(_ args: [String]) async throws -> Output {
+            try await git(["config"] + args, root: root, home: home, work: work)
+        }
+
+        #expect(try await run(["--global", "--get", "a.b"]).status == 1)
+        #expect(try await run(["--global", "--unset", "a.b"]).status == 5)
+        // Neither started the file.
+        #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent(".gitconfig").path))
+
+        let list = try await run(["--global", "--list"])
+        #expect(list.stderr
+                == "fatal: unable to read config file '\(home.path)/.gitconfig': No such file or directory\n")
+        #expect(list.status == 128)
+    }
+
+    @Test("--global --list lists the global file only")
+    func listHonoursTheScope() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "[g]\n\tx = 1\n".write(
+            to: home.appendingPathComponent(".gitconfig"), atomically: true, encoding: .utf8)
+        let create = Process()
+        create.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        create.arguments = ["git", "init", "-q"]
+        create.currentDirectoryURL = work
+        try create.run()
+        create.waitUntilExit()
+        try "\n[l]\n\ty = 2\n".appendingToFile(work.appendingPathComponent(".git/config"))
+
+        let global = try await git(["config", "--global", "--list"], root: root, home: home, work: work)
+        #expect(global.stdout == "g.x=1\n")
+        let all = try await git(["config", "--list"], root: root, home: home, work: work)
+        #expect(all.stdout.contains("g.x=1\n") && all.stdout.contains("l.y=2\n"))
+    }
+
+    @Test("a --system write that can't create the file fails as git's does")
+    func systemWriteWithoutPermission() async throws {
+        // Only where /etc/gitconfig can't be started: never create it.
+        guard !FileManager.default.fileExists(atPath: "/etc/gitconfig"),
+              !FileManager.default.isWritableFile(atPath: "/etc") else { return }
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let result = try await git(["config", "--system", "a.b", "c"], root: root, home: home, work: work)
+        #expect(result.stderr == "error: could not lock config file /etc/gitconfig: Permission denied\n")
+        #expect(result.status == 255)
+    }
+
     @Test("a plain write or --local needs a repository")
     func writesNeedARepository() async throws {
-        let (root, home, work) = try makeRoot()
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
         defer { try? FileManager.default.removeItem(at: root) }
 
         let plain = try await git(["config", "pull.rebase", "true"], root: root, home: home, work: work)
@@ -106,6 +173,15 @@ struct GitCommandConfigTests {
         let local = try await git(["config", "--local", "pull.rebase", "true"], root: root, home: home, work: work)
         #expect(local.stderr == "fatal: --local can only be used inside a git repository\n")
         #expect(local.status == 128)
+    }
+}
+private extension String {
+    /// Appends `self` to the file at `url`.
+    func appendingToFile(_ url: URL) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(utf8))
     }
 }
 #endif
