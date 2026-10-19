@@ -42,6 +42,11 @@ struct Config: AsyncParsableCommand {
         return .local
     }
 
+    /// Whether this call changes the config.
+    private var writes: Bool {
+        unset || (!list && args.count == 2)
+    }
+
     /// A read without a scope flag sees every level, as git's does.
     private var readScope: ConfigScope? {
         global || system || local ? scope : nil
@@ -52,13 +57,22 @@ struct Config: AsyncParsableCommand {
             try await configure()
         } catch let error as Libgit2Error where error.message.hasPrefix("unable to read config file") {
             throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)
+        } catch let error as Libgit2Error where error.message.hasPrefix("unable to access") {
+            // An existing file that can't be read: fatal for a list, a
+            // warning and "not found" for a get.
+            if list || writes { throw CLIError.stderr("fatal: \(error.message)", exitCode: 128) }
+            Shell.current.stderr("warning: \(error.message)\n")
+            throw CLIError(lines: [], exitCode: 1)
         } catch let error as Libgit2Error where error.message.hasPrefix("could not write config file") {
             // A selected file that is no file (`GIT_CONFIG_GLOBAL=`).
             throw CLIError.stderr("error: \(error.message)", exitCode: 4)
-        } catch let error as Libgit2Error where system && error.message.contains("Permission denied") {
-            // A write that can't create the system file, as git words it.
-            throw CLIError.stderr(
-                "error: could not lock config file \(GitClient.systemConfigPath()): Permission denied", exitCode: 255)
+        } catch let error as Libgit2Error where error.message.contains("Permission denied") && scope != .local {
+            // The scope's file can't be written or read, as git words it.
+            let file = GitClient.configFile(for: scope)
+            if writes {
+                throw CLIError.stderr("error: could not lock config file \(file): Permission denied", exitCode: 255)
+            }
+            throw CLIError.stderr("fatal: unable to access '\(file)': Permission denied", exitCode: 128)
         } catch let error as Libgit2Error where GitClient.isNoRepository(error) {
             // `--local`, or a write with no scope, needs a repository.
             throw CLIError.stderr(
@@ -85,7 +99,7 @@ struct Config: AsyncParsableCommand {
             }
             // Like git, a key that wasn't there is exit status 5.
             guard try await client.configUnset(name, scope: scope) else {
-                throw CLIError.stderr("", exitCode: 5)
+                throw CLIError(lines: [], exitCode: 5)
             }
             return
         }
@@ -97,7 +111,7 @@ struct Config: AsyncParsableCommand {
             if let value = try await client.configGet(name, scope: readScope) {
                 Shell.print(value)
             } else {
-                throw CLIError.stderr("", exitCode: 1)
+                throw CLIError(lines: [], exitCode: 1)
             }
             _ = get  // explicit flag is fine but doesn't change behaviour
         case 2:

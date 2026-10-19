@@ -44,6 +44,11 @@ extension GitClient {
         return git_config_find_xdg(&xdg) == 0
     }
 
+    /// The file git reads and writes for `scope`, as it names it.
+    public static func configFile(for scope: ConfigScope) -> String {
+        configFilePath(scope)
+    }
+
     /// Where a config file named `path` is: a relative name is the shell's
     /// working directory's, as git has it; messages keep it as typed.
     func location(of path: String) -> String {
@@ -88,6 +93,11 @@ extension GitClient {
         scope: ConfigScope?, missing: MissingConfigFile = .fail, _ body: (OpaquePointer?) throws -> T
     ) async throws -> T {
         try await Shell.authorize(workingDirectory)
+        // A file the environment names is the user's pick, not libgit2's
+        // search: a sandbox must allow it.
+        if let scope, scope != .local, let named = Self.configFileOverride(scope), !named.isEmpty {
+            try await Shell.authorize(URL(fileURLWithPath: location(of: named)))
+        }
         return try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
             var base: OpaquePointer?
             try Self.check(git_config_open_default(&base))
@@ -101,6 +111,12 @@ extension GitClient {
                 if Self.configFileOverride(scope) == nil && scope == .global {
                     try Self.check(git_config_open_global(&file, base))
                 } else {
+                    // A file that is there but can't be read: git's words.
+                    guard access(self.location(of: path), R_OK) == 0 else {
+                        throw Libgit2Error(
+                            code: GIT_EUSER.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
+                            message: "unable to access '\(path)': Permission denied")
+                    }
                     try Self.check(git_config_new(&file))
                     try Self.check(git_config_add_file_ondisk(file, self.location(of: path), level, nil, 1))
                 }

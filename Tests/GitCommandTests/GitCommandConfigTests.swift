@@ -78,7 +78,9 @@ struct GitCommandConfigTests {
         // A plain read, and --list, see the global file.
         #expect(try await run(["pull.rebase"]).stdout == "false\n")
         #expect(try await run(["--list"]).stdout.contains("pull.rebase=false\n"))
-        #expect(try await run(["--global", "--get", "nope.key"]).status == 1)
+        // git says nothing at all about a key that isn't there.
+        let absent = try await run(["--global", "--get", "nope.key"])
+        #expect(absent.status == 1 && absent.stderr.isEmpty && absent.stdout.isEmpty)
 
         // Unsetting what isn't there is status 5.
         #expect(try await run(["--global", "--unset", "pull.rebase"]).status == 0)
@@ -244,6 +246,66 @@ struct GitCommandConfigTests {
         #expect(try String(contentsOf: work.appendingPathComponent("rel.cfg"), encoding: .utf8)
                 == "[a]\n\tb = c\n")
         #expect(try await run(["--global", "--get", "a.b"]).stdout == "c\n")
+    }
+
+    @Test("a config file the environment names must be inside the sandbox")
+    func environmentFileIsAuthorized() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitConfigOutside-escape-\(UUID().uuidString).cfg")
+        try "[a]\n\tb = secret\n".write(to: outside, atomically: true, encoding: .utf8)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        for args in [["--global", "--get", "a.b"], ["--global", "--list"], ["--global", "a.b", "x"],
+                     ["--global", "--unset", "a.b"]] {
+            await #expect(throws: Sandbox.Denial.self) {
+                try await self.git(["config"] + args, root: root, home: home, work: work,
+                                   environment: ["GIT_CONFIG_GLOBAL": outside.path])
+            }
+        }
+        // Untouched.
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "[a]\n\tb = secret\n")
+    }
+
+    @Test("permission failures are git's: unreadable files, unwritable directories")
+    func permissionFailures() async throws {
+        // Root ignores file modes.
+        guard getuid() != 0 else { return }
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path + "/locked")
+            try? FileManager.default.removeItem(at: root)
+        }
+        let unreadable = root.appendingPathComponent("unreadable.cfg")
+        try "[a]\n\tb = c\n".write(to: unreadable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadable.path)
+        let locked = root.appendingPathComponent("locked")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
+
+        let list = try await git(["config", "--system", "--list"], root: root, home: home, work: work,
+                                 environment: ["GIT_CONFIG_SYSTEM": unreadable.path])
+        #expect(list.stderr == "fatal: unable to access '\(unreadable.path)': Permission denied\n")
+        #expect(list.status == 128)
+
+        // A get warns and finds nothing.
+        let get = try await git(["config", "--system", "--get", "a.b"], root: root, home: home, work: work,
+                                environment: ["GIT_CONFIG_SYSTEM": unreadable.path])
+        #expect(get.stderr == "warning: unable to access '\(unreadable.path)': Permission denied\n")
+        #expect(get.status == 1)
+
+        let target = locked.appendingPathComponent("new.cfg")
+        for scope in ["--global", "--system"] {
+            let variable = scope == "--global" ? "GIT_CONFIG_GLOBAL" : "GIT_CONFIG_SYSTEM"
+            let write = try await git(["config", scope, "x.y", "z"], root: root, home: home, work: work,
+                                      environment: [variable: target.path])
+            #expect(write.stderr == "error: could not lock config file \(target.path): Permission denied\n")
+            #expect(write.status == 255)
+        }
     }
 
     @Test("an empty GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM names a file called ''")
