@@ -1,6 +1,7 @@
 import Foundation
 import CGitKit
 import GitKit
+import ShellKit
 
 // Sandbox-aware delegation onto the pure `Repository` config operations
 // (`GitKit/Repository+Config.swift`). Each call authorizes the
@@ -9,25 +10,119 @@ import GitKit
 extension GitClient {
 
     /// Read a config value (`git config --get <name>`). Returns nil
-    /// when the key isn't set.
+    /// when the key isn't set. Outside a repository, reads the global
+    /// and system config, as git does.
     public func configGet(_ name: String, scope: ConfigScope? = nil) async throws -> String? {
-        try await withRepository { try $0.configGet(name, scope: scope) }
+        if scope == .global || scope == .system {
+            return try await withDefaultConfig(scope: scope) { try Self.configString(name, in: $0) }
+        }
+        do {
+            return try await withRepository { try $0.configGet(name, scope: scope) }
+        } catch let error as Libgit2Error where scope == nil && Self.isNoRepository(error) {
+            return try await withDefaultConfig(scope: nil) { try Self.configString(name, in: $0) }
+        }
     }
 
     /// Set a config value, matching `git config <name> <value>`.
+    /// `--global` works anywhere, and creates `~/.gitconfig` if there is none.
     public func configSet(_ name: String, _ value: String, scope: ConfigScope = .local) async throws {
+        if scope == .global || scope == .system {
+            try await withDefaultConfig(scope: scope, create: true) { config in
+                try Self.check(git_config_set_string(config, name, value))
+            }
+            return
+        }
         try await withRepository { try $0.configSet(name, value, scope: scope) }
     }
 
     /// Remove a config entry. Returns true if removed, false if absent.
     @discardableResult
     public func configUnset(_ name: String, scope: ConfigScope = .local) async throws -> Bool {
-        try await withRepository { try $0.configUnset(name, scope: scope) }
+        if scope == .global || scope == .system {
+            return try await withDefaultConfig(scope: scope) { config in
+                let result = git_config_delete_entry(config, name)
+                if result == GIT_ENOTFOUND.rawValue { return false }
+                try Self.check(result)
+                return true
+            }
+        }
+        return try await withRepository { try $0.configUnset(name, scope: scope) }
     }
 
     /// Walk every config entry visible to the repo — matches `git config --list`.
+    /// Outside a repository, lists the global and system config.
     public func configList() async throws -> [(name: String, value: String)] {
-        try await withRepository { try $0.configList() }
+        do {
+            return try await withRepository { try $0.configList() }
+        } catch let error as Libgit2Error where Self.isNoRepository(error) {
+            return try await withDefaultConfig(scope: nil) { try Self.configEntries(in: $0) }
+        }
+    }
+
+    /// Whether `error` is libgit2 not finding a repository to open.
+    public static func isNoRepository(_ error: Libgit2Error) -> Bool {
+        error.code == GIT_ENOTFOUND.rawValue && error.klass == Int32(GIT_ERROR_REPOSITORY.rawValue)
+    }
+
+    /// Runs `body` on the config git reads outside any repository: the
+    /// system and global files (or just `scope`'s), under the sandbox's
+    /// view of home. With `create`, a global file that doesn't exist yet
+    /// is started, as `git config --global` does.
+    private func withDefaultConfig<T>(
+        scope: ConfigScope?, create: Bool = false, _ body: (OpaquePointer?) throws -> T
+    ) async throws -> T {
+        try await Shell.authorize(workingDirectory)
+        return try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+            var base: OpaquePointer?
+            try Self.check(git_config_open_default(&base))
+            defer { git_config_free(base) }
+            switch scope {
+            case .global:
+                var global: OpaquePointer?
+                var result = git_config_open_global(&global, base)
+                if result == GIT_ENOTFOUND.rawValue, create {
+                    try Self.check(git_config_new(&global))
+                    let path = Libgit2Sandboxing.shared.globalHome + "/.gitconfig"
+                    result = git_config_add_file_ondisk(global, path, GIT_CONFIG_LEVEL_GLOBAL, nil, 1)
+                }
+                try Self.check(result)
+                defer { git_config_free(global) }
+                return try body(global)
+            case .system:
+                var system: OpaquePointer?
+                try Self.check(git_config_open_level(&system, base, GIT_CONFIG_LEVEL_SYSTEM))
+                defer { git_config_free(system) }
+                return try body(system)
+            case .local, .none:
+                return try body(base)
+            }
+        }
+    }
+
+    private static func configString(_ name: String, in config: OpaquePointer?) throws -> String? {
+        var buffer = git_buf()
+        defer { git_buf_dispose(&buffer) }
+        let result = git_config_get_string_buf(&buffer, config, name)
+        if result == GIT_ENOTFOUND.rawValue { return nil }
+        try check(result)
+        return buffer.ptr.map { String(cString: $0) }
+    }
+
+    private static func configEntries(in config: OpaquePointer?) throws -> [(name: String, value: String)] {
+        var iterator: UnsafeMutablePointer<git_config_iterator>?
+        try check(git_config_iterator_new(&iterator, config))
+        defer { git_config_iterator_free(iterator) }
+        var entries: [(name: String, value: String)] = []
+        while true {
+            var entry: UnsafeMutablePointer<git_config_entry>?
+            let result = git_config_next(&entry, iterator)
+            if result == GIT_ITEROVER.rawValue { break }
+            try check(result)
+            if let entry = entry?.pointee, let name = entry.name, let value = entry.value {
+                entries.append((String(cString: name), String(cString: value)))
+            }
+        }
+        return entries
     }
 
     /// Every value of a multi-valued key (`git config --get-all <name>`),

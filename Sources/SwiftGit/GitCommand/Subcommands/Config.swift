@@ -42,7 +42,24 @@ struct Config: AsyncParsableCommand {
         return .local
     }
 
+    /// A read without a scope flag sees every level, as git's does.
+    private var readScope: ConfigScope? {
+        global || system || local ? scope : nil
+    }
+
     func run() async throws {
+        do {
+            try await configure()
+        } catch let error as Libgit2Error where GitClient.isNoRepository(error) {
+            // `--local`, or a write with no scope, needs a repository.
+            throw CLIError.stderr(
+                local ? "fatal: --local can only be used inside a git repository"
+                      : "fatal: not in a git directory",
+                exitCode: 128)
+        }
+    }
+
+    private func configure() async throws {
         let client = CommandContext.gitClient()
 
         if list {
@@ -58,7 +75,10 @@ struct Config: AsyncParsableCommand {
                 throw CLIError.stderr(
                     "fatal: --unset requires a key", exitCode: 128)
             }
-            _ = try await client.configUnset(name, scope: scope)
+            // Like git, a key that wasn't there is exit status 5.
+            guard try await client.configUnset(name, scope: scope) else {
+                throw CLIError.stderr("", exitCode: 5)
+            }
             return
         }
 
@@ -66,7 +86,7 @@ struct Config: AsyncParsableCommand {
         case 1:
             // Read form: `git config <name>` or `git config --get <name>`.
             let name = args[0]
-            if let value = try await client.configGet(name, scope: scope) {
+            if let value = try await client.configGet(name, scope: readScope) {
                 Shell.print(value)
             } else {
                 throw CLIError.stderr("", exitCode: 1)

@@ -60,6 +60,11 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
     private let lock = NSLock()
     private var lastApplied: AppliedSnapshot?
 
+    /// The directory of the global `.gitconfig` libgit2 currently looks
+    /// in: the sandbox's, or the process's home when no sandbox is applied.
+    /// Read inside ``runIsolated(_:body:)``.
+    var globalHome: String { lastApplied?.home ?? NSHomeDirectory() }
+
     /// Apply the sandbox's env→option mapping and run `body` while
     /// the lock is held. Releases the lock when `body` returns. The
     /// caller's body should perform the libgit2 repo open inside it
