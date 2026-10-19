@@ -316,9 +316,11 @@ struct GitCommandRemoteTests {
         try systemGit(["branch", "wip"], in: clone)
         let output = try await git(
             ["push", "-u", "origin", "refs/heads/*:refs/heads/*", "^refs/heads/wip"], in: clone)
+        // In the remote's ref order, as git reports them: the branch it
+        // has first, then the new one.
         #expect(output.stdout == """
-            branch 'dev' set up to track 'origin/dev'.
             branch 'main' set up to track 'origin/main'.
+            branch 'dev' set up to track 'origin/dev'.
 
             """)
         #expect(throws: Failure.self) { try systemGit(["config", "branch.wip.remote"], in: clone) }
