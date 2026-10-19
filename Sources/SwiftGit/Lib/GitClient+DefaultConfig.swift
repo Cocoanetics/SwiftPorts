@@ -202,7 +202,8 @@ extension GitClient {
         let result = git_config_get_string_buf(&buffer, config, name)
         if result == GIT_ENOTFOUND.rawValue { return nil }
         try check(result)
-        return buffer.ptr.map { String(cString: $0) }
+        // A key without a value is found, with an empty one.
+        return buffer.ptr.map { String(cString: $0) } ?? ""
     }
 
     /// What `git config --list` prints for `config`'s entries, lowest level

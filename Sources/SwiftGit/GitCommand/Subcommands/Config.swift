@@ -81,9 +81,15 @@ struct Config: AsyncParsableCommand {
         if message.hasPrefix("unable to read config file") {
             return CLIError.stderr("fatal: \(message)", exitCode: 128)
         }
-        if unset && message.contains("not unique") {
+        if message.contains("not unique") && (unset || args.count == 2) {
             // More than one line has the key: git changes nothing.
-            return CLIError.stderr("warning: \(args.first ?? "") has multiple values", exitCode: 5)
+            let key = args.first ?? ""
+            var lines = ["warning: \(key) has multiple values"]
+            if !unset {
+                lines += ["error: cannot overwrite multiple values with a single value",
+                          "       Use a regexp, --add or --replace-all to change \(key)."]
+            }
+            return CLIError.stderr(lines, exitCode: 5)
         }
         if message.hasPrefix("unable to access") { return unreadable(message) }
         if message.hasPrefix("could not lock config file") {

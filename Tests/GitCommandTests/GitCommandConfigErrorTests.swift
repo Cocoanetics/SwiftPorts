@@ -89,5 +89,38 @@ struct GitCommandConfigErrorTests: ConfigTestHelpers {
             #expect(result.status == 3)
         }
     }
+
+    @Test("a key without a value is there: empty to get, removed by unset; several values can't be set")
+    func valuelessAndMultipleValues() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = home.appendingPathComponent(".gitconfig")
+        try "[foo]\n\tbar\n\tempty =\n[a]\n\tb = 1\n\tb = 2\n".write(
+            to: file, atomically: true, encoding: .utf8)
+        func run(_ args: [String]) async throws -> ConfigOutput {
+            try await git(["config", "--global"] + args, root: root, home: home, work: work)
+        }
+
+        for key in ["foo.bar", "foo.empty"] {
+            let get = try await run(["--get", key])
+            #expect(get.stdout == "\n" && get.status == 0)
+        }
+        #expect(try await run(["--unset", "foo.bar"]).status == 0)
+        #expect(try await run(["--get", "foo.bar"]).status == 1)
+        #expect(try await run(["--get", "foo.empty"]).stdout == "\n")
+
+        // A set can't overwrite several values; git changes nothing.
+        let before = try String(contentsOf: file, encoding: .utf8)
+        let set = try await run(["a.b", "3"])
+        #expect(set.stderr == """
+            warning: a.b has multiple values
+            error: cannot overwrite multiple values with a single value
+                   Use a regexp, --add or --replace-all to change a.b.
+
+            """)
+        #expect(set.status == 5)
+        #expect(try String(contentsOf: file, encoding: .utf8) == before)
+    }
 }
 #endif
