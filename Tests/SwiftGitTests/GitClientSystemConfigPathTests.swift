@@ -22,5 +22,25 @@ struct GitClientSystemConfigPathTests {
             #expect(swiftports_libgit2_set_search_path(2, nil) == 0)
         }
     }
+
+    /// The search path is a list: the file may be in a later directory.
+    @Test func searchesEveryDirectory() throws {
+        Libgit2.ensureInitialized()
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SystemConfigPath-\(UUID().uuidString)")
+        let first = root.appendingPathComponent("a"), second = root.appendingPathComponent("b")
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+        try "[a]\n\tb = c\n".write(
+            to: second.appendingPathComponent("gitconfig"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let canonical = second.resolvingSymlinksInPath().path
+        try Libgit2Sandboxing.shared.runIsolated(nil) {
+            #expect(swiftports_libgit2_set_search_path(2, "\(first.path):\(second.path)") == 0)
+            let found = GitClient.systemConfigPath()
+            #expect(URL(fileURLWithPath: found).resolvingSymlinksInPath().path == canonical + "/gitconfig")
+            #expect(swiftports_libgit2_set_search_path(2, nil) == 0)
+        }
+    }
 }
 #endif

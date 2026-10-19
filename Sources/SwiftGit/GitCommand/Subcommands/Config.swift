@@ -57,6 +57,9 @@ struct Config: AsyncParsableCommand {
             try await configure()
         } catch let error as Libgit2Error where error.message.hasPrefix("unable to read config file") {
             throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)
+        } catch let error as Libgit2Error where unset && error.message.contains("not unique") {
+            // More than one line has the key: git changes nothing.
+            throw CLIError.stderr("warning: \(args.first ?? "") has multiple values", exitCode: 5)
         } catch let error as Libgit2Error where error.message.hasPrefix("unable to access") {
             // An existing file that can't be read: fatal for a list, a
             // warning and "not found" for a get.

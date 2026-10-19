@@ -67,6 +67,10 @@ extension GitClient {
     /// too), the usual place.
     public static func systemConfigPath() -> String {
         if let path = configFileOverride(.system) { return path }
+        // The first directory of libgit2's search path that has the file.
+        var found = git_buf()
+        defer { git_buf_dispose(&found) }
+        if git_config_find_system(&found) == 0, let path = found.ptr { return String(cString: path) }
         var buffer = [CChar](repeating: 0, count: 4096)
         let level = Int32(GIT_CONFIG_LEVEL_SYSTEM.rawValue)
         if swiftports_libgit2_get_search_path(level, &buffer, UInt(buffer.count)) == 0 {
@@ -97,6 +101,11 @@ extension GitClient {
         // search: a sandbox must allow it.
         if let scope, scope != .local, let named = Self.configFileOverride(scope), !named.isEmpty {
             try await Shell.authorize(URL(fileURLWithPath: location(of: named)))
+        } else if scope != .system, scope != .local {
+            // The global file is under the home libgit2 is pointed at: the
+            // environment's, which may be outside the sandbox.
+            let home = Libgit2Sandboxing.shared.home(for: Shell.current.sandbox)
+            try await Shell.authorize(URL(fileURLWithPath: home).appendingPathComponent(".gitconfig"))
         }
         return try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
             var base: OpaquePointer?
@@ -112,7 +121,7 @@ extension GitClient {
                     try Self.check(git_config_open_global(&file, base))
                 } else {
                     // A file that is there but can't be read: git's words.
-                    guard access(self.location(of: path), R_OK) == 0 else {
+                    guard FileManager.default.isReadableFile(atPath: self.location(of: path)) else {
                         throw Libgit2Error(
                             code: GIT_EUSER.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
                             message: "unable to access '\(path)': Permission denied")

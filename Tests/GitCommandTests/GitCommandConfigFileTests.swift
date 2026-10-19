@@ -169,6 +169,41 @@ struct GitCommandConfigFileTests: ConfigTestHelpers {
         }
     }
 
+    @Test("the home config must be inside the sandbox too")
+    func homeConfigIsAuthorized() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitConfigOutside-home-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        for args in [["--global", "--get", "a.b"], ["--global", "a.b", "x"], ["--global", "--list"]] {
+            await #expect(throws: Sandbox.Denial.self) {
+                try await self.git(["config"] + args, root: root, home: home, work: work,
+                                   environment: ["HOME": outside.path])
+            }
+        }
+        // Nothing was started out there.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
+    }
+
+    @Test("unsetting a key with several values changes nothing and is status 5")
+    func unsetOfAMultivalueKey() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = home.appendingPathComponent(".gitconfig")
+        let contents = "[a]\n\tb = 1\n\tb = 2\n"
+        try contents.write(to: file, atomically: true, encoding: .utf8)
+        let result = try await git(["config", "--global", "--unset", "a.b"], root: root, home: home, work: work)
+        #expect(result.stderr == "warning: a.b has multiple values\n")
+        #expect(result.status == 5)
+        #expect(try String(contentsOf: file, encoding: .utf8) == contents)
+    }
+
     @Test("an empty GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM names a file called ''")
     func emptyConfigFileName() async throws {
         let fixture = try makeRoot()
