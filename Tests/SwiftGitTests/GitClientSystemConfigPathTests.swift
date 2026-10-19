@@ -5,7 +5,7 @@ import GitKit
 import Testing
 @testable import SwiftGit
 
-@Suite("where the system config lives")
+@Suite("where the system config lives", .serialized)
 struct GitClientSystemConfigPathTests {
 
     /// The path comes from libgit2's search path for the system level,
@@ -21,6 +21,19 @@ struct GitClientSystemConfigPathTests {
             #expect(GitClient.systemConfigPath() == "/etc/gitconfig")
             #expect(swiftports_libgit2_set_search_path(2, nil) == 0)
         }
+    }
+
+    /// Without a sandbox the process's XDG_CONFIG_HOME names the XDG config
+    /// directory, as it does for git.
+    @Test func processXDGConfigHome() throws {
+        let saved = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
+        defer {
+            if let saved { setenv("XDG_CONFIG_HOME", saved, 1) } else { unsetenv("XDG_CONFIG_HOME") }
+        }
+        setenv("XDG_CONFIG_HOME", "/custom/xdg", 1)
+        #expect(Libgit2Sandboxing.shared.xdgConfigHome(for: nil) == "/custom/xdg")
+        unsetenv("XDG_CONFIG_HOME")
+        #expect(Libgit2Sandboxing.shared.xdgConfigHome(for: nil) == NSHomeDirectory() + "/.config")
     }
 
     /// The search path is a list: the file may be in a later directory.
