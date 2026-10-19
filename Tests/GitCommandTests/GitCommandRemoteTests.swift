@@ -1011,6 +1011,12 @@ struct GitCommandRemoteTests {
         #expect(GitClient.isValidPushRefspec(":dev"))
         #expect(GitClient.isValidPushRefspec("+:"))
         #expect(GitClient.isValidPushRefspec("v1.0"))
+        // A negative refspec is a ref name or pattern alone.
+        #expect(GitClient.isValidPushRefspec("^refs/heads/dev"))
+        #expect(GitClient.isValidPushRefspec("^refs/heads/d*"))
+        for bad in ["^", "+^main", "^main:dest", "^" + String(repeating: "a", count: 40)] {
+            #expect(!GitClient.isValidPushRefspec(bad), "\(bad)")
+        }
     }
 
     @Test("a lease value can't pass for the bare or negated forms")

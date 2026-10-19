@@ -223,11 +223,20 @@ extension GitClient {
     /// destination, both patterns or neither. The source may be empty
     /// (a deletion), an object ID or any revision, but must be a ref
     /// name when it's a pattern or there's no destination; a destination
-    /// must be a ref name. A negative refspec is left to GitKit.
+    /// must be a ref name. A negative refspec (`^refs/heads/wip`) is a
+    /// ref name or pattern alone: not forced, not empty, without a
+    /// destination, not an object ID.
     public static func isValidPushRefspec(_ refspec: String) -> Bool {
         var body = Substring(refspec)
-        if body.hasPrefix("+") { body = body.dropFirst() }
-        if body.hasPrefix("^") { return true }
+        let forced = body.hasPrefix("+")
+        if forced { body = body.dropFirst() }
+        if body.hasPrefix("^") {
+            let name = body.dropFirst()
+            guard !forced, !name.isEmpty, !name.contains(":"),
+                  !(name.count == 40 && name.utf8.allSatisfy({ isASCIIHex($0) }))
+            else { return false }
+            return isRefName(name, pattern: name.contains("*"))
+        }
         if body == ":" { return true }
         let colon = body.lastIndex(of: ":")
         let source = colon.map { body[..<$0] } ?? body
@@ -236,23 +245,29 @@ extension GitClient {
         let globSource = source.contains("*")
         if globSource, destination != nil, !globDestination { return false }
         if !globSource, globDestination { return false }
-        /// git's check_refname_format with one-level names allowed.
-        /// libgit2's ALLOW_ONELEVEL takes only all-caps names (`HEAD`),
-        /// so the name is checked under `refs/`, which keeps every rule
-        /// for its components.
-        func isRefName(_ name: Substring) -> Bool {
-            Libgit2.ensureInitialized()
-            let candidate = name.hasPrefix("refs/") ? String(name) : "refs/\(name)"
-            let flags = globSource ? UInt32(GIT_REFERENCE_FORMAT_REFSPEC_PATTERN.rawValue) : 0
-            var buffer = [CChar](repeating: 0, count: candidate.utf8.count + 1)
-            guard git_reference_normalize_name(&buffer, buffer.count, candidate, flags) == 0 else {
-                return false
-            }
-            return String(cString: buffer) == candidate
+        if globSource, !isRefName(source, pattern: true) { return false }
+        guard let destination else { return isRefName(source, pattern: globSource) }
+        return !destination.isEmpty && isRefName(destination, pattern: globSource)
+    }
+
+    private static func isASCIIHex(_ byte: UInt8) -> Bool {
+        (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
+            || (UInt8(ascii: "a")...UInt8(ascii: "f")).contains(byte | 0x20)
+    }
+
+    /// git's check_refname_format with one-level names allowed, and a
+    /// `*` with `pattern`. libgit2's ALLOW_ONELEVEL takes only all-caps
+    /// names (`HEAD`), so the name is checked under `refs/`, which keeps
+    /// every rule for its components.
+    private static func isRefName(_ name: Substring, pattern: Bool) -> Bool {
+        Libgit2.ensureInitialized()
+        let candidate = name.hasPrefix("refs/") ? String(name) : "refs/\(name)"
+        let flags = pattern ? UInt32(GIT_REFERENCE_FORMAT_REFSPEC_PATTERN.rawValue) : 0
+        var buffer = [CChar](repeating: 0, count: candidate.utf8.count + 1)
+        guard git_reference_normalize_name(&buffer, buffer.count, candidate, flags) == 0 else {
+            return false
         }
-        if globSource, !isRefName(source) { return false }
-        guard let destination else { return isRefName(source) }
-        return !destination.isEmpty && isRefName(destination)
+        return String(cString: buffer) == candidate
     }
 
     /// A boolean config value as git reads one (`true`/`yes`/`on`, any
