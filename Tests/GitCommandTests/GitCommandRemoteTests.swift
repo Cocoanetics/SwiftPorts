@@ -1002,6 +1002,17 @@ struct GitCommandRemoteTests {
             #expect(error.lines.last
                     == "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line \(line)")
         }
+        // A backslash ending a comment carries nothing on.
+        let commented = text.replacingOccurrences(of: "\tfoo = value\\\npush\n", with: "\tfoo = value # note\\\n")
+        try commented.write(to: config, atomically: true, encoding: .utf8)
+        let commentedLine = commented.split(separator: "\n", omittingEmptySubsequences: false).count - 1
+        do {
+            try await git(["push", "-f"], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.last
+                    == "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line \(commentedLine)")
+        }
     }
 
     @Test("only LF ends a config line: a NEL in a value doesn't")

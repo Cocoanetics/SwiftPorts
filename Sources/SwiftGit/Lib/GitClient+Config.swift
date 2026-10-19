@@ -158,6 +158,27 @@ extension GitClient {
         return body
     }
 
+    /// Whether a value (or the part of it on this line) goes on to the
+    /// next line, as git's parse_value reads it: a backslash escapes the
+    /// next character, and one ending the line carries the value on;
+    /// quotes toggle, and an unquoted `#` or `;` starts a comment, which
+    /// a backslash can't carry on.
+    private static func valueContinues(_ value: Substring, quoted: inout Bool) -> Bool {
+        var escaped = false
+        for character in value {
+            if escaped {
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else if character == "\"" {
+                quoted.toggle()
+            } else if !quoted, character == "#" || character == ";" {
+                return false
+            }
+        }
+        return escaped
+    }
+
     /// A quoted subsection as git reads it: `"orig\"in"` is `orig"in`,
     /// a backslash taking the next character as it is.
     private static func decodedSubsection(_ quoted: Substring) -> String {
@@ -193,8 +214,10 @@ extension GitClient {
         let subsection = parts.dropFirst().dropLast().joined(separator: ".")
         let variable = String(parts.last!)
         var inSection = false
-        // Whether the previous line's value goes on (`value\`).
+        // Whether the previous line's value goes on (`value\`), and
+        // inside a quote, which carries on with it.
         var continued = false
+        var quoted = false
         // git counts lines by LF bytes alone, a CR before one folded in;
         // other Unicode line breaks (NEL) are part of a value.
         for (index, bytes) in data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false)
@@ -202,10 +225,16 @@ extension GitClient {
             let raw = bytes.last == UInt8(ascii: "\r") ? bytes.dropLast() : bytes[...]
             let line = String(decoding: raw, as: UTF8.self).trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
             let isContinuation = continued
-            // An odd run of trailing backslashes carries the value on.
-            continued = (isContinuation || line.contains("="))
-                && line.reversed().prefix { $0 == "\\" }.count % 2 == 1
-            if isContinuation { continue }
+            if isContinuation {
+                continued = Self.valueContinues(Substring(line), quoted: &quoted)
+                continue
+            }
+            if !line.hasPrefix("["), let equals = line.firstIndex(of: "=") {
+                quoted = false
+                continued = Self.valueContinues(line[line.index(after: equals)...], quoted: &quoted)
+            } else {
+                continued = false
+            }
             if line.hasPrefix("[") {
                 // `[remote "origin"]`: the section ignores case, the
                 // subsection doesn't.
