@@ -91,12 +91,11 @@ struct Push: AsyncParsableCommand {
         if let bad = pushRefspecs.first(where: { !SwiftGit.GitClient.isValidPushRefspec($0) }) {
             throw CLIError.stderr("fatal: invalid refspec '\(bad)'", exitCode: 128)
         }
-        if force {
-            // `--force` forces the configured refspecs too, so they're
-            // read here rather than left to the push.
-            if pushRefspecs.isEmpty { pushRefspecs = configured }
-            pushRefspecs = pushRefspecs.map(Self.forced)
-        }
+        // The configured refspecs go as read here, in git's order and
+        // with `@` as HEAD, rather than as GitKit would reread them; and
+        // `--force` forces them too.
+        if pushRefspecs.isEmpty { pushRefspecs = configured }
+        if force { pushRefspecs = pushRefspecs.map(Self.forced) }
         do {
             let pushed = try await client.push(
                 remote: plan.remote, refspecs: pushRefspecs, setUpstream: upstream,

@@ -1142,6 +1142,10 @@ struct GitCommandRemoteTests {
         let output = try await git(["push", "origin", "@:refs/heads/at"], in: clone)
         #expect(output.stderr == "To \(url)\n * [new branch]      HEAD -> at\n")
         #expect(try systemGit(["rev-parse", "at"], in: remote) == systemGit(["rev-parse", "HEAD"], in: clone))
+        // Configured too, with -f or without.
+        try systemGit(["config", "--add", "remote.origin.push", "@:refs/heads/configured"], in: clone)
+        let configured = try await git(["push"], in: clone)
+        #expect(configured.stderr == "To \(url)\n * [new branch]      HEAD -> configured\n")
     }
 
     @Test("a lease value can't pass for the bare or negated forms")
