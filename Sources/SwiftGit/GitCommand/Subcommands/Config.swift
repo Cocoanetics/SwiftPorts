@@ -132,12 +132,19 @@ struct Config: AsyncParsableCommand {
         return CLIError.stderr("fatal: unable to access '\(file)': Permission denied", exitCode: 128)
     }
 
-    /// `--get <name> <value-pattern>`: the value if it matches, else status 1.
+    /// `--get <name> <value-pattern>`: the value if it matches, else status 1;
+    /// a key that isn't there is status 1 whatever the pattern, and a pattern
+    /// that isn't one is status 6.
     private func printValue(of name: String, matching pattern: String, with client: GitClient) async throws {
-        let found = try await client.configGet(name, scope: readScope) ?? ""
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              regex.firstMatch(in: found, range: NSRange(found.startIndex..., in: found)) != nil
-        else { throw CLIError(lines: [], exitCode: 1) }
+        guard let found = try await client.configGet(name, scope: readScope) else {
+            throw CLIError(lines: [], exitCode: 1)
+        }
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            throw CLIError.stderr("error: invalid pattern: \(pattern)", exitCode: 6)
+        }
+        guard regex.firstMatch(in: found, range: NSRange(found.startIndex..., in: found)) != nil else {
+            throw CLIError(lines: [], exitCode: 1)
+        }
         Shell.print(found)
     }
 

@@ -138,6 +138,11 @@ struct GitCommandConfigErrorTests: ConfigTestHelpers {
         // --get <name> <value-pattern> reads, and never changes the file.
         #expect(try await run(["--get", "a.b", "hel+"]).stdout == "hello\n")
         #expect(try await run(["--get", "a.b", "zzz"]).status == 1)
+        // An absent key is status 1 whatever the pattern; a bad pattern is status 6.
+        let absent = try await run(["--get", "missing.key", ".*"])
+        #expect(absent.status == 1 && absent.stdout.isEmpty && absent.stderr.isEmpty)
+        let invalid = try await run(["--get", "a.b", "["])
+        #expect(invalid.stderr == "error: invalid pattern: [\n" && invalid.status == 6)
         #expect(try String(contentsOf: file, encoding: .utf8) == contents)
 
         // A held lock stops a change, whether or not the key is there.
