@@ -40,15 +40,6 @@ struct GitClientSystemConfigPathTests {
         #expect(Libgit2Sandboxing.shared.xdgConfigHome(for: nil) == "/custom/home/.config")
     }
 
-    /// An include's path is a config value: quotes group, a backslash
-    /// escapes, an unquoted `#` or `;` starts a comment.
-    @Test func configValuesAreReadLikeGit() {
-        #expect(GitClient.configValue(#"  "a b" # note"#) == "a b")
-        #expect(GitClient.configValue(#"a\tb ; note"#) == "a\tb")
-        #expect(GitClient.configValue(#""keep  " trailing  "#) == "keep   trailing")
-        #expect(GitClient.configValue("plain") == "plain")
-    }
-
     /// The search path is a list: the file may be in a later directory.
     @Test func searchesEveryDirectory() throws {
         Libgit2.ensureInitialized()

@@ -149,21 +149,28 @@ extension GitClient {
     private func authorizeConfigFile(of scope: ConfigScope?, writing: Bool) async throws {
         guard scope != .local else { return }
         try await authorizeSelectedFile(of: scope, writing: writing)
-        // What the file includes is read as well: an unscoped read reads
-        // the global file's includes too.
-        let home = Libgit2Sandboxing.shared.home(for: Shell.current.sandbox)
-        try await authorizeIncludes(of: location(of: Self.configFilePath(scope ?? .global)), home: home)
+        guard Shell.current.sandbox != nil else { return }
+        // An unscoped read reads both global files (the XDG one too).
+        var files = [Self.configFilePath(scope ?? .global)]
+        if scope == nil {
+            let sandbox = Shell.current.sandbox
+            let xdg = Libgit2Sandboxing.shared.xdgConfigHome(for: sandbox) + "/git/config"
+            try await Shell.authorize(URL(fileURLWithPath: xdg))
+            files = [Libgit2Sandboxing.shared.home(for: sandbox) + "/.gitconfig", xdg]
+        }
+        for file in files where Self.hasIncludes(location(of: file)) {
+            throw Sandbox.Denial(
+                url: URL(fileURLWithPath: file),
+                reason: "git config: a config file with [include] sections is not read in a sandbox")
+        }
     }
 
-    /// Authorizes each file `file` includes, before it is opened to look for
-    /// the includes in it. A conditional `[includeIf]` counts as an include
-    /// whether or not its condition holds, to be on the safe side.
-    private func authorizeIncludes(of file: String, home: String, depth: Int = 0) async throws {
-        guard depth < 10 else { return }
-        for included in Self.includePaths(in: file, home: home) {
-            try await Shell.authorize(URL(fileURLWithPath: included))
-            try await authorizeIncludes(of: included, home: home, depth: depth + 1)
-        }
+    /// Whether the file has an `[include]` or `[includeIf ...]` section. A
+    /// plain look for the header, not a parse: it can't disagree with
+    /// libgit2 about where an include points, which is the point.
+    static func hasIncludes(_ file: String) -> Bool {
+        guard let text = try? String(contentsOfFile: file, encoding: .utf8) else { return false }
+        return text.lowercased().contains("[include")
     }
 
     private func authorizeSelectedFile(of scope: ConfigScope?, writing: Bool) async throws {
@@ -179,66 +186,6 @@ extension GitClient {
             try await Shell.authorize(URL(fileURLWithPath: home).appendingPathComponent(".gitconfig"))
             try await Shell.authorize(URL(fileURLWithPath: Self.globalConfigPath()))
         }
-    }
-
-    /// A config value as git reads it: quotes group and are dropped, a
-    /// backslash escapes the next character (`\n`, `\t` and `\b` are the usual
-    /// control characters), and an unquoted `#` or `;` starts a comment.
-    /// Whitespace around an unquoted value is dropped.
-    static func configValue(_ raw: Substring) -> String {
-        var value = ""
-        var protected = 0
-        var inQuote = false
-        var escaped = false
-        for character in raw.drop(while: { $0 == " " || $0 == "\t" }) {
-            if escaped {
-                switch character {
-                case "n": value.append("\n")
-                case "t": value.append("\t")
-                case "b": value.append("\u{8}")
-                default: value.append(character)
-                }
-                escaped = false
-                protected = value.count
-            } else if character == "\\" {
-                escaped = true
-            } else if character == "\"" {
-                inQuote.toggle()
-                protected = value.count
-            } else if !inQuote && (character == "#" || character == ";") {
-                break
-            } else {
-                value.append(character)
-                if inQuote { protected = value.count }
-            }
-        }
-        // Whitespace after the last quoted or escaped character goes.
-        while value.count > protected, let last = value.last, last == " " || last == "\t" {
-            value.removeLast()
-        }
-        return value
-    }
-
-    /// The files `file` itself names in `[include]` / `[includeIf]` sections,
-    /// with `~/` and relative names resolved as git does.
-    static func includePaths(in file: String, home: String) -> [String] {
-        guard let text = try? String(contentsOfFile: file, encoding: .utf8) else { return [] }
-        var section = ""
-        var found: [String] = []
-        for rawLine in text.split(whereSeparator: \.isNewline) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("[") {
-                section = line.dropFirst().prefix { $0 != " " && $0 != "]" && $0 != "\"" }.lowercased()
-            } else if section == "include" || section == "includeif", let equals = line.firstIndex(of: "="),
-                      line[..<equals].trimmingCharacters(in: .whitespaces).lowercased() == "path" {
-                let value = Self.configValue(line[line.index(after: equals)...])
-                let directory = URL(fileURLWithPath: file).deletingLastPathComponent()
-                found.append(value.hasPrefix("~/")
-                    ? home + String(value.dropFirst(1))
-                    : URL(fileURLWithPath: value, relativeTo: directory).path)
-            }
-        }
-        return found
     }
 
     /// The config of one scope's file, which the caller frees. An absent
