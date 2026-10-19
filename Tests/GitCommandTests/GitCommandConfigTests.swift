@@ -158,6 +158,14 @@ struct GitCommandConfigTests {
         let result = try await git(["config", "--system", "a.b", "c"], root: root, home: home, work: work)
         #expect(result.stderr == "error: could not lock config file /etc/gitconfig: Permission denied\n")
         #expect(result.status == 255)
+
+        // An explicit --system ignores GIT_CONFIG_NOSYSTEM, which the
+        // helper sets: listing the missing file is still git's error.
+        let list = try await git(["config", "--system", "--list"], root: root, home: home, work: work)
+        #expect(list.stderr == "fatal: unable to read config file '/etc/gitconfig': No such file or directory\n")
+        #expect(list.status == 128)
+        let get = try await git(["config", "--system", "--get", "a.b"], root: root, home: home, work: work)
+        #expect(get.status == 1)
     }
 
     @Test("a plain write or --local needs a repository")

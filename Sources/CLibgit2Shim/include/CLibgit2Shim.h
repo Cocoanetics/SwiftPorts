@@ -38,4 +38,10 @@ int swiftports_libgit2_set_search_path(int level, const char *path);
 /// (which is `getenv("HOME")` / `getenv("USERPROFILE")` at init time).
 int swiftports_libgit2_set_homedir(const char *path);
 
+/// `git_libgit2_opts(GIT_OPT_GET_SEARCH_PATH, level, &buf)`, copied into
+/// `out` (`length` bytes, NUL-terminated). Returns `0` on success, a
+/// negative libgit2 code on failure, and `-1` when the path does not fit.
+/// A level that is disabled (`SET_SEARCH_PATH` with `""`) gives an empty string.
+int swiftports_libgit2_get_search_path(int level, char *out, unsigned long length);
+
 #endif

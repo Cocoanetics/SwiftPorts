@@ -2,6 +2,7 @@ import Foundation
 import CGitKit
 import GitKit
 import ShellKit
+import CLibgit2Shim
 
 // The config git reads outside any repository: the system and global files.
 extension GitClient {
@@ -32,7 +33,30 @@ extension GitClient {
 
     /// The path git names for a scope's file.
     static func configFilePath(_ scope: ConfigScope) -> String {
-        scope == .global ? Libgit2Sandboxing.shared.globalHome + "/.gitconfig" : "/etc/gitconfig"
+        scope == .global ? Libgit2Sandboxing.shared.globalHome + "/.gitconfig" : systemConfigPath()
+    }
+
+    /// Where libgit2 looks for the system config: its search path for
+    /// that level, or, when the level is disabled (`GIT_CONFIG_NOSYSTEM`,
+    /// which an explicit `--system` ignores in git too), the usual place.
+    static func systemConfigPath() -> String {
+        var buffer = [CChar](repeating: 0, count: 4096)
+        let level = Int32(GIT_CONFIG_LEVEL_SYSTEM.rawValue)
+        if swiftports_libgit2_get_search_path(level, &buffer, UInt(buffer.count)) == 0 {
+            #if os(Windows)
+            let separator: Character = ";"
+            #else
+            let separator: Character = ":"
+            #endif
+            if let directory = String(cString: buffer).split(separator: separator).first {
+                return "\(directory)/gitconfig"
+            }
+        }
+        #if os(Windows)
+        return "C:/ProgramData/Git/config"
+        #else
+        return "/etc/gitconfig"
+        #endif
     }
 
     /// Runs `body` on the config git reads outside any repository: the
