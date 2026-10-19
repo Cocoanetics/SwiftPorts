@@ -121,6 +121,71 @@ import ShellKit
         }
     }
 
+    // POSIX paths throughout (`realpath`, `../` joins).
+    #if !os(Windows)
+    /// git opens a configured relative remote from the top of the work
+    /// tree, and so does libgit2 now: the gate authorizes that location,
+    /// the one GitKit connects to, never the path as read from the
+    /// shell's directory or the process's.
+    @Test func configuredRelativeRemotesAreJudgedFromTheTopOfTheWorkTree() async throws {
+        // As the kernel spells it (`/private/var`, on macOS), as libgit2
+        // reports the top of the work tree.
+        func onDisk(_ path: String) -> String? {
+            guard let resolved = realpath(path, nil) else { return nil }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+        let base = URL(fileURLWithPath: try #require(onDisk(FileManager.default.temporaryDirectory.path)))
+        let root = base.appendingPathComponent("GitClientRemoteAuthorizationTests-\(UUID().uuidString)")
+        let name = "relative-\(UUID().uuidString).git"
+        // `../../<name>` from `repo/sub` is inside the sandbox; from the
+        // top of the work tree, where git reads it, it's outside.
+        let inside = root.appendingPathComponent(name), outside = base.appendingPathComponent(name)
+        defer { [root, outside].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let repo = root.appendingPathComponent("repo"), sub = repo.appendingPathComponent("sub")
+        try Repository.initialize(at: repo, initialBranch: "main")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try Repository.initialize(at: inside, bare: true, initialBranch: "main")
+        try Repository.initialize(at: outside, bare: true, initialBranch: "main")
+        let shell = Shell(environment: Environment(workingDirectory: sub.path), sandbox: Sandbox.rooted(at: root))
+
+        try await shell.withCurrent {
+            let client = GitClient(workingDirectory: sub)
+            try await client.addRemote(name: "escape", remote: "../../\(name)")
+            try await client.addRemote(name: "sibling", remote: "../\(name)")
+            try await client.configSet("remote.split.url", "../\(name)")
+            try await client.configSet("remote.split.pushurl", "../../\(name)")
+
+            await #expect(throws: Sandbox.Denial.self) {
+                try await client.fetch(remote: "escape", refspecs: [], depth: nil)
+            }
+            await #expect(throws: Sandbox.Denial.self) {
+                _ = try await client.resolveRemoteOperand("escape")
+            }
+            await #expect(throws: Sandbox.Denial.self) {
+                _ = try await client.resolveRemoteOperand("split", for: .push)
+            }
+            // What's authorized is the exact string GitKit connects to: the
+            // path joined to the top, `..` and all, which the gate and the
+            // kernel both resolve on disk, symlinks included.
+            let fromTop = repo.path + "/../\(name)"
+            let sibling = try await client.resolveRemoteOperand("sibling")
+            #expect(sibling == .init(remote: "sibling", location: fromTop))
+            let split = try await client.resolveRemoteOperand("split")
+            #expect(split == .init(remote: "split", location: fromTop))
+            #expect(onDisk(fromTop) == inside.path)
+            try await client.fetch(remote: "sibling", refspecs: [], depth: nil)
+            // A typed path is read from the top the same way, and keeps
+            // its spelling for GitKit to show.
+            let typed = try await client.resolveRemoteOperand("../\(name)")
+            #expect(typed == .init(remote: "../\(name)", location: fromTop))
+            await #expect(throws: Sandbox.Denial.self) {
+                _ = try await client.resolveRemoteOperand("../../\(name)")
+            }
+        }
+    }
+    #endif
+
     @Test func cloneOfBracketedIPv6RemoteIsJudgedByHost() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitClientRemoteAuthorizationTests-\(UUID().uuidString)")

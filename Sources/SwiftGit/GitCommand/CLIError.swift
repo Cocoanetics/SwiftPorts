@@ -47,6 +47,11 @@ extension CLIError {
         self.init(lines: error.lines, exitCode: 128)
     }
 
+    /// git's words, and exit status, for a remote that leads nowhere.
+    init(_ error: RemoteRepositoryError) {
+        self.init(lines: error.lines, exitCode: 128)
+    }
+
     /// Print every line to stderr and exit. Subcommands call this from
     /// `run()` via a top-level catch in `Entry.swift` so the exit-code
     /// path is uniform.

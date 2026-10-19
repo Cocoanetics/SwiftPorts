@@ -127,10 +127,11 @@ public struct GitClient: ForgeKit.GitClient {
         tags: FetchTags? = nil
     ) async throws {
         let progress = shellProgressSink()
-        let remote = try await resolveRemoteOperand(remote)
+        let connection = try await resolveRemoteOperand(remote)
         try await withRepository { repository in
-            let shouldPrune = try resolvedFetchPrune(prune, remote: remote)
-            try repository.fetch(remote: remote, refspecs: refspecs, depth: depth,
+            let shouldPrune = try resolvedFetchPrune(prune, remote: connection.remote)
+            try repository.fetch(remote: connection.remote, refspecs: refspecs,
+                                 connectingTo: connection.location, depth: depth,
                                  prune: shouldPrune, tags: tags,
                                  credentials: credentials, progress: progress)
         }
@@ -153,15 +154,16 @@ public struct GitClient: ForgeKit.GitClient {
         tags: FetchTags? = nil
     ) async throws {
         let progress = shellProgressSink()
-        let remote = try await resolveRemoteOperand(remote)
+        let connection = try await resolveRemoteOperand(remote)
         try await withRepository { repository in
-            let shouldPrune = try resolvedFetchPrune(prune, remote: remote)
+            let shouldPrune = try resolvedFetchPrune(prune, remote: connection.remote)
             try repository.unshallow(
-                remote: remote, refspecs: refspecs, tags: tags,
-                credentials: credentials, progress: progress)
+                remote: connection.remote, refspecs: refspecs, connectingTo: connection.location,
+                tags: tags, credentials: credentials, progress: progress)
             if shouldPrune {
                 try repository.fetch(
-                    remote: remote, refspecs: refspecs, prune: true, tags: tags,
+                    remote: connection.remote, refspecs: refspecs,
+                    connectingTo: connection.location, prune: true, tags: tags,
                     credentials: credentials, progress: progress)
             }
         }
@@ -189,30 +191,21 @@ public struct GitClient: ForgeKit.GitClient {
         remote: String, refspecs: [String], setUpstream: Bool, leases: PushLeases? = nil
     ) async throws -> [String] {
         let progress = shellProgressSink()
-        let location = try await resolveRemoteOperand(remote, for: .push)
+        let connection = try await resolveRemoteOperand(remote, for: .push)
         return try await withRepository { repository in
-            func recordUpstreams(of pushed: [String]) throws {
-                guard setUpstream, location != remote else { return }
-                try Self.recordUpstreamRemote(remote, of: pushed, pushedTo: location, in: repository)
+            // GitKit records the upstream of each branch that went
+            // through as git does: the remote's name, or the URL or path
+            // as typed (`-u ../bare` records `../bare`).
+            if let leases {
+                return try repository.push(
+                    remote: connection.remote, refspecs: refspecs, setUpstream: setUpstream,
+                    leases: leases, connectingTo: connection.location,
+                    credentials: credentials, progress: progress)
             }
-            let pushed: [String]
-            do {
-                if let leases {
-                    pushed = try repository.push(
-                        remote: location, refspecs: refspecs, setUpstream: setUpstream,
-                        leases: leases, credentials: credentials, progress: progress)
-                } else {
-                    pushed = try repository.push(
-                        remote: location, refspecs: refspecs, setUpstream: setUpstream,
-                        credentials: credentials, progress: progress)
-                }
-            } catch let rejected as PushRejectedError {
-                // The refs that went through got their upstream all the same.
-                try recordUpstreams(of: rejected.pushed)
-                throw rejected
-            }
-            try recordUpstreams(of: pushed)
-            return pushed
+            return try repository.push(
+                remote: connection.remote, refspecs: refspecs, setUpstream: setUpstream,
+                connectingTo: connection.location,
+                credentials: credentials, progress: progress)
         }
     }
 
