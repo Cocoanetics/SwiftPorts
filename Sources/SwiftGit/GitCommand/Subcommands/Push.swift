@@ -17,8 +17,26 @@ struct Push: AsyncParsableCommand {
             `remote.<name>.push` says, else what `push.default` (`simple`
             unless configured) says. `--remote <name>` names the remote
             instead, leaving every argument a refspec.
+
+            `-f`/`--force` forces every refspec pushed, the configured ones
+            included. `--force-with-lease` forces an update only while the
+            remote ref is where its remote-tracking ref says;
+            `--force-with-lease=<ref>` does so for `<ref>` alone, and
+            `--force-with-lease=<ref>:<expect>` while it is at `<expect>`
+            (absent, if empty). An update whose lease no longer holds is
+            refused as `stale info`; `--force` overrides the lease.
             """
     )
+
+    @Flag(name: [.customShort("f"), .long], inversion: .prefixedNo,
+          help: "Force updates, even ones that aren't fast-forwards.")
+    var force: Bool = false
+
+    @Option(name: .customLong("force-with-lease"),
+            help: ArgumentHelp(
+                "Force updates only while the remote refs are where expected.",
+                valueName: "refname[:expect]"))
+    var leaseOptions: [String] = []
 
     @Flag(name: [.customShort("u"), .customLong("set-upstream")],
           help: "Set the upstream tracking reference for the pushed branch.")
@@ -39,6 +57,20 @@ struct Push: AsyncParsableCommand {
         let client = CommandContext.gitClient(quiet: quiet)
         let settings = try await DefaultPush.Settings(client: client)
         let (remoteName, refspecs) = RemoteArguments.split(arguments, remote: remote)
+        let leases = try await Self.leases(from: leaseOptions, client: client)
+        // git reads every remote's config before it looks for the remote
+        // to push to, and refuses a push refspec written without a value
+        // or malformed, whether or not it's pushed.
+        if let bare = try await client.valuelessRemotePush() {
+            throw CLIError.stderr([
+                "error: missing value for '\(bare.key)'",
+                "fatal: bad config variable '\(bare.key)' in file '\(bare.file)' at line \(bare.line)"
+            ], exitCode: 128)
+        }
+        if let bad = try await client.allRemotePushRefspecs()
+            .first(where: { !SwiftGit.GitClient.isValidPushRefspec(SwiftGit.GitClient.pushRefspecReadingAtAsHead($0)) }) {
+            throw CLIError.stderr("fatal: invalid refspec '\(bad)'", exitCode: 128)
+        }
         // An empty repository is never read as a path.
         if remoteName == "" {
             throw CLIError.stderr("fatal: bad repository ''", exitCode: 128)
@@ -47,9 +79,27 @@ struct Push: AsyncParsableCommand {
             ? try await DefaultPush.plan(client: client, remote: remoteName, settings: settings)
             : DefaultPush.Plan(remote: remoteName ?? "origin", refspecs: refspecs, setUpstream: false)
         let upstream = setUpstream || plan.setUpstream
+        // git reads a source of `@` alone as HEAD.
+        var pushRefspecs = plan.refspecs.map(SwiftGit.GitClient.pushRefspecReadingAtAsHead)
+        // What the remote is configured to push, when that's what goes.
+        let configured = pushRefspecs.isEmpty
+            ? try await client.configGetAll("remote.\(plan.remote).push")
+                .map(SwiftGit.GitClient.pushRefspecReadingAtAsHead)
+            : []
+        // The typed refspecs too, before `--force` would touch them (the
+        // configured ones were checked above).
+        if let bad = pushRefspecs.first(where: { !SwiftGit.GitClient.isValidPushRefspec($0) }) {
+            throw CLIError.stderr("fatal: invalid refspec '\(bad)'", exitCode: 128)
+        }
+        // The configured refspecs go as read here, in git's order and
+        // with `@` as HEAD, rather than as GitKit would reread them; and
+        // `--force` forces them too.
+        if pushRefspecs.isEmpty { pushRefspecs = configured }
+        if force { pushRefspecs = pushRefspecs.map(Self.forced) }
         do {
             let pushed = try await client.push(
-                remote: plan.remote, refspecs: plan.refspecs, setUpstream: upstream)
+                remote: plan.remote, refspecs: pushRefspecs, setUpstream: upstream,
+                leases: leases)
             reportUpstreams(of: pushed, remote: plan.remote, upstream: upstream)
         } catch let rejected as PushRejectedError {
             // The refs that went through still got their upstream.
@@ -63,6 +113,74 @@ struct Push: AsyncParsableCommand {
             // Refused before anything was sent, in git's words.
             throw PushRejectionAdvice.error(for: refused, switches: settings.advice)
         }
+    }
+
+    /// The bare `--force-with-lease`, as ``GitCommand/preprocess(_:)``
+    /// passes it on: a ref name can't hold a control character.
+    static let leaseAll = "\u{1}all"
+    /// `--no-force-with-lease`, likewise.
+    static let leaseNone = "\u{1}none"
+    /// `--force-with-lease=`, a lease on a ref named nothing, which
+    /// ArgumentParser would otherwise read as no value at all.
+    static let leaseEmpty = "\u{1}empty"
+
+    /// What the `--force-with-lease` options, in the order given, ask
+    /// for (git's `parse_push_cas_option`), or `nil` for no lease at all.
+    /// An `<expect>` is resolved now, as git does, and fails as git's
+    /// usage error when it names no object.
+    static func leases(from options: [String], client: SwiftGit.GitClient) async throws -> PushLeases? {
+        var leases = PushLeases()
+        for tagged in options {
+            // `GitCommand.preprocess` tags each `=<refname>[:<expect>]`
+            // given with a leading `=`, so none can pass for the bare or
+            // negated forms, which never start with one.
+            let option = tagged.hasPrefix("=") ? String(tagged.dropFirst()) : tagged
+            switch tagged {
+            case leaseAll:
+                leases.trackingForRest = true
+            case leaseNone:
+                leases = PushLeases()
+            case leaseEmpty:
+                leases.leases.append(.init(ref: "", expectation: .tracking))
+            default:
+                guard let colon = option.firstIndex(of: ":") else {
+                    leases.leases.append(.init(ref: option, expectation: .tracking))
+                    continue
+                }
+                let ref = String(option[..<colon])
+                let expect = String(option[option.index(after: colon)...])
+                guard !expect.isEmpty else {
+                    leases.leases.append(.init(ref: ref, expectation: .absent))
+                    continue
+                }
+                // A full object ID is taken as given, here or not (git's
+                // get_oid); all zeros expects the ref absent. Object IDs
+                // are SHA-1 ones: the libgit2 GitKit builds has no SHA-256.
+                // ASCII hex only: Swift's `isHexDigit` takes full-width
+                // digits too.
+                if expect.utf8.count == 40, expect.utf8.allSatisfy({ byte in
+                    (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
+                        || (UInt8(ascii: "a")...UInt8(ascii: "f")).contains(byte | 0x20)
+                }) {
+                    leases.leases.append(.init(
+                        ref: ref,
+                        expectation: expect.allSatisfy { $0 == "0" } ? .absent : .object(expect.lowercased())))
+                    continue
+                }
+                guard let oid = try? await client.resolveOID(expect) else {
+                    throw CLIError.stderr(
+                        "error: cannot parse expected object name '\(expect)'", exitCode: 129)
+                }
+                leases.leases.append(.init(ref: ref, expectation: .object(oid)))
+            }
+        }
+        return leases.leases.isEmpty && !leases.trackingForRest ? nil : leases
+    }
+
+    /// `refspec` forced, as `--force` forces it: a negative refspec has
+    /// nothing to force, and an empty one stays the invalid one it is.
+    static func forced(_ refspec: String) -> String {
+        refspec.isEmpty || refspec.hasPrefix("+") || refspec.hasPrefix("^") ? refspec : "+\(refspec)"
     }
 
     /// Like git, confirm each upstream `-u` recorded, for a URL or path too.

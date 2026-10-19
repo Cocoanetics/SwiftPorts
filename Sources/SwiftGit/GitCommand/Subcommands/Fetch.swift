@@ -16,6 +16,13 @@ struct Fetch: AsyncParsableCommand {
             (and for a URL or path) the remote's `HEAD`, into `FETCH_HEAD`.
             `--remote <name>` names the remote instead, leaving every
             argument a refspec.
+
+            `-t`/`--tags` fetches every tag besides (as if
+            `refs/tags/*:refs/tags/*` were one more refspec); `--no-tags`
+            fetches no tags beyond the refspecs', not even those pointing
+            into what was fetched. Without either, `remote.<name>.tagOpt`
+            decides, else git follows the tags pointing into what a fetch
+            that stores refs brings.
             """
     )
 
@@ -38,6 +45,11 @@ struct Fetch: AsyncParsableCommand {
           inversion: .prefixedNo,
           help: "Prune remote-tracking branches no longer on the remote.")
     var prune: Bool?
+
+    @Flag(name: [.customShort("t"), .long],
+          inversion: .prefixedNo,
+          help: "Fetch all tags as well (or, with --no-tags or -n, none).")
+    var tags: Bool?
 
     @Flag(name: [.customShort("q"), .customLong("quiet")],
           help: "Suppress progress output.")
@@ -75,13 +87,18 @@ struct Fetch: AsyncParsableCommand {
         // One fetch for every refspec, as git applies them; with none,
         // the remote's configured refspecs (or its HEAD).
         do {
+            let tags: FetchTags? = self.tags.map { $0 ? .all : .off }
             if unshallow {
-                try await client.unshallow(remote: name, refspecs: refspecs, prune: prune)
+                try await client.unshallow(remote: name, refspecs: refspecs, prune: prune, tags: tags)
             } else {
-                try await client.fetch(remote: name, refspecs: refspecs, depth: depth, prune: prune)
+                try await client.fetch(
+                    remote: name, refspecs: refspecs, depth: depth, prune: prune, tags: tags)
             }
         } catch let error as UnsupportedTransportError {
             throw CLIError(error)
+        } catch is FetchRejectedError {
+            // The refused refs' lines are out; git adds nothing to them.
+            throw CLIError.stderr([], exitCode: 1)
         }
         // Progress and per-ref summaries are written by GitClient's
         // libgit2 callbacks through the active shell stderr.

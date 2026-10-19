@@ -63,6 +63,14 @@ public struct GitCommand: AsyncParsableCommand {
     ///   means `always`, and only attaches the value with `=`.
     /// - `-U<n>` becomes `-U <n>` for `diff`.
     /// - `-<n>` becomes `-n <n>` for `log`.
+    /// - `-n` becomes `--no-tags` for `fetch`, git's short spelling,
+    ///   which ArgumentParser can't give an inverted flag; a cluster of
+    ///   fetch's flags holding it (`-qn`) is spelled out flag by flag.
+    /// - For `push`, a bare `--force-with-lease` and
+    ///   `--no-force-with-lease` (and an empty `--force-with-lease=`,
+    ///   which ArgumentParser reads as no value) become values of the one
+    ///   `--force-with-lease` option, so that, as in git, they take
+    ///   effect in the order given among its `=<ref>[:<expect>]` forms.
     ///
     /// Tokens after a standalone `--` are pathspecs and pass through
     /// untouched, so `git diff -- --color` still filters a file literally
@@ -95,6 +103,24 @@ public struct GitCommand: AsyncParsableCommand {
                       arg.dropFirst().allSatisfy(\.isNumber) {
                 out.append("-n")
                 out.append(String(arg.dropFirst()))
+            } else if !afterDoubleDash, subcommand == "push", arg == "--force-with-lease" {
+                out.append("--force-with-lease=\(Push.leaseAll)")
+            } else if !afterDoubleDash, subcommand == "fetch", arg.count > 1, arg.hasPrefix("-"),
+                      !arg.hasPrefix("--"), arg.dropFirst().contains("n"),
+                      arg.dropFirst().allSatisfy({ "pqtn".contains($0) }) {
+                // git fetch's short --no-tags, alone or among the other
+                // flags of a cluster (`-qn`, `-tn`), in order.
+                for flag in arg.dropFirst() {
+                    out.append(flag == "n" ? "--no-tags" : "-\(flag)")
+                }
+            } else if !afterDoubleDash, subcommand == "push", arg == "--force-with-lease=" {
+                out.append("--force-with-lease=\(Push.leaseEmpty)")
+            } else if !afterDoubleDash, subcommand == "push", arg.hasPrefix("--force-with-lease=") {
+                // The user's own value, tagged so no value can pass for
+                // one of the forms above.
+                out.append("--force-with-lease==\(arg.dropFirst("--force-with-lease=".count))")
+            } else if !afterDoubleDash, subcommand == "push", arg == "--no-force-with-lease" {
+                out.append("--force-with-lease=\(Push.leaseNone)")
             } else {
                 out.append(arg)
             }
