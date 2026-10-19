@@ -132,22 +132,6 @@ struct Config: AsyncParsableCommand {
         return CLIError.stderr("fatal: unable to access '\(file)': Permission denied", exitCode: 128)
     }
 
-    /// `--get <name> <value-pattern>`: the value if it matches, else status 1;
-    /// a key that isn't there is status 1 whatever the pattern, and a pattern
-    /// that isn't one is status 6.
-    private func printValue(of name: String, matching pattern: String, with client: GitClient) async throws {
-        guard let found = try await client.configGet(name, scope: readScope) else {
-            throw CLIError(lines: [], exitCode: 1)
-        }
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            throw CLIError.stderr("error: invalid pattern: \(pattern)", exitCode: 6)
-        }
-        guard regex.firstMatch(in: found, range: NSRange(found.startIndex..., in: found)) != nil else {
-            throw CLIError(lines: [], exitCode: 1)
-        }
-        Shell.print(found)
-    }
-
     private func configure() async throws {
         let client = CommandContext.gitClient()
 
@@ -156,6 +140,13 @@ struct Config: AsyncParsableCommand {
                 Shell.print(line)
             }
             return
+        }
+
+        // A value pattern would narrow a get or unset to some of a key's
+        // values. Not supported yet; it must never be taken as a value to
+        // set, or a key to remove by name alone.
+        if (get || unset) && args.count == 2 {
+            throw CLIError.stderr("fatal: a value pattern is not supported yet", exitCode: 128)
         }
 
         if unset {
@@ -167,12 +158,6 @@ struct Config: AsyncParsableCommand {
             guard try await client.configUnset(name, scope: scope) else {
                 throw CLIError(lines: [], exitCode: 5)
             }
-            return
-        }
-
-        // `--get <name> <value-pattern>` reads; it is never a set.
-        if get && args.count == 2 {
-            try await printValue(of: args[0], matching: args[1], with: client)
             return
         }
 

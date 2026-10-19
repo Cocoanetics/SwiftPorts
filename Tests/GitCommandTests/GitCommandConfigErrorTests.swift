@@ -123,7 +123,7 @@ struct GitCommandConfigErrorTests: ConfigTestHelpers {
         #expect(try String(contentsOf: file, encoding: .utf8) == before)
     }
 
-    @Test("a lock another process holds, and a value-pattern read that must not write")
+    @Test("a lock another process holds, and a value pattern that must not write")
     func lockHeldAndValuePattern() async throws {
         let fixture = try makeRoot()
         let (root, home, work) = (fixture.root, fixture.home, fixture.work)
@@ -135,14 +135,13 @@ struct GitCommandConfigErrorTests: ConfigTestHelpers {
             try await git(["config", "--global"] + args, root: root, home: home, work: work)
         }
 
-        // --get <name> <value-pattern> reads, and never changes the file.
-        #expect(try await run(["--get", "a.b", "hel+"]).stdout == "hello\n")
-        #expect(try await run(["--get", "a.b", "zzz"]).status == 1)
-        // An absent key is status 1 whatever the pattern; a bad pattern is status 6.
-        let absent = try await run(["--get", "missing.key", ".*"])
-        #expect(absent.status == 1 && absent.stdout.isEmpty && absent.stderr.isEmpty)
-        let invalid = try await run(["--get", "a.b", "["])
-        #expect(invalid.stderr == "error: invalid pattern: [\n" && invalid.status == 6)
+        // A value pattern is refused: never a value to set, never a key to
+        // remove by name alone. The file is left as it was.
+        for args in [["--get", "a.b", "hel+"], ["--unset", "a.b", "zzz"]] {
+            let refused = try await run(args)
+            #expect(refused.stderr == "fatal: a value pattern is not supported yet\n")
+            #expect(refused.status == 128)
+        }
         #expect(try String(contentsOf: file, encoding: .utf8) == contents)
 
         // A held lock stops a change, whether or not the key is there.
