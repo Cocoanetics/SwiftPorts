@@ -185,10 +185,9 @@ extension GitClient {
     private static func valuelessLine(of key: String, in file: URL) -> Int? {
         // git reads config as bytes: a value that isn't UTF-8 doesn't stop
         // it, nor the line count here.
-        guard let data = try? Data(contentsOf: file) else { return nil }
-        var text = String(decoding: data, as: UTF8.self)
+        guard var data = try? Data(contentsOf: file) else { return nil }
         // git skips a UTF-8 byte order mark at the start of a file.
-        if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
+        if data.starts(with: [0xEF, 0xBB, 0xBF]) { data.removeFirst(3) }
         let parts = key.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count >= 3 else { return nil }
         let subsection = parts.dropFirst().dropLast().joined(separator: ".")
@@ -196,10 +195,12 @@ extension GitClient {
         var inSection = false
         // Whether the previous line's value goes on (`value\`).
         var continued = false
-        // Swift reads `\r\n` as one Character: split on any newline.
-        for (index, raw) in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).enumerated() {
-            // A CRLF file's lines end in `\r` as well.
-            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // git counts lines by LF bytes alone, a CR before one folded in;
+        // other Unicode line breaks (NEL) are part of a value.
+        for (index, bytes) in data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false)
+            .enumerated() {
+            let raw = bytes.last == UInt8(ascii: "\r") ? bytes.dropLast() : bytes[...]
+            let line = String(decoding: raw, as: UTF8.self).trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
             let isContinuation = continued
             // An odd run of trailing backslashes carries the value on.
             continued = (isContinuation || line.contains("="))

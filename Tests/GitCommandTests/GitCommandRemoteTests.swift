@@ -1004,6 +1004,23 @@ struct GitCommandRemoteTests {
         }
     }
 
+    @Test("only LF ends a config line: a NEL in a value doesn't")
+    func pushValuelessRefspecAfterNEL() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let config = clone.appendingPathComponent(".git/config")
+        let text = try String(contentsOf: config, encoding: .utf8)
+            + "[foo]\n\tbar = a\u{85}b\n[remote \"origin\"]\n\tpush\n"
+        try text.write(to: config, atomically: true, encoding: .utf8)
+        let line = Data(text.utf8).split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false).count - 1
+        do {
+            try await git(["push", "-f"], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.last
+                    == "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line \(line)")
+        }
+    }
+
     @Test("configGetAll reads a key without a value as empty, as git config --get-all does")
     func configGetAllValueless() async throws {
         let (_, clone) = try makeRemoteAndClone()
