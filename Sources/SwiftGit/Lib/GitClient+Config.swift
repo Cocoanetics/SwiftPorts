@@ -229,6 +229,11 @@ extension GitClient {
                 continued = Self.valueContinues(Substring(line), quoted: &quoted)
                 continue
             }
+            // A whole-line comment is no key, `=` or not.
+            if line.hasPrefix("#") || line.hasPrefix(";") {
+                continued = false
+                continue
+            }
             if !line.hasPrefix("["), let equals = line.firstIndex(of: "=") {
                 quoted = false
                 continued = Self.valueContinues(line[line.index(after: equals)...], quoted: &quoted)
