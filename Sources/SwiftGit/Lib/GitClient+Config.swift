@@ -15,7 +15,7 @@ extension GitClient {
     public func configGet(_ name: String, scope: ConfigScope? = nil) async throws -> String? {
         if scope == .global || scope == .system {
             return try await withDefaultConfig(scope: scope, missing: .empty) {
-                try Self.configString(name, in: $0)
+                try Self.configString(name, in: $0, withIncludes: false)
             }
         }
         do {
@@ -48,7 +48,7 @@ extension GitClient {
                 // git locks the file first, whether or not the key is there.
                 try self.requireDirectory(of: Self.configFilePath(scope))
                 // An absent key (or file) is nothing to remove.
-                guard try Self.configString(name, in: config) != nil else { return false }
+                guard try Self.configString(name, in: config, withIncludes: false) != nil else { return false }
                 let result = git_config_delete_entry(config, name)
                 if result == GIT_ENOTFOUND.rawValue { return false }
                 try Self.check(result)
@@ -70,7 +70,9 @@ extension GitClient {
     /// repository the global and system config.
     public func configLines(scope: ConfigScope? = nil) async throws -> [String] {
         if scope == .global || scope == .system {
-            return try await withDefaultConfig(scope: scope, missing: .fail) { try Self.configLines(in: $0) }
+            return try await withDefaultConfig(scope: scope, missing: .fail) {
+                try Self.configLines(in: $0, withIncludes: false)
+            }
         }
         try await Shell.authorize(workingDirectory)
         let inRepository: [String]? = try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {

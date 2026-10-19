@@ -148,6 +148,16 @@ extension GitClient {
     /// at, which may be outside the sandbox: both must be allowed.
     private func authorizeConfigFile(of scope: ConfigScope?, writing: Bool) async throws {
         guard scope != .local else { return }
+        try await authorizeSelectedFile(of: scope, writing: writing)
+        // What the file includes is read as well.
+        guard let scope else { return }
+        let home = Libgit2Sandboxing.shared.home(for: Shell.current.sandbox)
+        for included in Self.includedFiles(of: location(of: Self.configFilePath(scope)), home: home) {
+            try await Shell.authorize(URL(fileURLWithPath: included))
+        }
+    }
+
+    private func authorizeSelectedFile(of scope: ConfigScope?, writing: Bool) async throws {
         if let scope, let named = Self.configFileOverride(scope), !named.isEmpty {
             try await Shell.authorize(URL(fileURLWithPath: location(of: named)))
         } else if scope == .system {
@@ -160,6 +170,34 @@ extension GitClient {
             try await Shell.authorize(URL(fileURLWithPath: home).appendingPathComponent(".gitconfig"))
             try await Shell.authorize(URL(fileURLWithPath: Self.globalConfigPath()))
         }
+    }
+
+    /// Every file the scope's file pulls in with `[include]` / `[includeIf]`,
+    /// followed as libgit2 follows them, with `~/` and relative names as git
+    /// resolves them.
+    static func includedFiles(of file: String, home: String, depth: Int = 0) -> [String] {
+        guard depth < 10, let text = try? String(contentsOfFile: file, encoding: .utf8) else { return [] }
+        var section = ""
+        var found: [String] = []
+        for rawLine in text.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("[") {
+                section = line.dropFirst().prefix { $0 != " " && $0 != "]" && $0 != "\"" }.lowercased()
+            } else if section == "include" || section == "includeif", let equals = line.firstIndex(of: "="),
+                      line[..<equals].trimmingCharacters(in: .whitespaces).lowercased() == "path" {
+                var value = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+                if value.hasPrefix("\""), value.hasSuffix("\""), value.count >= 2 {
+                    value = String(value.dropFirst().dropLast())
+                }
+                let directory = URL(fileURLWithPath: file).deletingLastPathComponent()
+                let path = value.hasPrefix("~/")
+                    ? home + String(value.dropFirst(1))
+                    : URL(fileURLWithPath: value, relativeTo: directory).path
+                found.append(path)
+                found += includedFiles(of: path, home: home, depth: depth + 1)
+            }
+        }
+        return found
     }
 
     /// The config of one scope's file, which the caller frees. An absent
@@ -203,7 +241,10 @@ extension GitClient {
         return file
     }
 
-    static func configString(_ name: String, in config: OpaquePointer?) throws -> String? {
+    /// The value of `name`. With `withIncludes` off (an explicit scope), a
+    /// value that came from an `[include]`d file is not there, as git has it.
+    static func configString(_ name: String, in config: OpaquePointer?, withIncludes: Bool = true) throws -> String? {
+        guard withIncludes else { return try ownConfigString(name, in: config) }
         var buffer = git_buf()
         defer { git_buf_dispose(&buffer) }
         let result = git_config_get_string_buf(&buffer, config, name)
@@ -213,11 +254,32 @@ extension GitClient {
         return buffer.ptr.map { String(cString: $0) } ?? ""
     }
 
+    /// The last value of `name` the file itself has, not an included one.
+    private static func ownConfigString(_ name: String, in config: OpaquePointer?) throws -> String? {
+        var iterator: UnsafeMutablePointer<git_config_iterator>?
+        let started = git_config_multivar_iterator_new(&iterator, config, name, nil)
+        if started == GIT_ENOTFOUND.rawValue { return nil }
+        try check(started)
+        defer { git_config_iterator_free(iterator) }
+        var found: String?
+        while true {
+            var entry: UnsafeMutablePointer<git_config_entry>?
+            let result = git_config_next(&entry, iterator)
+            if result == GIT_ITEROVER.rawValue { break }
+            try check(result)
+            guard let entry = entry?.pointee, entry.include_depth == 0 else { continue }
+            found = entry.value.map { String(cString: $0) } ?? ""
+        }
+        return found
+    }
+
     /// What `git config --list` prints for `config`'s entries, lowest level
     /// first (libgit2 iterates the highest first) and each file top to
     /// bottom: `name=value`, or just `name` for a key without a value.
     /// With `level`, only that level's entries.
-    static func configLines(in config: OpaquePointer?, level only: git_config_level_t? = nil) throws -> [String] {
+    static func configLines(
+        in config: OpaquePointer?, level only: git_config_level_t? = nil, withIncludes: Bool = true
+    ) throws -> [String] {
         var iterator: UnsafeMutablePointer<git_config_iterator>?
         try check(git_config_iterator_new(&iterator, config))
         defer { git_config_iterator_free(iterator) }
@@ -230,6 +292,7 @@ extension GitClient {
             try check(result)
             guard let entry = entry?.pointee, let name = entry.name else { continue }
             if let only, entry.level != only { continue }
+            if !withIncludes && entry.include_depth > 0 { continue }
             let line = entry.value.map { "\(String(cString: name))=\(String(cString: $0))" } ?? String(cString: name)
             entries.append(Listed(level: Int32(entry.level.rawValue), offset: entries.count, line: line))
         }
