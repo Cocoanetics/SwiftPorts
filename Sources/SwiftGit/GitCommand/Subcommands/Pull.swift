@@ -68,6 +68,8 @@ struct Pull: AsyncParsableCommand {
             try await pull()
         } catch let error as UnsupportedTransportError {
             throw CLIError(error)
+        } catch let error as RemoteRepositoryError {
+            throw CLIError(error)
         }
     }
 

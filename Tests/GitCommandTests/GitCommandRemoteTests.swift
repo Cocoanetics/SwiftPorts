@@ -43,6 +43,47 @@ struct GitCommandRemoteTests {
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// The system `git`'s stderr and exit status, for comparing output
+    /// byte for byte.
+    private func systemGitStderr(_ args: [String], in dir: URL) throws -> (stderr: String, status: Int32) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com"] + args
+        process.currentDirectoryURL = dir
+        let out = Pipe(), err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+        try process.run()
+        let message = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        _ = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (message, process.terminationStatus)
+    }
+
+    /// SwiftPorts' `git`'s stderr, its error's lines included, as git
+    /// would print them, and its exit status.
+    private func gitStderr(
+        _ args: [String], in dir: URL, sandbox: Sandbox? = nil
+    ) async throws -> (stderr: String, status: Int32) {
+        let out = OutputSink(), err = OutputSink()
+        let shell = Shell(stdout: out, stderr: err, environment: Environment(workingDirectory: dir.path))
+        if let sandbox { shell.sandbox = sandbox }
+        var failure: CLIError?
+        do {
+            try await shell.withCurrent {
+                var command = try #require(try GitCommand.parseAsRoot(args) as? AsyncParsableCommand)
+                try await command.run()
+            }
+        } catch let error as CLIError {
+            failure = error
+        }
+        out.finish()
+        err.finish()
+        let printed = await err.readAllString()
+        guard let failure else { return (printed, 0) }
+        return (printed + failure.lines.map { $0 + "\n" }.joined(), failure.exitCode)
+    }
+
     /// Turns git's push hints on in `repo`'s own config, which outranks a
     /// global one: CI's macOS runner image switches them off globally.
     private func enablePushAdvice(in repo: URL) throws {
@@ -54,13 +95,16 @@ struct GitCommandRemoteTests {
     /// SwiftPorts' `git`, run in a shell whose working directory is `dir`.
     @discardableResult
     private func git(
-        _ args: [String], in dir: URL, environment variables: [String: String] = [:]
+        _ args: [String], in dir: URL, environment variables: [String: String] = [:],
+        sandbox: Sandbox? = nil
     ) async throws -> (stdout: String, stderr: String) {
         let out = OutputSink(), err = OutputSink()
         let shell = Shell(stdout: out, stderr: err,
                           environment: Environment(variables: variables, workingDirectory: dir.path))
+        if let sandbox { shell.sandbox = sandbox }
         try await shell.withCurrent {
-            let parsed = try GitCommand.parseAsRoot(args)
+            // As both entry points do, git's shorthands first.
+            let parsed = try GitCommand.parseAsRoot(GitCommand.preprocess(args))
             if var command = parsed as? AsyncParsableCommand {
                 try await command.run()
             } else {
@@ -571,6 +615,254 @@ struct GitCommandRemoteTests {
                 == systemGit(["rev-parse", "HEAD"], in: clone))
     }
 
+    // MARK: relative remotes
+
+    @Test("a configured relative remote is opened from the top of the work tree, as git opens it")
+    func fetchConfiguredRelativeRemote() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let twin = tmp("GitRemoteTwin")
+        try systemGit(["clone", "-q", remote.path, twin.path], in: clone)
+        let mirror = tmp("GitRemoteMirror")
+        try systemGit(["clone", "-q", "--bare", remote.path, mirror.path], in: clone)
+        let relative = "../\(mirror.lastPathComponent)"
+        for repo in [clone, twin] {
+            try systemGit(["remote", "add", "local", relative], in: repo)
+            try FileManager.default.createDirectory(
+                at: repo.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        }
+
+        // From a subdirectory, where the path doesn't lead to the mirror.
+        let expected = try systemGitStderr(["fetch", "local"], in: twin.appendingPathComponent("sub"))
+        let fetched = try await gitStderr(["fetch", "local"], in: clone.appendingPathComponent("sub"))
+        #expect(expected.status == 0)
+        #expect(fetched.stderr == expected.stderr)
+        #expect(fetched.stderr.hasPrefix("From \(relative)\n"))
+        #expect(try systemGit(["rev-parse", "local/main"], in: clone)
+                == systemGit(["rev-parse", "main"], in: mirror))
+        let fetchHead = { (repo: URL) in
+            try String(contentsOf: repo.appendingPathComponent(".git/FETCH_HEAD"), encoding: .utf8)
+        }
+        #expect(try fetchHead(clone) == fetchHead(twin))
+
+        // A configured push URL is read from the top too.
+        try commitFile("two.txt", in: clone)
+        try systemGit(["remote", "set-url", "local", "../nowhere"], in: clone)
+        try systemGit(["remote", "set-url", "--push", "local", relative], in: clone)
+        let pushed = try await gitStderr(["push", "local", "main"], in: clone.appendingPathComponent("sub"))
+        #expect(pushed.status == 0)
+        #expect(pushed.stderr.hasPrefix("To \(relative)\n"))
+        #expect(try systemGit(["rev-parse", "main"], in: mirror)
+                == systemGit(["rev-parse", "main"], in: clone))
+    }
+
+    @Test("a typed path is shown as typed: To ../bare, and failed to push some refs to '../bare'")
+    func pushTypedPathShowsItAsTyped() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let twin = tmp("GitRemoteTwin")
+        try systemGit(["clone", "-q", remote.path, twin.path], in: clone)
+        // One mirror per repository, side by side, so each pushes the same way.
+        let mirror = tmp("GitRemoteMirror"), twinMirror = clone.deletingLastPathComponent()
+            .appendingPathComponent(mirror.lastPathComponent + "-twin")
+        for (bare, repo) in [(mirror, clone), (twinMirror, twin)] {
+            try systemGit(["init", "-q", "--bare", "-b", "main", bare.path], in: repo)
+            try systemGit(["config", "user.name", "Test"], in: repo)
+            try systemGit(["config", "user.email", "test@example.com"], in: repo)
+            try enablePushAdvice(in: repo)
+            try FileManager.default.createDirectory(
+                at: repo.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        }
+        let typed = "../\(mirror.lastPathComponent)", twinTyped = typed + "-twin"
+        func same(_ args: [String], _ twinArgs: [String], in sub: Bool = false) async throws {
+            let mine = sub ? clone.appendingPathComponent("sub") : clone
+            let theirs = sub ? twin.appendingPathComponent("sub") : twin
+            let expected = try systemGitStderr(twinArgs, in: theirs)
+            let actual = try await gitStderr(args, in: mine)
+            #expect(actual.stderr == expected.stderr.replacingOccurrences(of: twinTyped, with: typed))
+            #expect(actual.status == expected.status)
+        }
+        // Same commits on both sides, so the summaries name the same objects.
+        try await same(["push", typed, "main"], ["push", twinTyped, "main"])
+        #expect(try systemGit(["rev-parse", "main"], in: mirror) == systemGit(["rev-parse", "main"], in: clone))
+
+        // From a subdirectory too: git reads the path from the top.
+        try systemGit(["branch", "dev"], in: clone)
+        try systemGit(["branch", "dev"], in: twin)
+        try await same(["push", typed, "dev"], ["push", twinTyped, "dev"], in: true)
+
+        // Refused: the mirror has work this repository doesn't.
+        for (bare, repo) in [(mirror, clone), (twinMirror, twin)] {
+            let other = tmp("GitRemoteOther")
+            try systemGit(["clone", "-q", bare.path, other.path], in: repo)
+            try systemGit(["commit", "-q", "--allow-empty", "-m", "theirs", "--date=@0"], in: other)
+            try systemGit(["push", "-q", "origin", "main"], in: other)
+        }
+        let expected = try systemGitStderr(["push", twinTyped, "main"], in: twin)
+        let refused = try await gitStderr(["push", typed, "main"], in: clone)
+        // The hints are git 2.54's (see pushRejected); a CI runner's older
+        // git words them differently, so compare the rest.
+        func withoutHints(_ text: String) -> String {
+            text.split(separator: "\n", omittingEmptySubsequences: false)
+                .filter { !$0.hasPrefix("hint: ") }.joined(separator: "\n")
+        }
+        #expect(withoutHints(refused.stderr)
+                == withoutHints(expected.stderr.replacingOccurrences(of: twinTyped, with: typed)))
+        #expect(refused.stderr.contains("\nhint: "))
+        #expect(refused.stderr.hasPrefix("To \(typed)\n"))
+        #expect(refused.stderr.contains("error: failed to push some refs to '\(typed)'\n"))
+        #expect(refused.status == expected.status)
+
+        // A source that matches nothing is refused before connecting.
+        try await same(["push", typed, "nothing"], ["push", twinTyped, "nothing"])
+    }
+
+    @Test("without a work tree to go to, a relative remote is read from where git runs, as git reads it")
+    func fetchRelativeRemoteFromBareRepository() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let root = tmp("GitRemoteBareBase")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // Two repositories named `target.git`: one beside each starting
+        // point, and one where the top of a work tree would lead.
+        let bare = root.appendingPathComponent("b.git")
+        try systemGit(["clone", "-q", "--bare", remote.path, bare.path], in: clone)
+        try systemGit(["clone", "-q", "--bare", remote.path, root.appendingPathComponent("target.git").path], in: clone)
+        try commitFile("inner.txt", in: clone)
+        try systemGit(["clone", "-q", "--bare", clone.path, bare.appendingPathComponent("target.git").path], in: clone)
+        try systemGit(["clone", "-q", "--bare", clone.path, clone.appendingPathComponent("target.git").path], in: clone)
+        try systemGit(["config", "remote.x.url", "../target.git"], in: bare)
+        try systemGit(["config", "remote.x.url", "../target.git"], in: clone)
+        let sub = bare.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+
+        // A work tree nested in its separate git directory is still a
+        // work tree: `../target.git` from `meta/wt/sub` is `meta/target.git`.
+        let meta = root.appendingPathComponent("meta"), nested = meta.appendingPathComponent("wt")
+        try systemGit(["init", "-q", "-b", "main", "--separate-git-dir=\(meta.path)", nested.path], in: root)
+        try systemGit(["clone", "-q", "--bare", clone.path, meta.appendingPathComponent("target.git").path], in: root)
+        try systemGit(["clone", "-q", "--bare", remote.path, nested.appendingPathComponent("target.git").path], in: root)
+        try systemGit(["config", "remote.x.url", "../target.git"], in: nested)
+        let nestedSub = nested.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(at: nestedSub, withIntermediateDirectories: true)
+
+        // Below a bare repository, inside a work tree's `.git`, and in a
+        // work tree inside its git directory.
+        let gitDirs = [sub: bare, clone.appendingPathComponent(".git"): clone.appendingPathComponent(".git"),
+                       nestedSub: meta]
+        for start in [sub, clone.appendingPathComponent(".git"), nestedSub] {
+            let fetchHead = try #require(gitDirs[start]).appendingPathComponent("FETCH_HEAD")
+            let expected = try systemGitStderr(["fetch", "x", "main"], in: start)
+            #expect(expected.status == 0)
+            let expectedHead = try String(contentsOf: fetchHead, encoding: .utf8)
+            try FileManager.default.removeItem(at: fetchHead)
+            let fetched = try await gitStderr(["fetch", "x", "main"], in: start)
+            #expect(fetched.stderr == expected.stderr)
+            #expect(fetched.status == 0)
+            #expect(try String(contentsOf: fetchHead, encoding: .utf8) == expectedHead)
+            #expect(expectedHead.hasPrefix(try systemGit(["rev-parse", "HEAD"], in: clone)))
+        }
+    }
+
+    @Test("a typed remote insteadOf rewrites is shown rewritten, as git shows it")
+    func rewrittenOperandIsShownRewritten() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let twin = tmp("GitRemoteTwin")
+        try systemGit(["clone", "-q", remote.path, twin.path], in: clone)
+        let base = tmp("GitRemoteRewrite")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        for name in ["dst.git", "pdst.git", "twin-dst.git", "twin-pdst.git"] {
+            try systemGit(["init", "-q", "--bare", "-b", "main", base.appendingPathComponent(name).path], in: base)
+        }
+        for (repo, prefix) in [(clone, ""), (twin, "twin-")] {
+            try systemGit(["config", "url.\(base.path)/\(prefix).insteadOf", "alias:"], in: repo)
+            try systemGit(["config", "url.\(base.path)/\(prefix)p.pushInsteadOf", "palias:"], in: repo)
+        }
+        func same(_ args: [String]) async throws {
+            let expected = try systemGitStderr(args, in: twin)
+            let actual = try await gitStderr(args, in: clone)
+            #expect(expected.status == 0)
+            #expect(actual.status == expected.status)
+            #expect(actual.stderr == expected.stderr.replacingOccurrences(of: "/twin-", with: "/"))
+        }
+        try await same(["push", "alias:dst.git", "main"])
+        try await same(["fetch", "alias:dst.git", "main"])
+        try await same(["push", "palias:dst.git", "main"])
+    }
+
+    @Test("an empty URL resets the remote's URLs, as git reads it")
+    func emptyConfiguredURL() async throws {
+        // git 2.54's output: before git 2.46 an empty value didn't reset
+        // the list, so CI's older system git can't stand in for it here.
+        let (_, clone) = try makeRemoteAndClone()
+        let mirror = tmp("GitRemoteMirror")
+        try systemGit(["init", "-q", "--bare", "-b", "main", mirror.path], in: clone)
+        // No URL left: git reads `e` as a path, and finds no repository.
+        try systemGit(["config", "remote.e.url", ""], in: clone)
+        try systemGit(["config", "remote.e.fetch", "+refs/heads/*:refs/remotes/e/*"], in: clone)
+        try systemGit(["config", "remote.q.url", mirror.path], in: clone)
+        try systemGit(["config", "--add", "remote.q.url", ""], in: clone)
+        // No push URL left: a push goes to the URL.
+        let typed = "../\(mirror.lastPathComponent)"
+        try systemGit(["config", "remote.p.url", typed], in: clone)
+        try systemGit(["config", "remote.p.pushurl", ""], in: clone)
+
+        func notARepository(_ name: String) -> String {
+            """
+            fatal: '\(name)' does not appear to be a git repository
+            fatal: Could not read from remote repository.
+
+            Please make sure you have the correct access rights
+            and the repository exists.
+
+            """
+        }
+        let cases: [(args: [String], stderr: String, status: Int32)] = [
+            (["fetch", "e"], notARepository("e"), 128),
+            (["push", "e", "main"], notARepository("e"), 128),
+            (["fetch", "q"], notARepository("q"), 128),
+            (["push", "p", "main"], "To \(typed)\n * [new branch]      main -> main\n", 0),
+        ]
+        for (args, stderr, status) in cases {
+            let actual = try await gitStderr(args, in: clone)
+            #expect(actual.stderr == stderr, "git \(args.joined(separator: " "))")
+            #expect(actual.status == status, "git \(args.joined(separator: " "))")
+        }
+        #expect(try systemGit(["rev-parse", "main"], in: mirror) == systemGit(["rev-parse", "main"], in: clone))
+    }
+
+    @Test("under a path-mapped sandbox, a configured relative remote fetches from the mapped work tree")
+    func fetchConfiguredRelativeRemoteUnderPathMapping() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let host = tmp("GitRemoteMapped").resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: host, withIntermediateDirectories: true)
+        let repo = host.appendingPathComponent("repo"), bare = host.appendingPathComponent("bare.git")
+        try systemGit(["clone", "-q", remote.path, repo.path], in: clone)
+        try systemGit(["clone", "-q", "--bare", remote.path, bare.path], in: clone)
+        try systemGit(["remote", "add", "local", "../bare.git"], in: repo)
+        try FileManager.default.createDirectory(
+            at: repo.appendingPathComponent("sub"), withIntermediateDirectories: true)
+
+        let sandbox = Sandbox.confined(
+            to: PathMapping(mounts: [.init(virtual: "/work", host: host.path)]), home: "/work")
+        let fetched = try await gitStderr(
+            ["fetch", "local"], in: URL(fileURLWithPath: "/work/repo/sub"), sandbox: sandbox)
+        #expect(fetched.status == 0)
+        #expect(fetched.stderr == "From ../bare\n * [new branch]      main       -> local/main\n")
+        #expect(try systemGit(["rev-parse", "local/main"], in: repo) == systemGit(["rev-parse", "main"], in: bare))
+
+        // Inside the mapped `.git`, git stays where it runs: `../bare.git`
+        // from `/work/repo/.git/sub` is `repo/.git/bare.git`, not the
+        // top's sibling.
+        try commitFile("inner.txt", in: repo)
+        let inner = repo.appendingPathComponent(".git/bare.git")
+        try systemGit(["clone", "-q", "--bare", repo.path, inner.path], in: repo)
+        try FileManager.default.createDirectory(
+            at: repo.appendingPathComponent(".git/sub"), withIntermediateDirectories: true)
+        let fromGitDir = try await gitStderr(
+            ["fetch", "local", "main"], in: URL(fileURLWithPath: "/work/repo/.git/sub"), sandbox: sandbox)
+        #expect(fromGitDir.status == 0)
+        #expect(try systemGit(["rev-parse", "FETCH_HEAD"], in: repo) == systemGit(["rev-parse", "main"], in: inner))
+        #expect(try systemGit(["rev-parse", "FETCH_HEAD"], in: repo) != systemGit(["rev-parse", "main"], in: bare))
+    }
+
     @Test("without a configured remote, git push refuses and git fetch does nothing")
     func noConfiguredRemote() async throws {
         let (remote, clone) = try makeRemoteAndClone()
@@ -773,6 +1065,423 @@ struct GitCommandRemoteTests {
         }
     }
 
+    // MARK: push --force / --force-with-lease
+
+    /// Another clone moves `main` on; `clone` then rewrites its own.
+    private func diverge(remote: URL, clone: URL) throws -> URL {
+        let other = tmp("GitRemoteOtherClone")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try commitFile("theirs.txt", in: other)
+        try systemGit(["push", "-q", "origin", "main"], in: other)
+        try commitFile("mine.txt", in: clone)
+        return other
+    }
+
+    private func short(_ rev: String, in repo: URL) throws -> String {
+        try systemGit(["rev-parse", "--short", rev], in: repo)
+    }
+
+    @Test("git push -f and --force force the update, git's way of saying so")
+    func pushForce() async throws {
+        for flag in ["-f", "--force"] {
+            let (remote, clone) = try makeRemoteAndClone()
+            let other = try diverge(remote: remote, clone: clone)
+            let url = try systemGit(["config", "remote.origin.url"], in: clone)
+            let old = try short("main", in: other), new = try short("main", in: clone)
+            let output = try await git(["push", flag], in: clone)
+            #expect(output.stderr == "To \(url)\n + \(old)...\(new) main -> main (forced update)\n")
+            #expect(try systemGit(["rev-parse", "main"], in: remote)
+                    == systemGit(["rev-parse", "main"], in: clone))
+        }
+    }
+
+    @Test("--no-force takes -f back")
+    func pushNoForce() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = try diverge(remote: remote, clone: clone)
+        await #expect(throws: CLIError.self) {
+            try await git(["push", "-f", "--no-force", "origin", "main"], in: clone)
+        }
+        #expect(try systemGit(["rev-parse", "main"], in: remote)
+                == systemGit(["rev-parse", "main"], in: other))
+    }
+
+    @Test("git push -f forces every refspec remote.<name>.push configures, global ones first")
+    func pushForceConfiguredRefspecs() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = try diverge(remote: remote, clone: clone)
+        try systemGit(["push", "-q", "origin", "main:dev"], in: other)
+        try systemGit(["config", "--add", "remote.origin.push", "refs/heads/main:refs/heads/main"], in: clone)
+        try systemGit(["config", "--add", "remote.origin.push", "refs/heads/main:refs/heads/dev"], in: clone)
+        let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        let old = try short("main", in: other), new = try short("main", in: clone)
+        let output = try await git(["push", "-f"], in: clone)
+        // In the remote's ref order, as git lists them.
+        #expect(output.stderr == """
+            To \(url)
+             + \(old)...\(new) main -> dev (forced update)
+             + \(old)...\(new) main -> main (forced update)
+
+            """)
+        #expect(try systemGit(["rev-parse", "dev"], in: remote)
+                == systemGit(["rev-parse", "main"], in: clone))
+    }
+
+    @Test("--force-with-lease forces while the remote is where origin/main says")
+    func pushLeaseHolds() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = try diverge(remote: remote, clone: clone)
+        try systemGit(["fetch", "-q"], in: clone)
+        let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        let old = try short("main", in: other), new = try short("main", in: clone)
+        let output = try await git(["push", "--force-with-lease"], in: clone)
+        #expect(output.stderr == "To \(url)\n + \(old)...\(new) main -> main (forced update)\n")
+        #expect(try systemGit(["rev-parse", "main"], in: remote)
+                == systemGit(["rev-parse", "main"], in: clone))
+    }
+
+    @Test("a stale lease is refused as git refuses it, with no hint")
+    func pushLeaseStale() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = try diverge(remote: remote, clone: clone)
+        try enablePushAdvice(in: clone)
+        let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        let mine = try systemGit(["rev-parse", "HEAD"], in: clone)
+        for args in [["push", "--force-with-lease"],
+                     ["push", "--force-with-lease=main", "origin", "main"],
+                     ["push", "--force-with-lease=main:\(mine)", "origin", "main"],
+                     ["push", "--force-with-lease=main:", "origin", "main"]] {
+            do {
+                let output = try await git(args, in: clone)
+                Issue.record("expected \(args) to fail: \(output)")
+            } catch let error as CLIError {
+                #expect(error.lines == ["error: failed to push some refs to '\(url)'"])
+                #expect(error.exitCode == 1)
+            }
+        }
+        // With -q, the summary leads the error, as for any refused push.
+        do {
+            try await git(["push", "-q", "--force-with-lease"], in: clone)
+            Issue.record("expected git push -q --force-with-lease to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == [
+                "To \(url)",
+                " ! [rejected]        main -> main (stale info)",
+                "error: failed to push some refs to '\(url)'"
+            ])
+        }
+        #expect(try systemGit(["rev-parse", "main"], in: remote)
+                == systemGit(["rev-parse", "main"], in: other))
+    }
+
+    @Test("--force overrides a lease; --no-force-with-lease drops the ones before it")
+    func pushLeaseOverrides() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        _ = try diverge(remote: remote, clone: clone)
+        await #expect(throws: CLIError.self) {
+            try await git(["push", "--force-with-lease", "--no-force-with-lease", "origin", "main"], in: clone)
+        }
+        try await git(["push", "-q", "-f", "--force-with-lease", "origin", "main"], in: clone)
+        #expect(try systemGit(["rev-parse", "main"], in: remote)
+                == systemGit(["rev-parse", "main"], in: clone))
+    }
+
+    @Test("a lease on another ref leaves this one unforced; a bad <expect> is a usage error")
+    func pushLeaseOtherRefAndBadExpect() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = try diverge(remote: remote, clone: clone)
+        try systemGit(["fetch", "-q"], in: clone)
+        await #expect(throws: CLIError.self) {
+            try await git(["push", "--force-with-lease=dev", "origin", "main"], in: clone)
+        }
+        do {
+            try await git(["push", "--force-with-lease=main:nosuch", "origin", "main"], in: clone)
+            Issue.record("expected a bad <expect> to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == ["error: cannot parse expected object name 'nosuch'"])
+            #expect(error.exitCode == 129)
+        }
+        #expect(try systemGit(["rev-parse", "main"], in: remote)
+                == systemGit(["rev-parse", "main"], in: other))
+    }
+
+    @Test("a push refspec written without a value is refused as git refuses it")
+    func pushValuelessRefspec() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["config", "--add", "remote.origin.push", "refs/heads/main:refs/heads/main"], in: clone)
+        let config = clone.appendingPathComponent(".git/config")
+        let original = try String(contentsOf: config, encoding: .utf8)
+        // As `[remote "origin"]`, with a tab, and in the older
+        // `[remote.origin]`.
+        for (header, args) in [("[remote \"origin\"]", ["push", "-f"]), ("[remote \"origin\"]", ["push"]),
+                               ("[remote.origin]", ["push", "-f"]), ("[remote\t\"origin\"]", ["push", "-f"])] {
+            let text = original + "\(header)\n\tpush\n"
+            try text.write(to: config, atomically: true, encoding: .utf8)
+            let line = text.split(separator: "\n", omittingEmptySubsequences: false).count - 1
+            do {
+                try await git(args, in: clone)
+                Issue.record("expected \(args) to fail")
+            } catch let error as CLIError {
+                #expect(error.lines == [
+                    "error: missing value for 'remote.origin.push'",
+                    "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line \(line)"
+                ])
+                #expect(error.exitCode == 128)
+            }
+        }
+        // Remotes whose names are escaped in their header, or hold a `]`.
+        for (name, header) in [("orig\"in", "[remote \"orig\\\"in\"]"), ("orig]in", "[remote \"orig]in\"]")] {
+            try original.write(to: config, atomically: true, encoding: .utf8)
+            try systemGit(["remote", "add", name, "../elsewhere"], in: clone)
+            let text = try String(contentsOf: config, encoding: .utf8) + "\(header)\n\tpush\n"
+            try text.write(to: config, atomically: true, encoding: .utf8)
+            let line = text.split(separator: "\n", omittingEmptySubsequences: false).count - 1
+            do {
+                try await git(["push", "-f", "origin", "main"], in: clone)
+                Issue.record("expected the push to fail")
+            } catch let error as CLIError {
+                #expect(error.lines.last
+                        == "fatal: bad config variable 'remote.\(name).push' in file '.git/config' at line \(line)")
+            }
+        }
+    }
+
+    @Test("a bare push key in a config that starts with a byte order mark")
+    func pushValuelessRefspecBOM() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let config = clone.appendingPathComponent(".git/config")
+        let body = "[remote \"origin\"]\n\tpush\n" + (try String(contentsOf: config, encoding: .utf8))
+        try (Data([0xEF, 0xBB, 0xBF]) + Data(body.utf8)).write(to: config)
+        do {
+            try await git(["push", "-f"], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.last
+                    == "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line 2")
+        }
+    }
+
+    @Test("a bare push key after a value that isn't UTF-8")
+    func pushValuelessRefspecAfterNonUTF8() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let config = clone.appendingPathComponent(".git/config")
+        var data = try Data(contentsOf: config)
+        data += Data("[foo]\n\tbar = ".utf8) + Data([0xFF]) + Data("\n[remote \"origin\"]\n\tpush\n".utf8)
+        try data.write(to: config)
+        let line = data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false).count - 1
+        do {
+            try await git(["push", "-f"], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.last
+                    == "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line \(line)")
+        }
+    }
+
+    @Test("a value's continuation line isn't taken for a bare push key")
+    func pushValuelessRefspecAfterContinuation() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let config = clone.appendingPathComponent(".git/config")
+        let text = try String(contentsOf: config, encoding: .utf8)
+            + "[remote \"origin\"]\n\tfoo = value\\\npush\n\tpush\n"
+        try text.write(to: config, atomically: true, encoding: .utf8)
+        let line = text.split(separator: "\n", omittingEmptySubsequences: false).count - 1
+        do {
+            try await git(["push", "-f"], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.last
+                    == "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line \(line)")
+        }
+        // Nor one ending a whole-line comment.
+        let fullComment = text.replacingOccurrences(of: "\tfoo = value\\\npush\n", with: "\t# ignored = value\\\n")
+        try fullComment.write(to: config, atomically: true, encoding: .utf8)
+        let fullCommentLine = fullComment.split(separator: "\n", omittingEmptySubsequences: false).count - 1
+        do {
+            try await git(["push", "-f"], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.last
+                    == "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line \(fullCommentLine)")
+        }
+        // A backslash ending a comment carries nothing on.
+        let commented = text.replacingOccurrences(of: "\tfoo = value\\\npush\n", with: "\tfoo = value # note\\\n")
+        try commented.write(to: config, atomically: true, encoding: .utf8)
+        let commentedLine = commented.split(separator: "\n", omittingEmptySubsequences: false).count - 1
+        do {
+            try await git(["push", "-f"], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.last
+                    == "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line \(commentedLine)")
+        }
+    }
+
+    @Test("only LF ends a config line: a NEL in a value doesn't")
+    func pushValuelessRefspecAfterNEL() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let config = clone.appendingPathComponent(".git/config")
+        let text = try String(contentsOf: config, encoding: .utf8)
+            + "[foo]\n\tbar = a\u{85}b\n[remote \"origin\"]\n\tpush\n"
+        try text.write(to: config, atomically: true, encoding: .utf8)
+        let line = Data(text.utf8).split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false).count - 1
+        do {
+            try await git(["push", "-f"], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.last
+                    == "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line \(line)")
+        }
+    }
+
+    @Test("configGetAll reads a key without a value as empty, as git config --get-all does")
+    func configGetAllValueless() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let config = clone.appendingPathComponent(".git/config")
+        try (try String(contentsOf: config, encoding: .utf8) + "[foo]\n\tbar\n\tbar = x\n")
+            .write(to: config, atomically: true, encoding: .utf8)
+        let values = try await Shell(environment: Environment(variables: [:], workingDirectory: clone.path)).withCurrent {
+            try await GitClient(workingDirectory: clone).configGetAll("foo.bar")
+        }
+        // `git config --get-all foo.bar` prints an empty line, then `x`.
+        #expect(values == ["", "x"])
+    }
+
+    @Test("a bare push key is found in a CRLF config too")
+    func pushValuelessRefspecCRLF() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        let config = clone.appendingPathComponent(".git/config")
+        let text = (try String(contentsOf: config, encoding: .utf8) + "[remote \"origin\"]\n\tpush\n")
+            .replacingOccurrences(of: "\n", with: "\r\n")
+        try text.write(to: config, atomically: true, encoding: .utf8)
+        let line = text.components(separatedBy: "\r\n").count - 1
+        do {
+            try await git(["push", "-f"], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines.last
+                    == "fatal: bad config variable 'remote.origin.push' in file '.git/config' at line \(line)")
+        }
+    }
+
+    @Test("a malformed refspec, typed or configured, is refused as git refuses it")
+    func pushInvalidRefspec() async throws {
+        for bad in ["", " ", "main:", "refs/heads/*:refs/heads/x", "main:@"] {
+            let (_, clone) = try makeRemoteAndClone()
+            do {
+                try await git(["push", "origin", bad], in: clone)
+                Issue.record("expected \(bad) to fail")
+            } catch let error as CLIError {
+                #expect(error.lines == ["fatal: invalid refspec '\(bad)'"])
+                #expect(error.exitCode == 128)
+            }
+            // Configured, with or without -f, which mustn't change it.
+            try systemGit(["config", "--add", "remote.origin.push", bad], in: clone)
+            for args in [["push"], ["push", "-f"]] {
+                do {
+                    try await git(args, in: clone)
+                    Issue.record("expected \(args) to fail")
+                } catch let error as CLIError {
+                    #expect(error.lines == ["fatal: invalid refspec '\(bad)'"])
+                }
+            }
+        }
+        // Any remote's malformed push refspec stops every push, typed
+        // refspecs or not, as git reads them all with its config.
+        let (_, clone) = try makeRemoteAndClone()
+        try systemGit(["remote", "add", "other", "../elsewhere"], in: clone)
+        try systemGit(["config", "--add", "remote.other.push", " "], in: clone)
+        do {
+            try await git(["push", "-f", "origin", "main"], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == ["fatal: invalid refspec ' '"])
+        }
+        // Read with the config, before git looks for the remote at all.
+        do {
+            try await git(["push", ""], in: clone)
+            Issue.record("expected the push to fail")
+        } catch let error as CLIError {
+            #expect(error.lines == ["fatal: invalid refspec ' '"])
+        }
+        // What git takes stays taken.
+        #expect(GitClient.isValidPushRefspec("HEAD~1:refs/heads/older"))
+        #expect(GitClient.isValidPushRefspec("+refs/heads/*:refs/heads/copy/*"))
+        #expect(GitClient.isValidPushRefspec(":dev"))
+        #expect(GitClient.isValidPushRefspec("+:"))
+        #expect(GitClient.isValidPushRefspec("v1.0"))
+        // `@` alone is HEAD as a source, nothing as a destination.
+        #expect(GitClient.isValidPushRefspec("@"))
+        #expect(GitClient.isValidPushRefspec("+@:refs/heads/at"))
+        #expect(GitClient.pushRefspecReadingAtAsHead("@") == "HEAD")
+        #expect(GitClient.pushRefspecReadingAtAsHead("+@:refs/heads/at") == "+HEAD:refs/heads/at")
+        #expect(GitClient.pushRefspecReadingAtAsHead("@foo") == "@foo")
+        #expect(GitClient.pushRefspecReadingAtAsHead("^@") == "^HEAD")
+        #expect(GitClient.isValidPushRefspec("^@"))
+        // A negative refspec is a ref name or pattern alone.
+        #expect(GitClient.isValidPushRefspec("^refs/heads/dev"))
+        #expect(GitClient.isValidPushRefspec("^refs/heads/d*"))
+        for bad in ["^", "+^main", "^main:dest", "^" + String(repeating: "a", count: 40)] {
+            #expect(!GitClient.isValidPushRefspec(bad), "\(bad)")
+        }
+    }
+
+    @Test("git push reads a source of @ as HEAD")
+    func pushAtAsHead() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        let output = try await git(["push", "origin", "@:refs/heads/at"], in: clone)
+        #expect(output.stderr == "To \(url)\n * [new branch]      HEAD -> at\n")
+        #expect(try systemGit(["rev-parse", "at"], in: remote) == systemGit(["rev-parse", "HEAD"], in: clone))
+        // Configured too, with -f or without.
+        try systemGit(["config", "--add", "remote.origin.push", "@:refs/heads/configured"], in: clone)
+        let configured = try await git(["push"], in: clone)
+        #expect(configured.stderr == "To \(url)\n * [new branch]      HEAD -> configured\n")
+    }
+
+    @Test("a lease value can't pass for the bare or negated forms")
+    func pushLeaseValueIsNotAForm() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = try diverge(remote: remote, clone: clone)
+        // Unlike the bare flag, this leases a ref named so, which nothing
+        // pushed matches: the push is refused as without a lease.
+        await #expect(throws: CLIError.self) {
+            try await git(["push", "--force-with-lease=\(Push.leaseAll)", "origin", "main"], in: clone)
+        }
+        #expect(try systemGit(["rev-parse", "main"], in: remote) == systemGit(["rev-parse", "main"], in: other))
+    }
+
+    @Test("a full object ID for <expect> is taken as given; all zeros expects the ref absent")
+    func pushLeaseFullObjectID() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        _ = try diverge(remote: remote, clone: clone)
+        let url = try systemGit(["config", "remote.origin.url"], in: clone)
+        // A SHA-256 length is no object ID in this (SHA-1) repository, nor
+        // are full-width digits.
+        for bad in [String(repeating: "1", count: 64), String(repeating: "\u{FF11}", count: 40)] {
+            do {
+                try await git(["push", "--force-with-lease=main:\(bad)", "origin", "main"], in: clone)
+                Issue.record("expected a usage error")
+            } catch let error as CLIError {
+                #expect(error.lines == ["error: cannot parse expected object name '\(bad)'"])
+                #expect(error.exitCode == 129)
+            }
+        }
+        for expect in [String(repeating: "1", count: 40), String(repeating: "0", count: 40)] {
+            do {
+                try await git(["push", "-q", "--force-with-lease=main:\(expect)", "origin", "main"], in: clone)
+                Issue.record("expected a stale lease")
+            } catch let error as CLIError {
+                #expect(error.lines.dropFirst().first == " ! [rejected]        main -> main (stale info)")
+                #expect(error.lines.last == "error: failed to push some refs to '\(url)'")
+            }
+        }
+        // Absent, a new branch goes through.
+        try await git(["push", "-q", "--force-with-lease=newb:\(String(repeating: "0", count: 40))",
+                       "origin", "HEAD:newb"], in: clone)
+        #expect(try systemGit(["rev-parse", "newb"], in: remote) == systemGit(["rev-parse", "HEAD"], in: clone))
+    }
+
     // MARK: fetch
 
     @Test("git fetch with no arguments, or just the repository")
@@ -865,6 +1574,96 @@ struct GitCommandRemoteTests {
         #expect(try systemGit(["for-each-ref", "refs/remotes/nomap"], in: clone).isEmpty)
         #expect(try systemGit(["rev-parse", "FETCH_HEAD"], in: clone)
                 == systemGit(["rev-parse", "main"], in: remote))
+    }
+
+    /// `clone` of a remote whose `main` gained tag `v2` and whose `side`
+    /// branch (fetched, not on `main`) has tag `vside`.
+    private func makeTaggedRemoteAndClone() throws -> (remote: URL, clone: URL, other: URL) {
+        let (remote, clone) = try makeRemoteAndClone()
+        let other = tmp("GitRemoteTagger")
+        try systemGit(["clone", "-q", remote.path, other.path], in: clone)
+        try systemGit(["switch", "-q", "-c", "side"], in: other)
+        try commitFile("side.txt", in: other)
+        try systemGit(["tag", "vside"], in: other)
+        try systemGit(["switch", "-q", "main"], in: other)
+        try commitFile("two.txt", in: other)
+        try systemGit(["tag", "v2"], in: other)
+        try systemGit(["push", "-q", "origin", "main", "v2", "vside"], in: other)
+        return (remote, clone, other)
+    }
+
+    private func tags(_ repo: URL) throws -> [String] {
+        try systemGit(["tag", "-l"], in: repo).split(separator: "\n").map(String.init)
+    }
+
+    @Test("git fetch --tags and -t fetch every tag; by default only those on what's fetched")
+    func fetchTags() async throws {
+        for flag in ["--tags", "-t"] {
+            let (remote, clone, _) = try makeTaggedRemoteAndClone()
+            let output = try await git(["fetch", flag], in: clone)
+            #expect(try tags(clone) == ["v2", "vside"])
+            #expect(output.stderr.hasSuffix("""
+                 * [new tag]         v2         -> v2
+                 * [new tag]         vside      -> vside
+
+                """))
+            #expect(try systemGit(["rev-parse", "vside"], in: clone)
+                    == systemGit(["rev-parse", "vside"], in: remote))
+        }
+        let (_, clone, _) = try makeTaggedRemoteAndClone()
+        try await git(["fetch", "-q"], in: clone)
+        let followed = try tags(clone)
+        #expect(followed == ["v2"])
+    }
+
+    @Test("git fetch --no-tags follows none, over remote.<name>.tagOpt; the last of the two wins")
+    func fetchNoTags() async throws {
+        let (_, clone, _) = try makeTaggedRemoteAndClone()
+        try systemGit(["config", "remote.origin.tagOpt", "--tags"], in: clone)
+        try await git(["fetch", "-q", "--tags", "--no-tags"], in: clone)
+        #expect(try tags(clone).isEmpty)
+        try await git(["fetch", "-q", "--no-tags", "--tags"], in: clone)
+        #expect(try tags(clone) == ["v2", "vside"])
+        // `-n` is git's short --no-tags.
+        try systemGit(["tag", "-d", "v2", "vside"], in: clone)
+        try await git(["fetch", "-q", "-t", "-n"], in: clone)
+        #expect(try tags(clone).isEmpty)
+        try await git(["fetch", "-qtn"], in: clone)
+        #expect(try tags(clone).isEmpty)
+        try await git(["fetch", "-qnt"], in: clone)
+        #expect(try tags(clone) == ["v2", "vside"])
+    }
+
+    @Test("remote.<name>.tagOpt --tags fetches every tag, --no-tags none")
+    func fetchTagOpt() async throws {
+        let (_, clone, _) = try makeTaggedRemoteAndClone()
+        try systemGit(["config", "remote.origin.tagOpt", "--no-tags"], in: clone)
+        try await git(["fetch", "-q"], in: clone)
+        #expect(try tags(clone).isEmpty)
+        try systemGit(["config", "remote.origin.tagOpt", "--tags"], in: clone)
+        try await git(["fetch", "-q", "origin", "main"], in: clone)
+        #expect(try tags(clone) == ["v2", "vside"])
+    }
+
+    @Test("git fetch --tags won't clobber a tag that moved on the remote")
+    func fetchTagsClobber() async throws {
+        let (_, clone, other) = try makeTaggedRemoteAndClone()
+        try await git(["fetch", "-q", "--tags"], in: clone)
+        let before = try systemGit(["rev-parse", "v2"], in: clone)
+        try commitFile("three.txt", in: other)
+        try systemGit(["tag", "-f", "v2"], in: other)
+        try systemGit(["push", "-q", "-f", "origin", "main", "v2"], in: other)
+        do {
+            let output = try await git(["fetch", "--tags"], in: clone)
+            Issue.record("expected git fetch --tags to fail: \(output)")
+        } catch let error as CLIError {
+            #expect(error.lines.isEmpty)
+            #expect(error.exitCode == 1)
+        }
+        #expect(try systemGit(["rev-parse", "v2"], in: clone) == before)
+        // The rest of the fetch went ahead.
+        #expect(try systemGit(["rev-parse", "origin/main"], in: clone)
+                == systemGit(["rev-parse", "main"], in: other))
     }
 
     // MARK: -q
