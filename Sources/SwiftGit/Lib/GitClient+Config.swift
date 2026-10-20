@@ -1,6 +1,7 @@
 import Foundation
 import CGitKit
 import GitKit
+import ShellKit
 
 // Sandbox-aware delegation onto the pure `Repository` config operations
 // (`GitKit/Repository+Config.swift`). Each call authorizes the
@@ -9,25 +10,96 @@ import GitKit
 extension GitClient {
 
     /// Read a config value (`git config --get <name>`). Returns nil
-    /// when the key isn't set.
+    /// when the key isn't set. Outside a repository, reads the global
+    /// and system config, as git does.
     public func configGet(_ name: String, scope: ConfigScope? = nil) async throws -> String? {
-        try await withRepository { try $0.configGet(name, scope: scope) }
+        if scope == .global || scope == .system {
+            return try await withDefaultConfig(scope: scope, missing: .empty) {
+                try Self.configString(name, in: $0, withIncludes: false)
+            }
+        }
+        do {
+            return try await withRepository { try $0.configGet(name, scope: scope) }
+        } catch let error as Libgit2Error where scope == nil && Self.isNoRepository(error) {
+            return try await withDefaultConfig(scope: nil, missing: .empty) {
+                try Self.configString(name, in: $0)
+            }
+        }
     }
 
     /// Set a config value, matching `git config <name> <value>`.
+    /// `--global` works anywhere, and creates `~/.gitconfig` if there is none.
     public func configSet(_ name: String, _ value: String, scope: ConfigScope = .local) async throws {
+        if scope == .global || scope == .system {
+            try await withDefaultConfig(scope: scope, missing: .create) { config in
+                try self.requireDirectory(of: Self.configFilePath(scope))
+                try Self.check(git_config_set_string(config, name, value))
+            }
+            return
+        }
         try await withRepository { try $0.configSet(name, value, scope: scope) }
     }
 
     /// Remove a config entry. Returns true if removed, false if absent.
     @discardableResult
     public func configUnset(_ name: String, scope: ConfigScope = .local) async throws -> Bool {
-        try await withRepository { try $0.configUnset(name, scope: scope) }
+        if scope == .global || scope == .system {
+            return try await withDefaultConfig(scope: scope, missing: .emptyForWrite) { config in
+                // git locks the file first, whether or not the key is there.
+                try self.requireDirectory(of: Self.configFilePath(scope))
+                // An absent key (or file) is nothing to remove.
+                guard try Self.configString(name, in: config, withIncludes: false) != nil else { return false }
+                let result = git_config_delete_entry(config, name)
+                if result == GIT_ENOTFOUND.rawValue { return false }
+                try Self.check(result)
+                return true
+            }
+        }
+        return try await withRepository { try $0.configUnset(name, scope: scope) }
     }
 
     /// Walk every config entry visible to the repo — matches `git config --list`.
     public func configList() async throws -> [(name: String, value: String)] {
         try await withRepository { try $0.configList() }
+    }
+
+    /// The lines `git config --list` prints, in its order: lowest level
+    /// first, a key without a value as just its name. With `--global` or
+    /// `--system` that file only (which must exist), with `--local` the
+    /// repository's own; with no scope, every level, and outside a
+    /// repository the global and system config.
+    public func configLines(scope: ConfigScope? = nil) async throws -> [String] {
+        if scope == .global || scope == .system {
+            return try await withDefaultConfig(scope: scope, missing: .fail) {
+                try Self.configLines(in: $0, withIncludes: false)
+            }
+        }
+        try await Shell.authorize(workingDirectory)
+        let inRepository: [String]? = try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+            var repo: OpaquePointer?
+            var config: OpaquePointer?
+            defer {
+                git_config_free(config)
+                git_repository_free(repo)
+            }
+            let opened = git_repository_open_ext(&repo, workingDirectory.path, 0, nil)
+            if opened == GIT_ENOTFOUND.rawValue { return nil }
+            try Self.check(opened)
+            try Self.check(git_repository_config_snapshot(&config, repo))
+            return try Self.configLines(in: config, level: scope == .local ? GIT_CONFIG_LEVEL_LOCAL : nil)
+        }
+        if let inRepository { return inRepository }
+        if scope == .local {
+            throw Libgit2Error(
+                code: GIT_ENOTFOUND.rawValue, klass: Int32(GIT_ERROR_REPOSITORY.rawValue),
+                message: "could not find repository at '\(workingDirectory.path)'")
+        }
+        return try await withDefaultConfig(scope: nil, missing: .empty) { try Self.configLines(in: $0) }
+    }
+
+    /// Whether `error` is libgit2 not finding a repository to open.
+    public static func isNoRepository(_ error: Libgit2Error) -> Bool {
+        error.code == GIT_ENOTFOUND.rawValue && error.klass == Int32(GIT_ERROR_REPOSITORY.rawValue)
     }
 
     /// Every value of a multi-valued key (`git config --get-all <name>`),

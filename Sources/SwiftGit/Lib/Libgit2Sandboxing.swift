@@ -60,6 +60,34 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
     private let lock = NSLock()
     private var lastApplied: AppliedSnapshot?
 
+    /// The home directory libgit2 is pointed at for `sandbox`: the shell's
+    /// `HOME`, else the sandbox's own home, as `apply` sets it; without a
+    /// sandbox, the process's `HOME`, else the account's home.
+    func home(for sandbox: Sandbox?) -> String {
+        guard let sandbox else {
+            if let home = ProcessInfo.processInfo.environment["HOME"], !home.isEmpty { return home }
+            return NSHomeDirectory()
+        }
+        if let home = Shell.current.environment.variables["HOME"], !home.isEmpty { return home }
+        return sandbox.homeDirectory.path
+    }
+
+    /// The XDG config directory git uses for `sandbox`: the shell's
+    /// `XDG_CONFIG_HOME` under a sandbox (as `apply` sets it), else the
+    /// process's, else `<home>/.config`.
+    func xdgConfigHome(for sandbox: Sandbox?) -> String {
+        let variable = sandbox != nil
+            ? Shell.current.environment.variables["XDG_CONFIG_HOME"]
+            : ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
+        if let xdg = variable, !xdg.isEmpty { return xdg }
+        return home(for: sandbox) + "/.config"
+    }
+
+    /// The directory of the global `.gitconfig` libgit2 currently looks
+    /// in: the sandbox's, or the process's home when no sandbox is applied.
+    /// Read inside ``runIsolated(_:body:)``.
+    var globalHome: String { lastApplied?.home ?? NSHomeDirectory() }
+
     /// Apply the sandbox's env→option mapping and run `body` while
     /// the lock is held. Releases the lock when `body` returns. The
     /// caller's body should perform the libgit2 repo open inside it
@@ -144,34 +172,34 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
     // MARK: - Thin wrappers around CLibgit2Shim
 
     private func setSearchPath(level: Int32, path: String) throws {
-        let rc = path.withCString { swiftports_libgit2_set_search_path(level, $0) }
-        if rc != 0 {
+        let result = path.withCString { swiftports_libgit2_set_search_path(level, $0) }
+        if result != 0 {
             throw Libgit2SandboxingError.optionSetFailed(
-                option: "SET_SEARCH_PATH(\(level))", rc: rc)
+                option: "SET_SEARCH_PATH(\(level))", rc: result)
         }
     }
 
     private func resetSearchPath(level: Int32) throws {
-        let rc = swiftports_libgit2_set_search_path(level, nil)
-        if rc != 0 {
+        let result = swiftports_libgit2_set_search_path(level, nil)
+        if result != 0 {
             throw Libgit2SandboxingError.optionSetFailed(
-                option: "SET_SEARCH_PATH(\(level)) reset", rc: rc)
+                option: "SET_SEARCH_PATH(\(level)) reset", rc: result)
         }
     }
 
     private func setHomedir(path: String) throws {
-        let rc = path.withCString { swiftports_libgit2_set_homedir($0) }
-        if rc != 0 {
+        let result = path.withCString { swiftports_libgit2_set_homedir($0) }
+        if result != 0 {
             throw Libgit2SandboxingError.optionSetFailed(
-                option: "SET_HOMEDIR", rc: rc)
+                option: "SET_HOMEDIR", rc: result)
         }
     }
 
     private func resetHomedir() throws {
-        let rc = swiftports_libgit2_set_homedir(nil)
-        if rc != 0 {
+        let result = swiftports_libgit2_set_homedir(nil)
+        if result != 0 {
             throw Libgit2SandboxingError.optionSetFailed(
-                option: "SET_HOMEDIR reset", rc: rc)
+                option: "SET_HOMEDIR reset", rc: result)
         }
     }
 
