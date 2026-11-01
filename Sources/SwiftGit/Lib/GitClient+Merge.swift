@@ -244,24 +244,50 @@ extension GitClient {
         let title = patterns.contains(where: { Self.glob($0, matches: branch) })
             ? subject : subject + " into " + branch
         // Annotated tags' messages follow, as fmt_merge_msg_sigs adds
-        // them (signatures left out): one alone, several each under a
-        // comment naming it, an empty message too.
+        // them: one alone, several each under a comment naming it, an
+        // empty message too. A signed tag's signature follows its message
+        // commented out, with what the OpenPGP program said of it.
+        let commentSetting = try await configList()
+            .last { ["core.commentchar", "core.commentstring"].contains($0.name.lowercased()) }?.value
+        let comment = commentSetting.flatMap { $0.isEmpty || $0.lowercased() == "auto" ? nil : $0 } ?? "#"
         var tags: [(origin: String, message: String)] = []
         for (origin, object) in zip(origins, objects) where origin.hasPrefix("tag '") {
-            if let message = try await annotatedTagMessage(object) { tags.append((origin, message)) }
+            guard var message = try await annotatedTagMessage(object) else { continue }
+            if let signature = try await verifiedSignatureBlock(object) {
+                if !message.isEmpty { message += "\n\n" }
+                message += Self.commentedLines(signature, with: comment)
+                while message.hasSuffix("\n") { message.removeLast() }
+            }
+            tags.append((origin, message))
         }
         guard tags.count > 1 else {
             guard let message = tags.first?.message, !message.isEmpty else { return title }
             return title + "\n\n" + message
         }
-        let commentSetting = try await configList()
-            .last { ["core.commentchar", "core.commentstring"].contains($0.name.lowercased()) }?.value
-        let comment = commentSetting.flatMap { $0.isEmpty || $0.lowercased() == "auto" ? nil : $0 } ?? "#"
         // Sections a blank line apart, each its comment then its message.
         let sections = tags.map { "\(comment) \($0.origin)\n" + ($0.message.isEmpty ? "" : $0.message + "\n") }
         var text = title + "\n\n" + sections.joined(separator: "\n")
         while text.hasSuffix("\n") { text.removeLast() }
         return text
+    }
+
+    /// The signature of tag object `oid` as git's `fmt_merge_msg_sigs` has
+    /// it: the signature's own lines, then what the OpenPGP program said
+    /// of it, or `gpg verification failed.` when the check couldn't say
+    /// anything. `nil` for an unsigned tag.
+    func verifiedSignatureBlock(_ oid: String) async throws -> String? {
+        guard let signed = try await signedObject(oid), !signed.signature.isEmpty else { return nil }
+        let check = try await checkSignature(signed)
+        return String(decoding: signed.signature, as: UTF8.self) + (check.output ?? "gpg verification failed.\n")
+    }
+
+    /// `text` as comment lines, git's `strbuf_add_commented_lines`: each
+    /// line led by `comment` and a space, unless it is empty or starts
+    /// with a tab, and the last line ended.
+    static func commentedLines(_ text: String, with comment: String) -> String {
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        if text.hasSuffix("\n") { lines.removeLast() }
+        return lines.map { comment + ($0.isEmpty || $0.hasPrefix("\t") ? "" : " ") + $0 + "\n" }.joined()
     }
 
     /// Whether the index holds unmerged entries, which git's `merge` and

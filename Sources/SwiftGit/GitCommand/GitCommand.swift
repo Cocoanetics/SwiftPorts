@@ -35,6 +35,7 @@ public struct GitCommand: AsyncParsableCommand {
             RemoteCommand.self,
             Branch.self,
             Tag.self,
+            VerifyTag.self,
             RevParse.self,
             Show.self,
             Mv.self,

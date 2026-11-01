@@ -93,6 +93,14 @@ struct Merge: AsyncParsableCommand {
             return
         }
 
+        // A tag's message, and a signed tag's verification, follow the
+        // title git writes.
+        var message = self.message
+        if message == nil, (try? await client.mergeName(ref))?.hasPrefix("tag '") == true,
+           let oid = try? await client.resolveOID(ref) {
+            message = try await client.mergeMessage(describing: [client.mergeName(ref)], objects: [oid])
+        }
+
         let outcome: MergeOutcome
         do {
             outcome = try await client.merge(
