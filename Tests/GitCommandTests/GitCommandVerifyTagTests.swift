@@ -181,6 +181,20 @@ struct GitCommandVerifyTagTests {
         }
     }
 
+    @Test("merge of a signed tag that fast-forwards or is merged already launches no verifier")
+    func mergeSignedTagWithoutMergeCommit() async throws {
+        let repo = try makeRepo(program: nil)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try systemGit(["config", "gpg.program", "/nonexistent/gpg"], in: repo)
+        try systemGit(["checkout", "-q", "-B", "ff", "main~1"], in: repo)
+        // `v1` is a commit ahead of `main~1`'s fork point, which `ff` is.
+        try systemGit(["checkout", "-q", "-B", "behind", "v1~1"], in: repo)
+        let forward = try await git(["merge", "v1"], in: repo)
+        #expect(!forward.stderr.contains("cannot exec"))
+        let again = try await git(["merge", "v1"], in: repo)
+        #expect(!again.stderr.contains("cannot exec"))
+    }
+
     @Test("merge of a signed tag: the message carries the signature and verification, commented")
     func mergeSingleSignedTag() async throws {
         let repo = try makeRepo(program: try fakeGPG(stderr: "gpg: Good signature", status: Self.good))

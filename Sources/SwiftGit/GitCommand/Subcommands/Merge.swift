@@ -94,10 +94,12 @@ struct Merge: AsyncParsableCommand {
         }
 
         // A tag's message, and a signed tag's verification, follow the
-        // title git writes.
+        // title git writes, once a merge commit is to be made: not for a
+        // fast-forward or a merge already done, which launch no verifier.
         var message = self.message
         if message == nil, (try? await client.mergeName(ref))?.hasPrefix("tag '") == true,
-           let oid = try? await client.resolveOID(ref) {
+           let oid = try? await client.resolveOID(ref),
+           try await Self.makesMergeCommit(ref, mode: mode, client: client) {
             message = try await client.mergeMessage(describing: [client.mergeName(ref)], objects: [oid])
         }
 
@@ -120,6 +122,17 @@ struct Merge: AsyncParsableCommand {
         } else if case .conflicts = outcome {
             try Self.printOutcome(outcome)
         }
+    }
+
+    /// Whether merging `ref` makes a merge commit: always with `--no-ff`
+    /// (unless already merged), otherwise only when neither side contains
+    /// the other.
+    static func makesMergeCommit(_ ref: String, mode: FastForwardMode, client: SwiftGit.GitClient) async throws -> Bool {
+        guard let head = try? await client.resolveOID("HEAD"),
+              let target = try? await client.resolveOID(ref + "^{commit}"),
+              let base = try? await client.mergeBase(head, target) else { return false }
+        if base == target { return false }
+        return mode == .never || base != head
     }
 
     /// Merge what's left of several heads once ``GitClient/mergeHeads(reducing:)``
