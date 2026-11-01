@@ -434,9 +434,11 @@ let package = Package(
         // --force-with-lease` and `git fetch --tags`/`--no-tags` need.
         // GitKit 2.8.0's octopus merge (`octopusMerge`,
         // `mergeHeads(reducing:)`, `mergeName`) is what
-        // `git merge <a> <b>…` and an octopus `git pull` run on.
+        // `git merge <a> <b>…` and an octopus `git pull` run on. GitKit 2.9.0's
+        // `ConfigIncludePolicy` lets the sandbox authorise each `[include]`
+        // file libgit2 opens, and set/unset look at the file written only.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.8.0",
+                 from: "2.9.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
