@@ -2,7 +2,7 @@ import Foundation
 import CGitKit
 import ShellKit
 
-// OpenPGP verification of signed tags, after git's `gpg-interface.c`
+// OpenPGP (and, in `GitClient+VerifySSH.swift`, SSH) verification of signed tags, after git's `gpg-interface.c`
 // (`parse_signature`, `check_signature`, `verify_gpg_signed_buffer`) and
 // `tag.c` (`gpg_verify_tag`). The signature goes through the configured
 // OpenPGP program (`gpg.program` / `gpg.openpgp.program`), launched
@@ -120,18 +120,17 @@ extension GitClient {
     func checkSignature(_ signed: SignedObject) async throws -> SignatureCheck {
         let payload = signed.payload
         let failed = SignatureCheck(payload: payload, status: "", output: nil, succeeded: false)
-        // A signature in another format is not one this port verifies;
-        // never taken for a good one.
-        let signature = String(decoding: signed.signature, as: UTF8.self)
-        guard signature.hasPrefix("-----BEGIN PGP SIGNATURE-----")
-            || signature.hasPrefix("-----BEGIN PGP MESSAGE-----")
-        else {
-            let format = signature.hasPrefix("-----BEGIN SSH SIGNATURE-----") ? "ssh" : "x509"
-            Shell.current.stderr.write("error: \(format) signature verification is not supported\n")
-            return failed
-        }
         // The signer comes from the tagger header.
         let headers = String(decoding: payload, as: UTF8.self).components(separatedBy: "\n\n")[0]
+        let signature = String(decoding: signed.signature, as: UTF8.self)
+        let isSSH = signature.hasPrefix("-----BEGIN SSH SIGNATURE-----")
+        // An x509 signature is not one this port verifies; never taken
+        // for a good one.
+        if !isSSH && !signature.hasPrefix("-----BEGIN PGP SIGNATURE-----")
+            && !signature.hasPrefix("-----BEGIN PGP MESSAGE-----") {
+            Shell.current.stderr.write("error: x509 signature verification is not supported\n")
+            return failed
+        }
         guard let tagger = headers.split(separator: "\n").first(where: { $0.hasPrefix("tagger ") }),
               let open = tagger.firstIndex(of: "<"), tagger[open...].contains(">")
         else { return failed }
@@ -154,6 +153,18 @@ extension GitClient {
             }
         }
 
+        if isSSH {
+            let timestamp = tagger[tagger.index(after: tagger[open...].firstIndex(of: ">")!)...]
+                .split(separator: " ").first.flatMap { Int($0) } ?? 0
+            let run = await runSSHVerifier(config: config, payload: payload, signature: signed.signature,
+                                           timestamp: timestamp)
+            guard let output = run.output else {
+                return SignatureCheck(payload: payload, status: "", output: nil, succeeded: false)
+            }
+            let (result, trust) = Self.parseSSHOutput(output)
+            let failure = run.failed || (result != "G" && result != "Y") || trust < minimumTrust
+            return SignatureCheck(payload: payload, status: output, output: output, succeeded: !failure)
+        }
         let run = try await runVerifier(program, payload: payload, signature: signed.signature)
         // git needs a status line to start with a newline, and a good
         // signature among them, whatever the program's exit status.
@@ -201,7 +212,7 @@ extension GitClient {
     }
 
     /// What running the verifier came to.
-    private struct VerifierRun {
+    struct VerifierRun {
         var failed: Bool
         var status: String
         var output: String?
@@ -214,8 +225,45 @@ extension GitClient {
     /// with nothing said by the program: git's output is empty then, and
     /// a merge message gets no `gpg verification failed.` line.
     private func runVerifier(_ program: String, payload: Data, signature: Data) async throws -> VerifierRun {
-        let shell = Shell.current
         let unlaunched = VerifierRun(failed: true, status: "", output: "")
+        guard let file = writeSignatureFile(signature) else {
+            return VerifierRun(failed: true, status: "", output: nil)
+        }
+        defer { try? FileManager.default.removeItem(at: file) }
+        guard let run = await launch(
+            program, ["--keyid-format=long", "--status-fd=1", "--verify", file.path, "-"], input: payload)
+        else { return unlaunched }
+        return VerifierRun(failed: !run.succeeded, status: run.stdout, output: run.stderr)
+    }
+
+    /// The detached signature in a temporary file, as git writes it for
+    /// the program to read; `nil` (and said) when it can't be written,
+    /// where git gives up before any program runs.
+    func writeSignatureFile(_ signature: Data) -> URL? {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent(".git_vtag_tmp" + UUID().uuidString.prefix(6))
+        do {
+            try signature.write(to: file)
+            return file
+        } catch {
+            Shell.current.stderr.write("error: could not create temporary file: \(error.localizedDescription)\n")
+            return nil
+        }
+    }
+
+    /// What one launched program printed and whether it exited 0.
+    struct ProgramRun {
+        var succeeded: Bool
+        var stdout: String
+        var stderr: String
+    }
+
+    /// git's `pipe_command` for `program`: found as git finds it (a path
+    /// as given, a bare name on the shell's `PATH`) and launched through
+    /// the shell's `ProcessLauncher`. `nil`, with git's message on
+    /// stderr, when it can't be started.
+    func launch(_ program: String, _ arguments: [String], input: Data) async -> ProgramRun? {
+        let shell = Shell.current
         let executable: Executable
         #if os(Windows)
         let separators: Set<Character> = ["/", "\\"]
@@ -229,11 +277,11 @@ extension GitClient {
             let url = URL(fileURLWithPath: program, relativeTo: workingDirectory)
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
                 shell.stderr.write("fatal: cannot exec '\(program)': No such file or directory\n")
-                return unlaunched
+                return nil
             }
             guard !isDirectory.boolValue, FileManager.default.isExecutableFile(atPath: url.path) else {
                 shell.stderr.write("fatal: cannot exec '\(program)': Permission denied\n")
-                return unlaunched
+                return nil
             }
             executable = .path(url.path)
         } else {
@@ -265,37 +313,25 @@ extension GitClient {
             }
             guard found != nil else {
                 shell.stderr.write("error: cannot run \(program): \(reason)\n")
-                return unlaunched
+                return nil
             }
             executable = .name(program)
         }
-
-        // The program reads the signature from a file, as git writes it.
-        let file = FileManager.default.temporaryDirectory
-            .appendingPathComponent(".git_vtag_tmp" + UUID().uuidString.prefix(6))
-        do {
-            try signature.write(to: file)
-        } catch {
-            // git gives up before the program runs, its output still unset.
-            shell.stderr.write("error: could not create temporary file: \(error.localizedDescription)\n")
-            return VerifierRun(failed: true, status: "", output: nil)
-        }
-        defer { try? FileManager.default.removeItem(at: file) }
 
         let out = CapturedOutput(), err = CapturedOutput()
         do {
             let record = try await shell.processLauncher.launch(
                 executable,
-                arguments: Arguments(["--keyid-format=long", "--status-fd=1", "--verify", file.path, "-"]),
+                arguments: Arguments(arguments),
                 environment: shell.environment,
                 workingDirectory: workingDirectory.path,
-                input: .data(payload),
+                input: .data(input),
                 output: out.sink, error: err.sink)
             // Hosts that stream (SwiftBash) fill the sinks, the default
             // launcher the record too.
-            let status = out.text.isEmpty ? String(decoding: record.standardOutput, as: UTF8.self) : out.text
-            let output = err.text.isEmpty ? String(decoding: record.standardError, as: UTF8.self) : err.text
-            return VerifierRun(failed: !record.terminationStatus.isSuccess, status: status, output: output)
+            let stdout = out.text.isEmpty ? String(decoding: record.standardOutput, as: UTF8.self) : out.text
+            let stderr = err.text.isEmpty ? String(decoding: record.standardError, as: UTF8.self) : err.text
+            return ProgramRun(succeeded: record.terminationStatus.isSuccess, stdout: stdout, stderr: stderr)
         } catch let denied as ProcessLaunchDenied {
             shell.stderr.write("error: cannot run \(program): Operation not permitted (\(denied.reason))\n")
         } catch is ProcessLaunchUnsupportedOnThisPlatform {
@@ -303,12 +339,12 @@ extension GitClient {
         } catch {
             shell.stderr.write("error: cannot run \(program): \(error.localizedDescription)\n")
         }
-        return unlaunched
+        return nil
     }
 }
 
 /// An output sink that keeps what is written to it.
-private final class CapturedOutput: @unchecked Sendable {
+final class CapturedOutput: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
     // Weak: the sink keeps this closure for its lifetime, and `self`

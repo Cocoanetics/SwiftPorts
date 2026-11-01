@@ -246,7 +246,7 @@ extension GitClient {
         // Annotated tags' messages follow, as fmt_merge_msg_sigs adds
         // them: one alone, several each under a comment naming it, an
         // empty message too. A signed tag's signature follows its message
-        // commented out, with what the OpenPGP program said of it.
+        // commented out, with what the verifying program said of it.
         let commentSetting = try await configList()
             .last { ["core.commentchar", "core.commentstring"].contains($0.name.lowercased()) }?.value
         let comment = commentSetting.flatMap { $0.isEmpty || $0.lowercased() == "auto" ? nil : $0 } ?? "#"
@@ -272,7 +272,7 @@ extension GitClient {
     }
 
     /// The signature of tag object `oid` as git's `fmt_merge_msg_sigs` has
-    /// it: the signature's own lines, then what the OpenPGP program said
+    /// it: the signature's own lines, then what the verifying program said
     /// of it (nothing when it couldn't be run), or `gpg verification
     /// failed.` when no program was tried, as for a payload with no
     /// tagger to name the signer. `nil` for an unsigned tag.
