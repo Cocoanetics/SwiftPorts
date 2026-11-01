@@ -96,7 +96,7 @@ extension GitClient {
             }
         }
         try await Shell.authorize(workingDirectory)
-        let inRepository: [ListedConfigEntry]? = try await isolated {
+        let inRepository: [ListedConfigEntry]? = try await isolatedGated {
             var repo: OpaquePointer?
             var config: OpaquePointer?
             defer {

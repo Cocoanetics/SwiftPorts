@@ -254,7 +254,9 @@ The shell's `HOME`, `XDG_CONFIG_HOME`, `GIT_CONFIG_GLOBAL`,
   true. A sandbox reads it only inside its root (or with
   `allowsHostSystemConfig`); a file a sandbox may not read is left out, as the
   host's own is. A `GIT_CONFIG_GLOBAL` file outside the root is a denial
-  (`/dev/null` excepted), as is one with `[include]` sections.
+  (`/dev/null` excepted). Each `[include]` / `[includeIf]` path libgit2 opens
+  is authorised through the sandbox (GitKit 2.9.0); a path outside the root
+  is a denial.
 - `GIT_CONFIG_COUNT` entries are the highest level, shown by `--show-origin`
   as `command line:`. What git can't parse stops the command with git's
   `fatal: unable to parse command-line config`.

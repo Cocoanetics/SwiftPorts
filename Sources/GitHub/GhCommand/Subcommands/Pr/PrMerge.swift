@@ -29,6 +29,14 @@ struct PrMerge: AsyncParsableCommand {
           help: "Rebase commits onto the base branch.")
     var rebase: Bool = false
 
+    @Flag(name: .customLong("auto"),
+          help: "Automatically merge only after necessary requirements are met.")
+    var auto: Bool = false
+
+    @Flag(name: .customLong("disable-auto"),
+          help: "Disable auto-merge for this pull request.")
+    var disableAuto: Bool = false
+
     @Option(name: .customLong("subject"),
             help: "Override the commit subject for merge/squash.")
     var commitTitle: String?
@@ -37,24 +45,40 @@ struct PrMerge: AsyncParsableCommand {
             help: "Override the commit body for merge/squash.")
     var commitMessage: String?
 
-    func run() async throws {
-        let target = try await RepositoryResolver.resolve(flag: repo)
+    func validate() throws {
         let methodCount = [merge, squash, rebase].filter { $0 }.count
         if methodCount > 1 {
             throw ValidationError("Specify only one of --merge / --squash / --rebase.")
         }
+        if auto && disableAuto {
+            throw ValidationError("Specify only one of --auto or --disable-auto.")
+        }
+    }
+
+    func run() async throws {
+        let target = try await RepositoryResolver.resolve(flag: repo)
+        let api = try await CommandContext.apiClient()
+        let gql = try await CommandContext.graphQLClient()
+        try await run(target: target, api: api, gql: gql)
+    }
+
+    func run(target: RepositoryReference, api: APIClient, gql: GraphQLClient) async throws {
+        try validate()
         let method: PullRequestMergeRequest.MergeMethod?
         if squash { method = .squash }
         else if rebase { method = .rebase }
         else if merge { method = .merge }
         else { method = nil }   // defer to repo's default merge method
 
+        if auto || disableAuto {
+            if try await configureAutoMerge(target: target, gql: gql, method: method) { return }
+        }
+
         let request = PullRequestMergeRequest(
             commitTitle: commitTitle,
             commitMessage: commitMessage,
             mergeMethod: method)
-        let client = try await CommandContext.apiClient()
-        let response: PullRequestMergeResponse = try await client.send(
+        let response: PullRequestMergeResponse = try await api.send(
             method: .put,
             path: "repos/\(target.slug)/pulls/\(number)/merge",
             body: request)

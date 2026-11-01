@@ -104,25 +104,13 @@ extension GitClient {
         return plan
     }
 
-    /// Runs `body` with libgit2's options set to the shell's view, the
-    /// environment's config overrides included (see ``environmentConfig()``).
-    func isolated<T>(_ body: () throws -> T) async throws -> T {
-        let plan = try await environmentConfig()
-        return try Libgit2Sandboxing.shared.runIsolated(
-            Shell.current.sandbox, environment: plan, body: body)
-    }
-
     /// A file the environment names is the user's pick, not libgit2's
-    /// search: it must be allowed, and in a sandbox hold no `[include]`.
+    /// search: it must be allowed. `[include]` files it opens are gated
+    /// by ``isolatedGated`` / ``ConfigIncludeGate``.
     private func authorizeOverride(_ resolved: String) async throws {
         // Reads as an empty config; nothing of the host's is in it.
         guard resolved != "/dev/null" else { return }
         try await Shell.authorize(URL(fileURLWithPath: resolved))
-        if Shell.current.sandbox != nil, Self.hasIncludes(resolved) {
-            throw Sandbox.Denial(
-                url: URL(fileURLWithPath: resolved),
-                reason: "git config: a config file with [include] sections is not read in a sandbox")
-        }
     }
 
     // MARK: GIT_CONFIG_COUNT

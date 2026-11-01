@@ -54,7 +54,7 @@ extension GitClient {
             try await Self.authorize(location: location)
             return RemoteConnection(remote: remote, location: location)
         }
-        let rewritten = try await isolated {
+        let rewritten = try await isolatedGated {
             try Self.effectiveLocation(of: remote, for: use, in: workingDirectory)
         }
         let location = Self.connectionLocation(of: rewritten, relativeTo: top)
@@ -210,7 +210,7 @@ extension GitClient {
         for use: RemoteUse = .fetch, in repository: URL? = nil
     ) async throws -> String {
         func location(of spelling: String) async throws -> String {
-            try await isolated {
+            try await isolatedGated {
                 try Self.effectiveLocation(of: spelling, for: use, in: repository)
             }
         }
@@ -393,7 +393,7 @@ extension GitClient {
         }
         try await Shell.authorize(destination)
         let progress = shellProgressSink()
-        try await isolated {
+        try await isolatedGated {
             _ = try Repository.clone(
                 fromRemote: source, to: destination,
                 depth: depth, singleBranch: singleBranch, branch: branch,

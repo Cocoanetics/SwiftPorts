@@ -131,10 +131,10 @@ extension GitClient {
             throw GitDiagnosticError(lines: ["fatal: $HOME not set"], exitCode: 128)
         }
         try await authorizeConfigFile(of: scope, writing: missing == .create || missing == .emptyForWrite)
-        return try await isolated {
-            // A scope's own file is opened by itself: the default config
-            // would parse the files it supersedes (a bad ~/.gitconfig
-            // under GIT_CONFIG_GLOBAL) as well.
+        // A scope's own file is opened by itself: the default config
+        // would parse the files it supersedes (a bad ~/.gitconfig
+        // under GIT_CONFIG_GLOBAL) as well.
+        return try await isolatedGated {
             guard let scope, scope != .local else {
                 // Libgit2Sandboxing has switched off the levels the
                 // environment replaces; its files and entries come in here.
@@ -156,33 +156,12 @@ extension GitClient {
     private func authorizeConfigFile(of scope: ConfigScope?, writing: Bool) async throws {
         guard scope != .local else { return }
         try await authorizeSelectedFile(of: scope, writing: writing)
-        guard Shell.current.sandbox != nil else { return }
-        // An unscoped read reads both global files (the XDG one too), or
-        // the one GIT_CONFIG_GLOBAL names, which `environmentConfig()` let in.
-        var files = [Self.configFilePath(scope ?? .global)]
-        if scope == nil {
-            if Self.configFileOverride(.global) != nil {
-                files = []
-            } else {
-                let sandbox = Shell.current.sandbox
-                let xdg = Libgit2Sandboxing.shared.xdgConfigHome(for: sandbox) + "/git/config"
-                try await Shell.authorize(URL(fileURLWithPath: xdg))
-                files = [Libgit2Sandboxing.shared.home(for: sandbox) + "/.gitconfig", xdg]
-            }
-        }
-        for file in files where Self.hasIncludes(location(of: file)) {
-            throw Sandbox.Denial(
-                url: URL(fileURLWithPath: file),
-                reason: "git config: a config file with [include] sections is not read in a sandbox")
-        }
-    }
-
-    /// Whether the file has an `[include]` or `[includeIf ...]` section. A
-    /// plain look for the header, not a parse: it can't disagree with
-    /// libgit2 about where an include points, which is the point.
-    static func hasIncludes(_ file: String) -> Bool {
-        guard let text = try? String(contentsOfFile: file, encoding: .utf8) else { return false }
-        return text.lowercased().contains("[include")
+        // An unscoped read also touches the XDG file; GIT_CONFIG_GLOBAL
+        // stands in for both home files (authorised by `environmentConfig()`).
+        guard Shell.current.sandbox != nil, scope == nil else { return }
+        guard Self.configFileOverride(.global) == nil else { return }
+        let xdg = Libgit2Sandboxing.shared.xdgConfigHome(for: Shell.current.sandbox) + "/git/config"
+        try await Shell.authorize(URL(fileURLWithPath: xdg))
     }
 
     private func authorizeSelectedFile(of scope: ConfigScope?, writing: Bool) async throws {
