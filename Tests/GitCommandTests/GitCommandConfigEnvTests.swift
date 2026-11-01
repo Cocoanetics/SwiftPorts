@@ -329,6 +329,22 @@ struct GitCommandConfigEnvTests: ConfigTestHelpers {
         }
     }
 
+    @Test("inside a sandbox the XDG file is read from $XDG_CONFIG_HOME/git, or ~/.config/git")
+    func sandboxedXDGConfig() async throws {
+        guard Self.hasRealGit else { return }
+        let fixture = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try write("[x]\n\tk = v\n", to: fixture.home.appendingPathComponent(".config/git/config"))
+        let elsewhere = fixture.root.appendingPathComponent("xdg")
+        try write("[y]\n\tk = w\n", to: elsewhere.appendingPathComponent("git/config"))
+        try initRepository(fixture.work, home: fixture.home)
+        try await expectSame(["config", "--list", "--show-origin"], fixture, sandboxed: true)
+        try await expectSame(["config", "x.k"], fixture, sandboxed: true)
+        let environment = ["XDG_CONFIG_HOME": elsewhere.path]
+        try await expectSame(["config", "--list", "--show-origin"], fixture, environment: environment, sandboxed: true)
+        try await expectSame(["config", "y.k"], fixture, environment: environment, sandboxed: true)
+    }
+
     @Test("without a sandbox the shell's HOME, not the process's, names the home files")
     func shellHomeWithoutSandbox() async throws {
         guard Self.hasRealGit else { return }
