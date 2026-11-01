@@ -27,11 +27,17 @@ struct GitCommandConfigFileTests: ConfigTestHelpers {
 
         // An explicit --system ignores GIT_CONFIG_NOSYSTEM, which the
         // helper sets: listing the missing file is still git's error.
-        let list = try await git(["config", "--system", "--list"], root: root, home: home, work: work)
+        // (Unsandboxed: a sandbox refuses to read the host's system file.)
+        let list = try await git(["config", "--system", "--list"], root: root, home: home, work: work,
+                                 sandboxed: false)
         #expect(list.stderr == "fatal: unable to read config file '/etc/gitconfig': No such file or directory\n")
         #expect(list.status == 128)
-        let get = try await git(["config", "--system", "--get", "a.b"], root: root, home: home, work: work)
+        let get = try await git(["config", "--system", "--get", "a.b"], root: root, home: home, work: work,
+                                sandboxed: false)
         #expect(get.status == 1)
+        await #expect(throws: Sandbox.Denial.self) {
+            try await self.git(["config", "--system", "--get", "a.b"], root: root, home: home, work: work)
+        }
     }
 
     @Test("a sandbox refuses to change the host's system config")
