@@ -174,14 +174,17 @@ extension GitClient {
     }
 
     private func authorizeSelectedFile(of scope: ConfigScope?, writing: Bool) async throws {
-        if let scope, let named = Self.configFileOverride(scope), !named.isEmpty {
-            try await Shell.authorize(URL(fileURLWithPath: location(of: named)))
-        } else if scope == .system {
-            // A sandbox reads the host's system file only when the embedder
-            // allows it; changing it is always the sandbox's business.
-            let system = Self.systemConfigPath()
+        if scope == .system {
+            // A sandbox reads the host's system file (the default one, or the
+            // one GIT_CONFIG_SYSTEM names) only when the embedder allows it;
+            // changing it is always the sandbox's business.
+            let system = Self.configFilePath(.system)
             let reading = Shell.current.sandbox != nil && !GitSandboxPolicy.allowsHostSystemConfig
-            if writing || reading, !system.isEmpty { try await Shell.authorize(URL(fileURLWithPath: system)) }
+            if writing || reading, !system.isEmpty {
+                try await Shell.authorize(URL(fileURLWithPath: location(of: system)))
+            }
+        } else if let scope, let named = Self.configFileOverride(scope), !named.isEmpty {
+            try await Shell.authorize(URL(fileURLWithPath: location(of: named)))
         } else {
             let home = Libgit2Sandboxing.shared.home(for: Shell.current.sandbox)
             try await Shell.authorize(URL(fileURLWithPath: home).appendingPathComponent(".gitconfig"))

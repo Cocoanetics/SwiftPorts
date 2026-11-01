@@ -117,5 +117,34 @@ struct SandboxSystemConfigPolicyTests {
             }
         }
     }
+
+    @Test func namedSystemFileHonorsOptInForReads() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var env = Environment()
+        env.variables = ["HOME": fixture.repo.path,
+                         "GIT_CONFIG_SYSTEM": fixture.system.appendingPathComponent("gitconfig").path]
+        // The named file is outside the sandbox root.
+        let shell = Shell(environment: env, sandbox: Sandbox.rooted(at: fixture.repo))
+        await #expect(throws: (any Error).self) {
+            try await shell.withCurrent {
+                _ = try await GitClient(workingDirectory: fixture.repo).configGet(Self.key, scope: .system)
+            }
+        }
+        let value = try await shell.withCurrent {
+            try await GitSandboxPolicy.$allowsHostSystemConfig.withValue(true) {
+                try await GitClient(workingDirectory: fixture.repo).configGet(Self.key, scope: .system)
+            }
+        }
+        #expect(value == "host")
+        // Writes stay authorized.
+        await #expect(throws: (any Error).self) {
+            try await shell.withCurrent {
+                try await GitSandboxPolicy.$allowsHostSystemConfig.withValue(true) {
+                    try await GitClient(workingDirectory: fixture.repo).configSet(Self.key, "x", scope: .system)
+                }
+            }
+        }
+    }
 }
 #endif
