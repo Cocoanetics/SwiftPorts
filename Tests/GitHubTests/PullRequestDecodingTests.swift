@@ -23,7 +23,7 @@ import Testing
             "enabled_by": try #require(json["user"]),
             "merge_method": method,
             "commit_title": "Merge when ready",
-            "commit_message": "Required checks must pass",
+            "commit_message": "Required checks must pass"
         ]
         let pr = try JSONDecoder.gitHub().decode(
             PullRequest.self, from: JSONSerialization.data(withJSONObject: json))
@@ -57,7 +57,7 @@ import Testing
         var json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         var autoMerge: [String: Any] = [
             "enabled_by": try #require(json["user"]),
-            "merge_method": "squash",
+            "merge_method": "squash"
         ]
         if explicitNull {
             autoMerge["commit_title"] = NSNull()
