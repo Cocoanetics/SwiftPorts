@@ -61,7 +61,8 @@ struct GitCommandConfigEnvTests: ConfigTestHelpers {
             args, root: fixture.root, home: fixture.home, work: fixture.work,
             environment: environment, sandboxed: sandboxed)
         let theirs = try real(args, home: fixture.home, work: fixture.work, environment: environment)
-        #expect(ours.stdout == theirs.stdout, "git \(args.joined(separator: " ")) \(environment) sandboxed: \(sandboxed)",
+        #expect(ours.stdout == theirs.stdout,
+                "git \(args.joined(separator: " ")) \(environment) sandboxed: \(sandboxed)",
                 sourceLocation: sourceLocation)
         #expect(ours.status == theirs.status, "status of git \(args.joined(separator: " ")) \(environment)",
                 sourceLocation: sourceLocation)
@@ -256,7 +257,7 @@ struct GitCommandConfigEnvTests: ConfigTestHelpers {
             "GIT_CONFIG_COUNT": "3",
             "GIT_CONFIG_KEY_0": "user.name", "GIT_CONFIG_VALUE_0": "Count",
             "GIT_CONFIG_KEY_1": "Core.Whatever", "GIT_CONFIG_VALUE_1": "a=b",
-            "GIT_CONFIG_KEY_2": "remote.Origin.url", "GIT_CONFIG_VALUE_2": "",
+            "GIT_CONFIG_KEY_2": "remote.Origin.url", "GIT_CONFIG_VALUE_2": ""
         ]
 
         // Outside a repository, then in one (where core.* of its own sits below them).
@@ -305,7 +306,7 @@ struct GitCommandConfigEnvTests: ConfigTestHelpers {
             ["GIT_CONFIG_COUNT": " 1"],
             ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": ".b", "GIT_CONFIG_VALUE_0": "1"],
             ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a b.c", "GIT_CONFIG_VALUE_0": "1"],
-            ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a.1b", "GIT_CONFIG_VALUE_0": "1"],
+            ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a.1b", "GIT_CONFIG_VALUE_0": "1"]
         ]
         for environment in cases {
             let ours = try await git(
@@ -381,7 +382,7 @@ struct GitCommandConfigEnvTests: ConfigTestHelpers {
             let count = [
                 "GIT_CONFIG_GLOBAL": named.path, "GIT_CONFIG_COUNT": "2",
                 "GIT_CONFIG_KEY_0": "user.name", "GIT_CONFIG_VALUE_0": "Count",
-                "GIT_CONFIG_KEY_1": "user.email", "GIT_CONFIG_VALUE_1": "count@example.com",
+                "GIT_CONFIG_KEY_1": "user.email", "GIT_CONFIG_VALUE_1": "count@example.com"
             ]
             #expect(try await commit("count-\(tag)", environment: count, sandboxed: sandboxed)
                     == "Count <count@example.com> / Count <count@example.com>\n")

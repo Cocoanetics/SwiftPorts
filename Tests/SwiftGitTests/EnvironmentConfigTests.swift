@@ -34,7 +34,7 @@ struct EnvironmentConfigTests {
             "GIT_CONFIG_KEY_1": "Remote.Origin.URL", "GIT_CONFIG_VALUE_1": "",
             "GIT_CONFIG_KEY_2": "a.b.c", "GIT_CONFIG_VALUE_2": "v",
             // Past the count: not read.
-            "GIT_CONFIG_KEY_3": "x.y", "GIT_CONFIG_VALUE_3": "z",
+            "GIT_CONFIG_KEY_3": "x.y", "GIT_CONFIG_VALUE_3": "z"
         ])
         #expect(entries == ["user.name=A=B", "remote.Origin.url=", "a.b.c=v"])
     }
@@ -131,9 +131,11 @@ struct EnvironmentConfigTests {
             let client = GitClient(workingDirectory: directory)
             try await client.isolatedGated {
                 var buffer = [CChar](repeating: 0, count: 1024)
-                #expect(swiftports_libgit2_get_search_path(Int32(GIT_CONFIG_LEVEL_GLOBAL.rawValue), &buffer, buffer.count) == 0)
+                let global = Int32(GIT_CONFIG_LEVEL_GLOBAL.rawValue)
+                let xdg = Int32(GIT_CONFIG_LEVEL_XDG.rawValue)
+                #expect(swiftports_libgit2_get_search_path(global, &buffer, buffer.count) == 0)
                 #expect(String(cString: buffer) == directory.path)
-                #expect(swiftports_libgit2_get_search_path(Int32(GIT_CONFIG_LEVEL_XDG.rawValue), &buffer, buffer.count) == 0)
+                #expect(swiftports_libgit2_get_search_path(xdg, &buffer, buffer.count) == 0)
                 #expect(String(cString: buffer) == directory.path + "/.config/git")
             }
         }

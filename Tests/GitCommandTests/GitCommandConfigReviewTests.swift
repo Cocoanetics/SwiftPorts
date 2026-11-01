@@ -12,7 +12,9 @@ struct GitCommandConfigReviewTests: ConfigTestHelpers {
     private static let realGit = "/usr/bin/git"
     private static var hasRealGit: Bool { FileManager.default.isExecutableFile(atPath: realGit) }
 
-    private func real(_ args: [String], work: URL, environment: [String: String]) throws -> (out: String, err: String, status: Int32) {
+    private func real(
+        _ args: [String], work: URL, environment: [String: String]
+    ) throws -> (out: String, err: String, status: Int32) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: Self.realGit)
         process.arguments = args
@@ -38,7 +40,7 @@ struct GitCommandConfigReviewTests: ConfigTestHelpers {
         try "[init]\n\tdefaultBranch = fromfile\n".write(to: named, atomically: true, encoding: .utf8)
         let cases: [[String: String]] = [
             ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "init.defaultBranch", "GIT_CONFIG_VALUE_0": "counted"],
-            ["GIT_CONFIG_GLOBAL": named.path],
+            ["GIT_CONFIG_GLOBAL": named.path]
         ]
         for environment in cases {
             let work = fixture.root.appendingPathComponent(UUID().uuidString)

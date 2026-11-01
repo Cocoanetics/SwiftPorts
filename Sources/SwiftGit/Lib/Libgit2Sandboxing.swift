@@ -118,7 +118,8 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
         var parsed: CInt = 0
         if value.withCString({ git_config_parse_bool(&parsed, $0) }) == 0 { return parsed != 0 }
         if let number = Int(value) { return number != 0 }
-        throw GitDiagnosticError(lines: ["fatal: bad boolean environment value '\(value)' for '\(name)'"], exitCode: 128)
+        throw GitDiagnosticError(
+            lines: ["fatal: bad boolean environment value '\(value)' for '\(name)'"], exitCode: 128)
     }
 
     /// The directory of the global `.gitconfig` libgit2 currently looks
@@ -195,7 +196,9 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
 
         // XDG search: libgit2's path for this level is the `git` directory
         // inside `$XDG_CONFIG_HOME`, which holds the `config` file.
-        try setSearchPath(level: GIT_CONFIG_LEVEL_XDG.rawValue, path: globalNamed || (noHome && Self.nonEmpty(env["XDG_CONFIG_HOME"]) == nil) ? "" : snapshot.xdg + "/git")
+        let xdgOff = globalNamed || (noHome && Self.nonEmpty(env["XDG_CONFIG_HOME"]) == nil)
+        try setSearchPath(level: GIT_CONFIG_LEVEL_XDG.rawValue,
+                          path: xdgOff ? "" : snapshot.xdg + "/git")
 
         // GIT_CONFIG_NOSYSTEM, no opt-in to the host's (in a sandbox), or a
         // file GIT_CONFIG_SYSTEM names (added to the open config instead) →

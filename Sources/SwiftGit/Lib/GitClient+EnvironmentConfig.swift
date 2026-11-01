@@ -240,7 +240,7 @@ extension GitClient {
         try check(git_config_add_backend(config, backend, GIT_CONFIG_LEVEL_APP, repo, 0))
     }
 
-    // MARK: --show-origin
+    // MARK: - show-origin
 
     /// What `--show-origin` prints before an entry: `file:<path>`, or
     /// `command line:` for `GIT_CONFIG_COUNT`'s. A file the environment
