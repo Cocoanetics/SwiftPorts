@@ -53,9 +53,15 @@ struct IsolatedGitHost: Sendable {
     }
 
     /// Gives a system-`git` subprocess the isolating variables over the
-    /// test process's own.
+    /// test process's own, minus the command-scope config
+    /// (`GIT_CONFIG_COUNT` / `_KEY_<n>` / `_VALUE_<n>`, `GIT_CONFIG_PARAMETERS`),
+    /// which outranks every config file.
     func isolate(_ process: Process) {
-        process.environment = ProcessInfo.processInfo.environment.merging(variables) { _, new in new }
+        let inherited = ProcessInfo.processInfo.environment.filter { name, _ in
+            name != "GIT_CONFIG_COUNT" && name != "GIT_CONFIG_PARAMETERS"
+                && !name.hasPrefix("GIT_CONFIG_KEY_") && !name.hasPrefix("GIT_CONFIG_VALUE_")
+        }
+        process.environment = inherited.merging(variables) { _, new in new }
     }
 }
 #endif
