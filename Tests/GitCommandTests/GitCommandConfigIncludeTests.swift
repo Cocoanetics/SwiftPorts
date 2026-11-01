@@ -142,6 +142,41 @@ struct GitCommandConfigIncludeTests: ConfigTestHelpers {
         }
     }
 
+    @Test("inside a repository, includes of its own config are gated too")
+    func repositoryConfigIncludesAreGated() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GitConfigOutside-repo-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let secret = outside.appendingPathComponent("secret.cfg")
+        try "[x]\n\ty = secret\n".write(to: secret, atomically: true, encoding: .utf8)
+        try "[x]\n\ty = inside\n".write(
+            to: work.appendingPathComponent("inside.cfg"), atomically: true, encoding: .utf8)
+        let initRepo = Process()
+        initRepo.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        initRepo.arguments = ["git", "init", "-q"]
+        initRepo.currentDirectoryURL = work
+        initRepo.environment = ["HOME": home.path, "GIT_CONFIG_NOSYSTEM": "1", "PATH": "/usr/bin:/bin"]
+        try initRepo.run()
+        initRepo.waitUntilExit()
+        let local = work.appendingPathComponent(".git/config")
+        let base = try String(contentsOf: local, encoding: .utf8)
+
+        try (base + "[include]\n\tpath = ../inside.cfg\n").write(to: local, atomically: true, encoding: .utf8)
+        #expect(try await git(["config", "x.y"], root: root, home: home, work: work).stdout == "inside\n")
+
+        try (base + "[include]\n\tpath = \(secret.path)\n").write(to: local, atomically: true, encoding: .utf8)
+        await #expect(throws: Sandbox.Denial.self) {
+            try await self.git(["config", "x.y"], root: root, home: home, work: work)
+        }
+        await #expect(throws: Sandbox.Denial.self) {
+            try await self.git(["status"], root: root, home: home, work: work)
+        }
+    }
+
     @Test("an XDG directory outside the sandbox is refused for an unscoped read")
     func xdgDirectoryOutsideIsRefused() async throws {
         let fixture = try makeRoot()

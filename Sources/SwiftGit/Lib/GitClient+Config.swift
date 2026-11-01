@@ -75,7 +75,7 @@ extension GitClient {
             }
         }
         try await Shell.authorize(workingDirectory)
-        let inRepository: [String]? = try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+        let inRepository: [String]? = try await isolatedGated {
             var repo: OpaquePointer?
             var config: OpaquePointer?
             defer {

@@ -127,38 +127,19 @@ extension GitClient {
     ) async throws -> T {
         try await Shell.authorize(workingDirectory)
         try await authorizeConfigFile(of: scope, writing: missing == .create || missing == .emptyForWrite)
-        // libgit2 asks the gate about each include file it is about to
-        // read; one the sandbox has yet to authorise fails the read, which
-        // is then repeated with the file allowed (or the denial thrown).
-        let gate = ConfigIncludeGate(enforcing: Shell.current.sandbox != nil)
-        while true {
-            do {
-                return try runDefaultConfig(gate: gate, scope: scope, missing: missing, body)
-            } catch {
-                guard try await gate.authorizeRefused() else { throw error }
+        // A scope's own file is opened by itself: the default config
+        // would parse the files it supersedes (a bad ~/.gitconfig
+        // under GIT_CONFIG_GLOBAL) as well.
+        return try await isolatedGated {
+            guard let scope, scope != .local else {
+                var base: OpaquePointer?
+                try Self.check(git_config_open_default(&base))
+                defer { git_config_free(base) }
+                return try body(base)
             }
-        }
-    }
-
-    private func runDefaultConfig<T>(
-        gate: ConfigIncludeGate, scope: ConfigScope?, missing: MissingConfigFile,
-        _ body: (OpaquePointer?) throws -> T
-    ) throws -> T {
-        try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
-            // A scope's own file is opened by itself: the default config
-            // would parse the files it supersedes (a bad ~/.gitconfig
-            // under GIT_CONFIG_GLOBAL) as well.
-            try gate.run {
-                guard let scope, scope != .local else {
-                    var base: OpaquePointer?
-                    try Self.check(git_config_open_default(&base))
-                    defer { git_config_free(base) }
-                    return try body(base)
-                }
-                let file = try self.openScopedConfig(scope, missing: missing)
-                defer { git_config_free(file) }
-                return try body(file)
-            }
+            let file = try self.openScopedConfig(scope, missing: missing)
+            defer { git_config_free(file) }
+            return try body(file)
         }
     }
 

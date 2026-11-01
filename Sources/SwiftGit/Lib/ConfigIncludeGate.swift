@@ -68,3 +68,22 @@ final class ConfigIncludeGate: @unchecked Sendable {
         return try withExtendedLifetime(self) { try body() }
     }
 }
+
+extension GitClient {
+
+    /// `Libgit2Sandboxing.runIsolated` with the sandbox deciding which
+    /// `[include]` files libgit2 may read meanwhile: global, system and
+    /// repository configs alike. A file not yet authorised fails the run,
+    /// which is repeated once the sandbox has allowed it (or the denial is
+    /// thrown). Without a sandbox nothing is gated.
+    func isolatedGated<T>(_ body: () throws -> T) async throws -> T {
+        let gate = ConfigIncludeGate(enforcing: Shell.current.sandbox != nil)
+        while true {
+            do {
+                return try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) { try gate.run(body) }
+            } catch {
+                guard try await gate.authorizeRefused() else { throw error }
+            }
+        }
+    }
+}
