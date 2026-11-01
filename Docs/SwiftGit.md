@@ -85,6 +85,7 @@ let client = GitClient(
 | `addRemote(name:url:)` / `remoteDelete / remoteRename / remoteSetURL` | `git remote add / remove / rename / set-url` |
 | `branchDelete(name:force:)` / `branchRename(...)` | `git branch -d/-D / -m/-M` |
 | `tagCreate(name:target:force:)` / `tagCreateAnnotated(...)` / `tagDelete(name:)` | `git tag` family |
+| `verifyTag(_:inTagNamespace:)` | `git verify-tag` / `git tag -v` — OpenPGP verification through `gpg.program` / `gpg.openpgp.program` (launched via the shell's `ProcessLauncher`); signed tags in merge / pull messages carry the verification, commented |
 | `move(from:to:)` / `remove(paths:keepWorktree:force:)` | `git mv` / `git rm` |
 | `stashSave(message:author:flags:)` / `stashApply / stashPop / stashDrop / stashList / stashClear / stashShow / stashBranch` | `git stash` family |
 | `worktreeAdd(path:branch:force:)` / `worktreeRemove(name:force:)` | `git worktree add/remove` |
@@ -153,7 +154,8 @@ git clean [-f] [-n] [-d] [<paths>...]
 git config [--global / --system / --local] [--get / --unset /
             --list / -l] <name> [<value>]
 git stash {push, list, apply, pop, drop, clear, show, branch}
-git tag {-a -m, -d, -l, -n, -f}
+git tag {-a -m, -d, -l, -n, -f, -v}
+git verify-tag {-v, --raw}
 git remote {-v, add, get-url, set-url, remove, rename}
 git branch {-d, -D, -m, -M, --show-current, --upstream}
 git merge {--ff, --no-ff, --ff-only}

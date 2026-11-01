@@ -17,6 +17,7 @@ struct Tag: AsyncParsableCommand {
               git tag -l <pattern>             list with glob filter
               git tag -n[<num>]                list including annotation lines
               git tag -f <name> [<commit>]     force-overwrite existing
+              git tag -v <name>...             verify the tags' GPG signatures
             """
     )
 
@@ -36,6 +37,10 @@ struct Tag: AsyncParsableCommand {
           help: "Replace an existing tag with the same name.")
     var force: Bool = false
 
+    @Flag(name: [.customShort("v"), .customLong("verify")],
+          help: "Verify the GPG signature of the given tags.")
+    var verify: Bool = false
+
     @Flag(name: .customShort("n"),
           help: "When listing, also show the first line of each tag's annotation.")
     var withAnnotation: Bool = false
@@ -52,6 +57,9 @@ struct Tag: AsyncParsableCommand {
         if annotate && delete {
             throw ValidationError("-a and -d are mutually exclusive")
         }
+        if verify && (annotate || delete || list) {
+            throw ValidationError("-v can't be combined with -a, -d or -l")
+        }
     }
 
     func run() async throws {
@@ -60,12 +68,16 @@ struct Tag: AsyncParsableCommand {
         // typing `git tag -a v2.0 -m "..."` would have `-m` stuck in useRest).
         var positionals: [String] = []
         var pulledForce = force
+        var pulledVerify = verify
         var pulledMessage = message
         var i = 0
         while i < rest.count {
             let tok = rest[i]
             if tok == "-f" || tok == "--force" {
                 pulledForce = true; i += 1; continue
+            }
+            if tok == "-v" || tok == "--verify" {
+                pulledVerify = true; i += 1; continue
             }
             if tok == "-m" || tok == "--message", i + 1 < rest.count {
                 pulledMessage = rest[i + 1]
@@ -83,6 +95,17 @@ struct Tag: AsyncParsableCommand {
         let useRest = positionals
 
         let client = CommandContext.gitClient()
+
+        // Verify path: only the tags' own refs, with their contents shown.
+        if pulledVerify {
+            if useForce || annotate || delete || list {
+                throw CLIError.stderr(
+                    "error: options '-v' and '-f', '-a', '-d' or '-l' cannot be used together", exitCode: 129)
+            }
+            guard !useRest.isEmpty else { throw ValidationError("tag name required") }
+            try await VerifyTag.verify(useRest, inTagNamespace: true, verbose: true, raw: false)
+            return
+        }
 
         // Delete path.
         if delete {
