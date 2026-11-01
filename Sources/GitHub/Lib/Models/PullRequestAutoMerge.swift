@@ -5,6 +5,6 @@ import Foundation
 public struct PullRequestAutoMerge: Codable, Sendable {
     public let enabledBy: User
     public let mergeMethod: PullRequestMergeRequest.MergeMethod
-    public let commitTitle: String
-    public let commitMessage: String
+    public let commitTitle: String?
+    public let commitMessage: String?
 }
