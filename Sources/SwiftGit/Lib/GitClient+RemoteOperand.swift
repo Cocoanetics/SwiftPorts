@@ -54,7 +54,7 @@ extension GitClient {
             try await Self.authorize(location: location)
             return RemoteConnection(remote: remote, location: location)
         }
-        let rewritten = try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+        let rewritten = try await isolated {
             try Self.effectiveLocation(of: remote, for: use, in: workingDirectory)
         }
         let location = Self.connectionLocation(of: rewritten, relativeTo: top)
@@ -125,6 +125,7 @@ extension GitClient {
             git_repository_free(repo)
         }
         try check(git_repository_open_ext(&repo, directory.path, 0, nil))
+        try installEnvironmentConfig(intoRepository: repo)
         try check(git_remote_lookup(&remote, repo, name))
         func value(_ pointer: UnsafePointer<CChar>?) -> String? {
             pointer.map { String(cString: $0) }.flatMap { $0.isEmpty ? nil : $0 }
@@ -149,6 +150,7 @@ extension GitClient {
         }
         if let directory {
             try check(git_repository_open_ext(&repo, directory.path, 0, nil))
+            try installEnvironmentConfig(intoRepository: repo)
             try check(git_remote_create_anonymous(&remote, repo, spelling))
         } else {
             var options = git_remote_create_options()
@@ -202,12 +204,12 @@ extension GitClient {
         _ remote: String, relativeTo directory: String? = nil,
         for use: RemoteUse = .fetch, in repository: URL? = nil
     ) async throws -> String {
-        func location(of spelling: String) throws -> String {
-            try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+        func location(of spelling: String) async throws -> String {
+            try await isolated {
                 try Self.effectiveLocation(of: spelling, for: use, in: repository)
             }
         }
-        let rewritten = try location(of: remote)
+        let rewritten = try await location(of: remote)
         let spelling = Self.isURLOrSCPLike(rewritten)
             ? remote : Self.connectionLocation(of: rewritten, relativeTo: directory)
         try await Self.authorize(location: location(of: spelling))

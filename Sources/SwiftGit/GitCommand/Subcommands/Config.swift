@@ -33,6 +33,10 @@ struct Config: AsyncParsableCommand {
           help: "List every configured key/value.")
     var list: Bool = false
 
+    @Flag(name: .customLong("show-origin"),
+          help: "Show where each value comes from: `file:<path>` or `command line:`.")
+    var showOrigin: Bool = false
+
     @Argument(help: "Config key (e.g. `user.email`) and optional value.")
     var args: [String] = []
 
@@ -69,6 +73,8 @@ struct Config: AsyncParsableCommand {
             try await configure()
         } catch let error as Libgit2Error {
             throw translated(error) ?? error
+        } catch let error as CommandLineConfigError {
+            throw CLIError.stderr(error.lines, exitCode: 128)
         }
     }
 
@@ -136,7 +142,7 @@ struct Config: AsyncParsableCommand {
         let client = CommandContext.gitClient()
 
         if list {
-            for line in try await client.configLines(scope: readScope) {
+            for line in try await client.configLines(scope: readScope, showOrigin: showOrigin) {
                 Shell.print(line)
             }
             return
@@ -165,7 +171,12 @@ struct Config: AsyncParsableCommand {
         case 1:
             // Read form: `git config <name>` or `git config --get <name>`.
             let name = args[0]
-            if let value = try await client.configGet(name, scope: readScope) {
+            if showOrigin {
+                guard let found = try await client.configGetShowingOrigin(name, scope: readScope) else {
+                    throw CLIError(lines: [], exitCode: 1)
+                }
+                Shell.print("\(found.origin)\t\(found.value)")
+            } else if let value = try await client.configGet(name, scope: readScope) {
                 Shell.print(value)
             } else {
                 throw CLIError(lines: [], exitCode: 1)
