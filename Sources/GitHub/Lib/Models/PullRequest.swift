@@ -21,6 +21,7 @@ public struct PullRequest: Codable, Sendable, Identifiable {
     public let mergeable: Bool?
     public let mergeableState: String?
     public let mergedBy: User?
+    public let autoMerge: PullRequestAutoMerge?
     public let comments: Int?
     public let reviewComments: Int?
     public let commits: Int?
