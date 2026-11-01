@@ -405,7 +405,7 @@ struct HTTPMockedNetworkTests {
             #expect(reaction.createdAt == ISO8601DateFormatter().date(from: "2024-01-15T10:30:00Z"))
         }
 
-        private static func requestBodyData(from request: URLRequest) throws -> Data {
+        static func requestBodyData(from request: URLRequest) throws -> Data {
             if let body = request.httpBody {
                 return body
             }
