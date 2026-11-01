@@ -28,7 +28,7 @@ extension GitClient {
         // Tier-2 (#18): apply env→option bridge before init so the
         // freshly-created repo's seeded config is loaded against the
         // sandbox's view, not the host's.
-        try await isolated {
+        try await isolatedGated {
             // libgit2 reads `init.defaultBranch` from its own default config,
             // which the environment's GIT_CONFIG_* never reach: read it here.
             let branch = try initialBranch ?? Self.environmentDefaultBranch()

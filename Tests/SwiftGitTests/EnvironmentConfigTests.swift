@@ -116,7 +116,7 @@ struct EnvironmentConfigTests {
             #expect(plan.systemOverride)
             #expect(plan.systemFile == nil)
             #expect(plan.commandLine.isEmpty)
-            try await client.isolated {
+            try await client.isolatedGated {
                 var buffer = [CChar](repeating: 1, count: 1024)
                 for level in [GIT_CONFIG_LEVEL_GLOBAL, GIT_CONFIG_LEVEL_XDG, GIT_CONFIG_LEVEL_SYSTEM] {
                     #expect(swiftports_libgit2_get_search_path(Int32(level.rawValue), &buffer, buffer.count) == 0)
@@ -129,7 +129,7 @@ struct EnvironmentConfigTests {
                                                    workingDirectory: directory.path))
         try await plain.withCurrent {
             let client = GitClient(workingDirectory: directory)
-            try await client.isolated {
+            try await client.isolatedGated {
                 var buffer = [CChar](repeating: 0, count: 1024)
                 #expect(swiftports_libgit2_get_search_path(Int32(GIT_CONFIG_LEVEL_GLOBAL.rawValue), &buffer, buffer.count) == 0)
                 #expect(String(cString: buffer) == directory.path)
