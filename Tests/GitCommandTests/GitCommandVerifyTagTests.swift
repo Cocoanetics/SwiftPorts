@@ -12,6 +12,8 @@ import ShellKit
 @Suite("git tag -v / verify-tag / signed-tag merge")
 struct GitCommandVerifyTagTests {
 
+    private let host = IsolatedGitHost()
+
     private struct Failure: Error, CustomStringConvertible {
         let description: String
     }
@@ -22,6 +24,7 @@ struct GitCommandVerifyTagTests {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com"] + args
         process.currentDirectoryURL = dir
+        host.isolate(process)
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
@@ -93,8 +96,9 @@ struct GitCommandVerifyTagTests {
         _ args: [String], in dir: URL, launcher: (any ProcessLauncher)? = nil
     ) async throws -> (stdout: String, stderr: String, status: Int32) {
         let out = OutputSink(), err = OutputSink()
-        let shell = Shell(stdout: out, stderr: err, environment: Environment(workingDirectory: dir.path),
+        let shell = Shell(stdout: out, stderr: err, environment: host.environment(workingDirectory: dir.path),
                           processLauncher: launcher)
+        shell.sandbox = host.sandbox
         var failure: CLIError?
         do {
             try await shell.withCurrent {
