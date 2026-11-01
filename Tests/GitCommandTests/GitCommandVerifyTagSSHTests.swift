@@ -176,8 +176,10 @@ struct GitCommandVerifyTagSSHTests {
         let result = try await git(["verify-tag", "v1"], in: fixture.repo)
         #expect(result.stderr == Self.noAllowedSigners)
         #expect(result.status == 1)
-        try await expectParity(["verify-tag", "v1"], in: fixture.repo)
-        try await expectParity(["tag", "-v", "v1"], in: fixture.repo)
+        // Literal, git 2.54's: older system gits print less for `tag -v`.
+        let verbose = try await git(["tag", "-v", "v1"], in: fixture.repo)
+        #expect(verbose.stdout.hasSuffix("release v1\n"))
+        #expect(verbose.stderr == Self.noAllowedSigners && verbose.status == 1)
     }
 
     @Test("a tampered tag fails", .enabled(if: hasSSHKeygen))
@@ -226,7 +228,8 @@ struct GitCommandVerifyTagSSHTests {
                 #expect(result.status == 1)
                 #expect(result.stderr.contains(program))
                 #expect(!result.stderr.contains("Good"))
-                try await expectParity(args, in: fixture.repo)
+                // git 2.54 words a path it can't exec "cannot exec", older gits "cannot run".
+                #expect(result.stderr.split(separator: "\n").count == 2)
             }
         }
     }
