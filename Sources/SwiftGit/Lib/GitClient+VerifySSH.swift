@@ -133,9 +133,25 @@ extension GitClient {
         return lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n"
     }
 
-    /// git's `git_config_pathname` for a leading `~/`, the shell's HOME.
+    /// git's `git_config_pathname` (`interpolate_path`): a leading `~/` is
+    /// the shell's HOME, `~user/` that user's home, `%(prefix)/` git's
+    /// install prefix (`/usr`, there being no git install of our own).
+    /// Anything else, or a user that doesn't exist, stays as written.
     private static func expandedPath(_ path: String, shell: Shell) -> String {
-        guard path == "~" || path.hasPrefix("~/"), let home = shell.environment["HOME"] else { return path }
-        return home + path.dropFirst()
+        if path.hasPrefix("%(prefix)/") { return "/usr" + path.dropFirst("%(prefix)".count) }
+        guard path.hasPrefix("~") else { return path }
+        let slash = path.firstIndex(of: "/") ?? path.endIndex
+        let user = path[path.index(after: path.startIndex)..<slash]
+        let rest = path[slash...]
+        if user.isEmpty {
+            guard let home = shell.environment["HOME"] else { return path }
+            return home + rest
+        }
+        #if os(Windows) || os(iOS) || os(tvOS) || os(watchOS) || os(visionOS) || os(Android)
+        return path
+        #else
+        guard let entry = getpwnam(String(user)), let directory = entry.pointee.pw_dir else { return path }
+        return String(cString: directory) + rest
+        #endif
     }
 }

@@ -157,6 +157,18 @@ struct GitCommandVerifyTagSSHTests {
         #expect(unknown.status == 1)
     }
 
+    @Test("pathname settings are interpolated like git's", .enabled(if: hasSSHKeygen))
+    func interpolatedPaths() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.repo.deletingLastPathComponent()) }
+        try FileManager.default.copyItem(at: fixture.keys.appendingPathComponent("allowed"),
+                                         to: host.home.appendingPathComponent("allowed"))
+        try systemGit(["config", "gpg.ssh.allowedSignersFile", "~/allowed"], in: fixture.repo)
+        let result = try await git(["verify-tag", "v1"], in: fixture.repo)
+        #expect(result.stderr.hasPrefix("Good \"git\" signature for alice@example.com"))
+        try await expectParity(["verify-tag", "v1"], in: fixture.repo)
+    }
+
     @Test("no allowed signers file configured", .enabled(if: hasSSHKeygen))
     func absentAllowedSigners() async throws {
         let fixture = try makeFixture(allowed: false)
