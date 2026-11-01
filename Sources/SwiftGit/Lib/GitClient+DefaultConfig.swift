@@ -177,10 +177,11 @@ extension GitClient {
         if let scope, let named = Self.configFileOverride(scope), !named.isEmpty {
             try await Shell.authorize(URL(fileURLWithPath: location(of: named)))
         } else if scope == .system {
-            // Reading the host's system file is what libgit2 does for every
-            // command; changing it is the sandbox's business.
+            // A sandbox reads the host's system file only when the embedder
+            // allows it; changing it is always the sandbox's business.
             let system = Self.systemConfigPath()
-            if writing, !system.isEmpty { try await Shell.authorize(URL(fileURLWithPath: system)) }
+            let reading = Shell.current.sandbox != nil && !GitSandboxPolicy.allowsHostSystemConfig
+            if writing || reading, !system.isEmpty { try await Shell.authorize(URL(fileURLWithPath: system)) }
         } else {
             let home = Libgit2Sandboxing.shared.home(for: Shell.current.sandbox)
             try await Shell.authorize(URL(fileURLWithPath: home).appendingPathComponent(".gitconfig"))

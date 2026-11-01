@@ -26,7 +26,11 @@ import CGitKit
 /// |---|---|
 /// | `env["HOME"]`, else `sandbox.homeDirectory` | `SET_SEARCH_PATH(GLOBAL, …)` + `SET_HOMEDIR(…)` |
 /// | `env["XDG_CONFIG_HOME"]`, else `<sandbox.homeDirectory>/.config` | `SET_SEARCH_PATH(XDG, …)` |
-/// | `env["GIT_CONFIG_NOSYSTEM"] == "1"` | `SET_SEARCH_PATH(SYSTEM, "")` (only when set) |
+/// | sandbox without ``GitSandboxPolicy/allowsHostSystemConfig``, or `env["GIT_CONFIG_NOSYSTEM"] == "1"` | `SET_SEARCH_PATH(SYSTEM, "")` |
+///
+/// A sandbox does not read the host's system gitconfig (it can set
+/// credential helpers and include paths outside the sandbox); an embedder
+/// opts in with ``GitSandboxPolicy/allowsHostSystemConfig``.
 ///
 /// Anything else stays embedder-controlled. Notably proxy env
 /// continues to drive libgit2's HTTP transport, and SSL cert
@@ -56,8 +60,13 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
         let home: String
         let xdg: String
         let noSystem: Bool
+        let allowsHostSystem: Bool
+        let hostSystemSearchPath: String?
     }
     private let lock = NSLock()
+    /// Where an opted-in sandbox looks for the system config; nil is
+    /// libgit2's default. A seam for tests, which can't rely on the host's.
+    var hostSystemSearchPath: String?
     private var lastApplied: AppliedSnapshot?
 
     /// The home directory libgit2 is pointed at for `sandbox`: the shell's
@@ -141,7 +150,9 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
             home: envHome ?? sandbox.homeDirectory.path,
             xdg: envXDG ?? sandbox.homeDirectory
                 .appendingPathComponent(".config", isDirectory: true).path,
-            noSystem: env["GIT_CONFIG_NOSYSTEM"] == "1")
+            noSystem: env["GIT_CONFIG_NOSYSTEM"] == "1",
+            allowsHostSystem: GitSandboxPolicy.allowsHostSystemConfig,
+            hostSystemSearchPath: hostSystemSearchPath)
 
         if snapshot == lastApplied { return }
 
@@ -152,9 +163,11 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
         // XDG search.
         try setSearchPath(level: GIT_CONFIG_LEVEL_XDG.rawValue, path: snapshot.xdg)
 
-        // GIT_CONFIG_NOSYSTEM=1 → disable system search.
-        if snapshot.noSystem {
+        // GIT_CONFIG_NOSYSTEM=1, or no opt-in to the host's → disable system search.
+        if snapshot.noSystem || !snapshot.allowsHostSystem {
             try setSearchPath(level: GIT_CONFIG_LEVEL_SYSTEM.rawValue, path: "")
+        } else if let path = snapshot.hostSystemSearchPath {
+            try setSearchPath(level: GIT_CONFIG_LEVEL_SYSTEM.rawValue, path: path)
         } else {
             try resetSearchPath(level: GIT_CONFIG_LEVEL_SYSTEM.rawValue)
         }
@@ -203,6 +216,15 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
         }
     }
 
+}
+
+/// What a sandboxed shell may reach beyond its root, set by the embedder.
+public enum GitSandboxPolicy {
+    /// Whether git commands in a sandbox read the host's system gitconfig
+    /// (`/etc/gitconfig`, or what `GIT_CONFIG_SYSTEM` names). Off by default;
+    /// `GIT_CONFIG_NOSYSTEM=1` still leaves it out. Bind it around the
+    /// commands that should read it. No effect without a sandbox.
+    @TaskLocal public static var allowsHostSystemConfig = false
 }
 
 /// Errors thrown by the libgit2 sandboxing actor when an option SET
