@@ -221,3 +221,21 @@ extension GitCommand: ParsableBashCommand {
 - `git diff --color` / `--word-diff` — libgit2 has no colorizer / word-tokenizer. Skipped.
 - `--ahead-behind` annotations on status / branch listing — would need `git_graph_ahead_behind` per ref. Possible follow-up.
 - `git rebase --interactive`, `git submodule`, `git worktree lock/move/prune/repair/unlock`, `git bisect`, `git filter-branch` — out of scope.
+
+## Sandbox and the host's system gitconfig
+
+In a rooted sandbox, libgit2's SYSTEM config level is disabled by default
+(`SET_SEARCH_PATH(SYSTEM, "")`): the host's `/etc/gitconfig` can set credential
+helpers and include paths outside the sandbox. This covers every command in a
+repository and unscoped `git config` reads outside one; an explicit
+`git config --system` on the host's file is refused by `Shell.authorize`.
+
+An embedder opts in by binding `GitSandboxPolicy.allowsHostSystemConfig` around
+the commands that should read it:
+
+```swift
+await GitSandboxPolicy.$allowsHostSystemConfig.withValue(true) { … }
+```
+
+`GIT_CONFIG_NOSYSTEM=1` still leaves the system level out. Without a sandbox
+nothing changes. There is no `git` CLI flag for this.

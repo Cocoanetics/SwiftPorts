@@ -103,3 +103,8 @@ private final class ThreadResultBox<T>: @unchecked Sendable {
 func currentThreadName() -> String? {
     Thread.current.name
 }
+
+/// Checks the OS thread independently of its diagnostic name, including from async closures.
+func currentThreadIdentity() -> ObjectIdentifier {
+    ObjectIdentifier(Thread.current)
+}
