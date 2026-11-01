@@ -54,10 +54,13 @@ extension PrMerge {
             if let commitMessage { input["commitBody"] = .string(commitMessage) }
             mutation = PullRequestMutations.enablePullRequestAutoMerge
             if pr.isMergeQueueEnabled {
-                message = "Pull request \(target.slug)#\(number) will be added to the merge queue for \(pr.baseRefName) when ready"
+                message = "Pull request \(target.slug)#\(number) will be added to the merge queue "
+                    + "for \(pr.baseRefName) when ready"
             } else {
-                let via = method == .squash ? " via squash" : method == .rebase ? " via rebase" : ""
-                message = "Pull request \(target.slug)#\(number) will be automatically merged\(via) when all requirements are met"
+                let via = method == .squash ? " via squash"
+                    : method == .rebase ? " via rebase" : ""
+                message = "Pull request \(target.slug)#\(number) will be automatically "
+                    + "merged\(via) when all requirements are met"
             }
         }
         let _: AutoMergeResponse = try await gql.query(mutation, variables: ["input": .object(input)])
@@ -70,16 +73,18 @@ extension PrMerge {
     private struct AutoMergeResponse: Decodable, Sendable {}
 
     private struct MergeStatusResponse: Decodable, Sendable {
-        let repository: Repository?
-        struct Repository: Decodable, Sendable {
-            let pullRequest: PullRequest?
-        }
-        struct PullRequest: Decodable, Sendable {
-            let id: String
-            let state: String
-            let mergeStateStatus: String
-            let baseRefName: String
-            let isMergeQueueEnabled: Bool
-        }
+        let repository: MergeStatusRepository?
+    }
+
+    private struct MergeStatusRepository: Decodable, Sendable {
+        let pullRequest: MergeStatusPullRequest?
+    }
+
+    private struct MergeStatusPullRequest: Decodable, Sendable {
+        let id: String
+        let state: String
+        let mergeStateStatus: String
+        let baseRefName: String
+        let isMergeQueueEnabled: Bool
     }
 }
