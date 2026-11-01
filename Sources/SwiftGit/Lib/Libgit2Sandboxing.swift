@@ -81,28 +81,27 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
     private(set) var environment = EnvironmentConfig.none
 
     /// The home directory libgit2 is pointed at for `sandbox`: the shell's
-    /// `HOME`, else the sandbox's own home, as `apply` sets it; without a
-    /// sandbox, the process's `HOME`, else the account's home.
+    /// `HOME`, else the sandbox's own home, as `apply` sets it. Without a
+    /// sandbox the shell's `HOME` is all there is, as git has one
+    /// environment: an empty one is the root (`--global` is `/.gitconfig`),
+    /// a missing one no home (``homeIsUnset(for:)``), never the host's.
     func home(for sandbox: Sandbox?) -> String {
-        if let home = Self.nonEmpty(Shell.current.environment.variables["HOME"]) { return home }
-        guard let sandbox else {
-            return Self.nonEmpty(ProcessInfo.processInfo.environment["HOME"]) ?? NSHomeDirectory()
-        }
+        let variables = Shell.current.environment.variables
+        if let home = Self.nonEmpty(variables["HOME"]) { return home }
+        guard let sandbox else { return "" }
         return sandbox.homeDirectory.path
     }
 
+    /// Whether git has no home for `sandbox`: no sandbox, and a shell
+    /// that doesn't set `HOME`.
+    func homeIsUnset(for sandbox: Sandbox?) -> Bool {
+        sandbox == nil && Shell.current.environment.variables["HOME"] == nil
+    }
+
     /// The XDG config directory git uses for `sandbox`: the shell's
-    /// `XDG_CONFIG_HOME` (as `apply` sets it), else `<home>/.config`. Without
-    /// a sandbox, a shell that names no `HOME` either leaves it to the
-    /// process's `XDG_CONFIG_HOME`; one that names a home of its own doesn't
-    /// get the host's XDG directory next to it.
+    /// `XDG_CONFIG_HOME` (as `apply` sets it), else `<home>/.config`.
     func xdgConfigHome(for sandbox: Sandbox?) -> String {
-        let variables = Shell.current.environment.variables
-        if let xdg = Self.nonEmpty(variables["XDG_CONFIG_HOME"]) { return xdg }
-        if sandbox == nil, Self.nonEmpty(variables["HOME"]) == nil,
-           let xdg = Self.nonEmpty(ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]) {
-            return xdg
-        }
+        if let xdg = Self.nonEmpty(Shell.current.environment.variables["XDG_CONFIG_HOME"]) { return xdg }
         return home(for: sandbox) + "/.config"
     }
 
@@ -110,12 +109,16 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
         value.flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    /// An environment variable read as git reads a boolean one: unset,
-    /// empty and anything that isn't a boolean are off.
-    static func isTrue(_ value: String?) -> Bool {
-        guard let value else { return false }
+    /// An environment variable read as git reads a boolean one
+    /// (`git_env_bool`): unset and empty are off, a boolean or an integer is
+    /// itself, anything else stops the command (`fatal: bad boolean
+    /// environment value`).
+    static func boolean(_ value: String?, named name: String) throws -> Bool {
+        guard let value, !value.isEmpty else { return false }
         var parsed: CInt = 0
-        return value.withCString { git_config_parse_bool(&parsed, $0) } == 0 && parsed != 0
+        if value.withCString({ git_config_parse_bool(&parsed, $0) }) == 0 { return parsed != 0 }
+        if let number = Int(value) { return number != 0 }
+        throw GitDiagnosticError(lines: ["fatal: bad boolean environment value '\(value)' for '\(name)'"], exitCode: 128)
     }
 
     /// The directory of the global `.gitconfig` libgit2 currently looks
@@ -175,7 +178,7 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
         let snapshot = AppliedSnapshot(
             home: home(for: sandbox),
             xdg: xdgConfigHome(for: sandbox),
-            noSystem: Self.isTrue(env["GIT_CONFIG_NOSYSTEM"]),
+            noSystem: (try? Self.boolean(env["GIT_CONFIG_NOSYSTEM"], named: "GIT_CONFIG_NOSYSTEM")) ?? false,
             sandboxed: sandbox != nil,
             allowsHostSystem: GitSandboxPolicy.allowsHostSystemConfig,
             hostSystemSearchPath: hostSystemSearchPath,
@@ -183,13 +186,16 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
 
         // GLOBAL search + HOMEDIR — both pinned to the shell's view. With
         // GIT_CONFIG_GLOBAL, git reads that file and neither home file.
+        // An empty HOME is the root; a missing one leaves no home file.
         let globalNamed = snapshot.environment.globalOverride
-        try setSearchPath(level: GIT_CONFIG_LEVEL_GLOBAL.rawValue, path: globalNamed ? "" : snapshot.home)
-        try setHomedir(path: snapshot.home)
+        let noHome = homeIsUnset(for: sandbox)
+        let home = snapshot.home.isEmpty ? "/" : snapshot.home
+        try setSearchPath(level: GIT_CONFIG_LEVEL_GLOBAL.rawValue, path: globalNamed || noHome ? "" : home)
+        try setHomedir(path: home)
 
         // XDG search: libgit2's path for this level is the `git` directory
         // inside `$XDG_CONFIG_HOME`, which holds the `config` file.
-        try setSearchPath(level: GIT_CONFIG_LEVEL_XDG.rawValue, path: globalNamed ? "" : snapshot.xdg + "/git")
+        try setSearchPath(level: GIT_CONFIG_LEVEL_XDG.rawValue, path: globalNamed || (noHome && Self.nonEmpty(env["XDG_CONFIG_HOME"]) == nil) ? "" : snapshot.xdg + "/git")
 
         // GIT_CONFIG_NOSYSTEM, no opt-in to the host's (in a sandbox), or a
         // file GIT_CONFIG_SYSTEM names (added to the open config instead) →

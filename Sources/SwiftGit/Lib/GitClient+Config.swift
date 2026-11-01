@@ -78,8 +78,12 @@ extension GitClient {
     public func configGetShowingOrigin(
         _ name: String, scope: ConfigScope? = nil
     ) async throws -> (origin: String, value: String)? {
-        guard let key = try? Self.normalizedKey(name),
-              let entry = try await configEntries(scope: scope).last(where: { $0.name == key }) else {
+        let key: String
+        do { key = try Self.normalizedKey(name) } catch let error as CommandLineConfigError {
+            // Config's own key check, which exits 1 where the environment's is fatal.
+            throw GitDiagnosticError(lines: ["error: \(error.reason)"], exitCode: 1)
+        }
+        guard let entry = try await configEntries(scope: scope).last(where: { $0.name == key }) else {
             return nil
         }
         return (entry.origin, entry.value ?? "")

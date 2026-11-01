@@ -36,14 +36,17 @@ struct GitClientSystemConfigPathTests {
         defer { if let savedHome { setenv("HOME", savedHome, 1) } }
         setenv("HOME", "/custom/home", 1)
 
-        // A shell that says nothing falls back to the process.
+        // A shell that says nothing has no home: the host's is not borrowed.
         let silent = Shell(environment: Environment(variables: [:], workingDirectory: "/"))
         try await silent.withCurrent {
-            #expect(Libgit2Sandboxing.shared.home(for: nil) == "/custom/home")
-            setenv("XDG_CONFIG_HOME", "/custom/xdg", 1)
-            #expect(Libgit2Sandboxing.shared.xdgConfigHome(for: nil) == "/custom/xdg")
-            unsetenv("XDG_CONFIG_HOME")
-            #expect(Libgit2Sandboxing.shared.xdgConfigHome(for: nil) == "/custom/home/.config")
+            #expect(Libgit2Sandboxing.shared.homeIsUnset(for: nil))
+            #expect(Libgit2Sandboxing.shared.home(for: nil) == "")
+        }
+        // An empty HOME is the root, not the host's home.
+        let empty = Shell(environment: Environment(variables: ["HOME": ""], workingDirectory: "/"))
+        try await empty.withCurrent {
+            #expect(!Libgit2Sandboxing.shared.homeIsUnset(for: nil))
+            #expect(Libgit2Sandboxing.shared.home(for: nil) == "")
         }
 
         // What the shell names wins over the process's.

@@ -56,6 +56,8 @@ extension ConfigTestHelpers {
             }
         } catch let error as CLIError {
             failure = error
+        } catch let error as GitDiagnosticError {
+            failure = CLIError(lines: error.lines, exitCode: error.exitCode)
         }
         out.finish()
         err.finish()

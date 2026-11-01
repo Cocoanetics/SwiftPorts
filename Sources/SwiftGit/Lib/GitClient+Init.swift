@@ -1,6 +1,7 @@
 import Foundation
 import ShellKit
 import GitKit
+import CGitKit
 
 extension GitClient {
 
@@ -28,10 +29,31 @@ extension GitClient {
         // freshly-created repo's seeded config is loaded against the
         // sandbox's view, not the host's.
         try await isolated {
+            // libgit2 reads `init.defaultBranch` from its own default config,
+            // which the environment's GIT_CONFIG_* never reach: read it here.
+            let branch = try initialBranch ?? Self.environmentDefaultBranch()
             _ = try Repository.initialize(
                 at: workingDirectory,
-                bare: bare, initialBranch: initialBranch, reinit: reinit)
+                bare: bare, initialBranch: branch, reinit: reinit)
         }
         return workingDirectory
+    }
+
+    /// `init.defaultBranch` as the environment's config sets it, `nil` when
+    /// it doesn't (libgit2's own lookup then stands).
+    private static func environmentDefaultBranch() throws -> String? {
+        guard Libgit2Sandboxing.shared.environment.needsInstall else { return nil }
+        var repo: OpaquePointer?
+        var config: OpaquePointer?
+        var value: UnsafePointer<CChar>?
+        defer {
+            git_config_free(config)
+            git_repository_free(repo)
+        }
+        try check(git_repository_new(&repo))
+        try installEnvironmentConfig(intoRepository: repo)
+        try check(git_repository_config_snapshot(&config, repo))
+        guard git_config_get_string(&value, config, "init.defaultbranch") == 0 else { return nil }
+        return value.map { String(cString: $0) }
     }
 }

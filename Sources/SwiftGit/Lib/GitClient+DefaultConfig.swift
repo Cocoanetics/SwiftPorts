@@ -126,6 +126,10 @@ extension GitClient {
         scope: ConfigScope?, missing: MissingConfigFile = .fail, _ body: (OpaquePointer?) throws -> T
     ) async throws -> T {
         try await Shell.authorize(workingDirectory)
+        if scope == .global, Self.configFileOverride(.global) == nil,
+           Libgit2Sandboxing.shared.homeIsUnset(for: Shell.current.sandbox) {
+            throw GitDiagnosticError(lines: ["fatal: $HOME not set"], exitCode: 128)
+        }
         try await authorizeConfigFile(of: scope, writing: missing == .create || missing == .emptyForWrite)
         return try await isolated {
             // A scope's own file is opened by itself: the default config

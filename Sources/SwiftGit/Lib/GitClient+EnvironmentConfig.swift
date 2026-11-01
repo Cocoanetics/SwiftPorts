@@ -58,6 +58,16 @@ public struct CommandLineConfigError: Error, LocalizedError, CommandFailure, Equ
     public var exitStatus: ShellKit.ExitStatus { ShellKit.ExitStatus(Int32(128)) }
 }
 
+/// A diagnostic git prints as is, then exits with `exitCode`.
+public struct GitDiagnosticError: Error, LocalizedError, CommandFailure, Equatable {
+    public let lines: [String]
+    public let exitCode: Int32
+
+    public var errorDescription: String? { lines.joined(separator: "\n") }
+    public var diagnostic: String { lines.map { $0 + "\n" }.joined() }
+    public var exitStatus: ShellKit.ExitStatus { ShellKit.ExitStatus(exitCode) }
+}
+
 extension GitClient {
 
     // MARK: Resolving what the environment asks
@@ -78,7 +88,8 @@ extension GitClient {
                 plan.globalFile = .init(typed: typed, resolved: resolved)
             }
         }
-        if !Libgit2Sandboxing.isTrue(env["GIT_CONFIG_NOSYSTEM"]), let typed = env["GIT_CONFIG_SYSTEM"] {
+        let noSystem = try Libgit2Sandboxing.boolean(env["GIT_CONFIG_NOSYSTEM"], named: "GIT_CONFIG_NOSYSTEM")
+        if !noSystem, let typed = env["GIT_CONFIG_SYSTEM"] {
             plan.systemOverride = true
             if !typed.isEmpty {
                 let resolved = location(of: typed)
