@@ -14,6 +14,9 @@ import ShellCommandKit
 @Suite("git push / fetch / -q against a local remote")
 struct GitCommandRemoteTests {
 
+    /// This test's own git configuration, in place of the host's.
+    private let host = IsolatedGitHost()
+
     private struct Failure: Error, CustomStringConvertible {
         let description: String
     }
@@ -38,6 +41,7 @@ struct GitCommandRemoteTests {
     @discardableResult
     private func systemGit(_ args: [String], in dir: URL) throws -> String {
         let process = Process()
+        host.isolate(process)
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com"] + args
         process.currentDirectoryURL = dir
@@ -59,6 +63,7 @@ struct GitCommandRemoteTests {
     /// byte for byte.
     private func systemGitStderr(_ args: [String], in dir: URL) throws -> (stderr: String, status: Int32) {
         let process = Process()
+        host.isolate(process)
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com"] + args
         process.currentDirectoryURL = dir
@@ -79,8 +84,8 @@ struct GitCommandRemoteTests {
         _ args: [String], in dir: URL, sandbox: Sandbox? = nil
     ) async throws -> (stderr: String, status: Int32) {
         let out = OutputSink(), err = OutputSink()
-        let shell = Shell(stdout: out, stderr: err, environment: Environment(workingDirectory: dir.path))
-        if let sandbox { shell.sandbox = sandbox }
+        let shell = Shell(stdout: out, stderr: err, environment: host.environment(workingDirectory: dir.path))
+        shell.sandbox = sandbox ?? host.sandbox
         var failure: CLIError?
         do {
             try await shell.withCurrent {
@@ -113,8 +118,8 @@ struct GitCommandRemoteTests {
     ) async throws -> (stdout: String, stderr: String) {
         let out = OutputSink(), err = OutputSink()
         let shell = Shell(stdout: out, stderr: err,
-                          environment: Environment(variables: variables, workingDirectory: dir.path))
-        if let sandbox { shell.sandbox = sandbox }
+                          environment: host.environment(variables, workingDirectory: dir.path))
+        shell.sandbox = sandbox ?? host.sandbox
         try await shell.withCurrent {
             // As both entry points do, git's shorthands first.
             let parsed = try GitCommand.parseAsRoot(GitCommand.preprocess(args))
@@ -1027,7 +1032,8 @@ struct GitCommandRemoteTests {
         let (_, clone) = try makeRemoteAndClone()
         let out = OutputSink(), err = OutputSink()
         let shell = Shell(stdout: out, stderr: err,
-                          environment: Environment(workingDirectory: clone.path))
+                          environment: host.environment(workingDirectory: clone.path))
+        shell.sandbox = host.sandbox
         let status = try await shell.withCurrent {
             try await Shell.parsableCommand(GitCommand.self).run(["git", "fetch", "foo://host/x"])
         }
@@ -1353,7 +1359,9 @@ struct GitCommandRemoteTests {
         let config = clone.appendingPathComponent(".git/config")
         try (try String(contentsOf: config, encoding: .utf8) + "[foo]\n\tbar\n\tbar = x\n")
             .write(to: config, atomically: true, encoding: .utf8)
-        let values = try await Shell(environment: Environment(variables: [:], workingDirectory: clone.path)).withCurrent {
+        let configShell = Shell(environment: host.environment(workingDirectory: clone.path))
+        configShell.sandbox = host.sandbox
+        let values = try await configShell.withCurrent {
             try await GitClient(workingDirectory: clone).configGetAll("foo.bar")
         }
         // `git config --get-all foo.bar` prints an empty line, then `x`.
@@ -1706,6 +1714,7 @@ struct GitCommandRemoteTests {
     /// `args` run in `dir`.
     private func systemGitStatus(_ args: [String], in dir: URL) throws -> (status: Int32, stderr: String) {
         let process = Process()
+        host.isolate(process)
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + args
         process.currentDirectoryURL = dir
@@ -1969,6 +1978,20 @@ struct GitCommandRemoteTests {
         try await git(["pull", "-q", "../\(clone.lastPathComponent)//", "side"], in: clone)
         #expect(try systemGit(["log", "-1", "--format=%s"], in: clone)
                 == "Merge branch 'side' of ../\(clone.lastPathComponent) into work")
+    }
+
+    @Test("the fixture's global config, not the host's, reaches the embedded client")
+    func fixtureConfigReachesEmbeddedClient() async throws {
+        let (_, clone) = try makeRemoteAndClone()
+        func pullRebase(_ isolated: IsolatedGitHost) async throws -> [String] {
+            let shell = Shell(environment: isolated.environment(workingDirectory: clone.path))
+            shell.sandbox = isolated.sandbox
+            return try await shell.withCurrent {
+                try await GitClient(workingDirectory: clone).configGetAll("pull.rebase")
+            }
+        }
+        #expect(try await pullRebase(IsolatedGitHost()).isEmpty)
+        #expect(try await pullRebase(IsolatedGitHost(globalConfig: "[pull]\n\trebase = true\n")) == ["true"])
     }
 
     @Test("git pull of branches that diverged follows pull.rebase and pull.ff")
@@ -2368,7 +2391,8 @@ struct GitCommandRemoteTests {
     private func ours(_ args: [String], in dir: URL) async throws -> (status: Int32, stdout: String, stderr: String) {
         let out = OutputSink(), err = OutputSink()
         let shell = Shell(stdout: out, stderr: err,
-                          environment: Environment(variables: [:], workingDirectory: dir.path))
+                          environment: host.environment(workingDirectory: dir.path))
+        shell.sandbox = host.sandbox
         var status: Int32 = 0
         var diagnostic = ""
         try await shell.withCurrent {
@@ -2393,6 +2417,7 @@ struct GitCommandRemoteTests {
     /// The system `git`'s exit status, stdout and stderr for `args`.
     private func theirs(_ args: [String], in dir: URL) throws -> (status: Int32, stdout: String, stderr: String) {
         let process = Process()
+        host.isolate(process)
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + args
         process.currentDirectoryURL = dir

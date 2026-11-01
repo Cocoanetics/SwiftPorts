@@ -28,13 +28,23 @@ struct GitKitSSHBridgeThreadingTests {
     func runBlockingUsesDedicatedThread() throws {
         guard #available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, *) else { return }
 
-        // `Thread.current` is `NS_SWIFT_UNAVAILABLE_FROM_ASYNC` — `runBlocking`'s operation
-        // parameter type is `async`, so even this non-suspending closure counts as an
-        // asynchronous context; routing through a plain synchronous function sidesteps that.
-        let first = try GitKitSSHBridge.runBlocking { currentThreadName() }
-        let second = try GitKitSSHBridge.runBlocking { currentThreadName() }
-        #expect(first == "GitKitSSHBridge")
-        #expect(first == second)
+        // Linux threads inherit the process name. Compare actual Thread identities so a
+        // naming failure cannot be mistaken for an executor hop (issue #139), and check
+        // that the task-executor preference also survives a real async suspension.
+        let caller = currentThreadIdentity()
+        for _ in 0..<200 {
+            let (first, name, resumed) = try GitKitSSHBridge.runBlocking {
+                let first = currentThreadIdentity()
+                let name = currentThreadName()
+                try await Task.sleep(nanoseconds: 1_000_000)
+                return (first, name, currentThreadIdentity())
+            }
+            let second = try GitKitSSHBridge.runBlocking { currentThreadIdentity() }
+            #expect(first != caller)
+            #expect(first == resumed)
+            #expect(first == second)
+            #expect(name == "GitKitSSHBridge")
+        }
     }
 
     @Test("runBlocking completes even with every cooperative-pool thread already blocked")

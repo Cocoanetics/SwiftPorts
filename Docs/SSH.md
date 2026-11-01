@@ -384,19 +384,22 @@ the full pool-starvation guarantee therefore applies only where SE-0417
 is available (and on non-Apple runtimes where the API is unconditionally
 available).
 
-The dedicated thread names itself (`Thread.current.name = ...`) from
-*inside* its own entry closure, rather than via `thread.name = ...` on the
-`Thread` object before calling `start()`. On Linux, `Thread`'s `name`
-setter only reaches the live pthread when the thread calling it is the
-one being named (`pthread_setname_np`'s single-thread-targeting form) —
-setting it on a `Thread` that hasn't started yet is silently dropped
-there, so `Thread.current.name` (and `pthread_getname_np`) keeps
-reporting whatever name the process inherited instead. Darwin doesn't
-have this gap. Caught by `GitKitSSHBridgeThreadingTests.
-runBlockingUsesDedicatedThread` failing only in `build-linux` CI, not
-`build-macos` — reproduced and confirmed fixed against the
-`swift:6.2-jammy` container CI itself uses, not just inferred from
-reading the divergence.
+The dedicated thread names itself (`Thread.current.name = ...`) only
+after dequeuing its first job, not at the top of its entry closure and
+not via `thread.name = ...` before `start()`. On Linux,
+swift-corelibs-foundation's `Thread.name` setter is a no-op while
+`_thread` is still nil, and `Thread.start()` assigns that handle only
+*after* `_CFThreadCreate` returns — so the entry can run (and even
+reach its first `Thread.current.name = ...`) before the assignment
+lands. The first enqueue happens after `init`/`start()` returns, and
+the queue's condition synchronizes that write, so naming after the
+first dequeue always sees a live `_thread`. Without that, Linux keeps
+reporting the inherited process name (`SwiftPortsPacka…`), which is
+what flaked `runBlockingUsesDedicatedThread` on `build-linux` in #139 —
+not a lost SE-0417 executor preference. Darwin doesn't hit the same
+gap; the suite still asserts both the diagnostic name and stable
+`Thread` identity across `runBlocking` calls and a real async
+suspension.
 
 `GitKitSSHChannel` buffers leftover bytes between `read(into:)` calls
 (`SSHExecChannel.stdout` delivers arbitrarily-sized chunks that rarely
