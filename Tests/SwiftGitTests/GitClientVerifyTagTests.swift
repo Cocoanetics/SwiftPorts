@@ -192,12 +192,14 @@ struct GitClientVerifyTagTests {
         #expect(printed.hasPrefix("error: cannot run "))
         #expect(printed.contains("no processes"))
         #expect(result?.succeeded == false)
-        // The merge message says verification failed, not that it passed.
+        // The merge message carries the signature and, as git's does for
+        // a program it couldn't run, nothing after it: no verifier's
+        // words, no "gpg verification failed." either.
         let message = try await stderr(launcher: SandboxedDenyLauncher(), in: repo) {
             let text = try await client.mergeMessage(describing: ["tag 'signed'"],
                                                      objects: [try await client.resolveOID("signed")])
-            #expect(text.contains("# -----BEGIN PGP SIGNATURE-----"))
-            #expect(!text.contains("Good signature"))
+            #expect(text.hasSuffix("# -----BEGIN PGP SIGNATURE-----\n#\n# abc\n# -----END PGP SIGNATURE-----"))
+            #expect(!text.contains("Good signature") && !text.contains("gpg verification failed."))
         }
         #expect(message.hasPrefix("error: cannot run "))
     }

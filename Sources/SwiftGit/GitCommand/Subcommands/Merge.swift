@@ -94,13 +94,14 @@ struct Merge: AsyncParsableCommand {
         }
 
         // A tag's message, and a signed tag's verification, follow the
-        // title git writes, once a merge commit is to be made: not for a
-        // fast-forward or a merge already done, which launch no verifier.
+        // title git writes. git prepares that message before it knows
+        // whether the merge fast-forwards, so the verifier runs then too;
+        // only a tag HEAD already contains ("Already up to date.") skips it.
         var message = self.message
-        if message == nil, (try? await client.mergeName(ref))?.hasPrefix("tag '") == true,
+        if message == nil, let name = try? await client.mergeName(ref), name.hasPrefix("tag '"),
            let oid = try? await client.resolveOID(ref),
-           try await Self.makesMergeCommit(ref, mode: mode, client: client) {
-            message = try await client.mergeMessage(describing: [client.mergeName(ref)], objects: [oid])
+           try await Self.bringsNewCommits(ref, client: client) {
+            message = try await client.mergeMessage(describing: [name], objects: [oid])
         }
 
         let outcome: MergeOutcome
@@ -124,17 +125,14 @@ struct Merge: AsyncParsableCommand {
         }
     }
 
-    /// Whether merging `ref` makes a merge commit: always with `--no-ff`
-    /// (unless already merged), otherwise only when neither side contains
-    /// the other.
-    static func makesMergeCommit(
-        _ ref: String, mode: FastForwardMode, client: SwiftGit.GitClient
-    ) async throws -> Bool {
+    /// Whether merging `ref` brings commits HEAD doesn't have: false once
+    /// HEAD contains it, when git says "Already up to date." and prepares
+    /// no merge message.
+    static func bringsNewCommits(_ ref: String, client: SwiftGit.GitClient) async throws -> Bool {
         guard let head = try? await client.resolveOID("HEAD"),
               let target = try? await client.resolveOID(ref + "^{commit}"),
               let base = try? await client.mergeBase(head, target) else { return false }
-        if base == target { return false }
-        return mode == .never || base != head
+        return base != target
     }
 
     /// Merge what's left of several heads once ``GitClient/mergeHeads(reducing:)``

@@ -273,8 +273,9 @@ extension GitClient {
 
     /// The signature of tag object `oid` as git's `fmt_merge_msg_sigs` has
     /// it: the signature's own lines, then what the OpenPGP program said
-    /// of it, or `gpg verification failed.` when the check couldn't say
-    /// anything. `nil` for an unsigned tag.
+    /// of it (nothing when it couldn't be run), or `gpg verification
+    /// failed.` when no program was tried, as for a payload with no
+    /// tagger to name the signer. `nil` for an unsigned tag.
     func verifiedSignatureBlock(_ oid: String) async throws -> String? {
         guard let signed = try await signedObject(oid), !signed.signature.isEmpty else { return nil }
         let check = try await checkSignature(signed)

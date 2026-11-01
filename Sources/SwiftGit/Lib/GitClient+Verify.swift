@@ -18,8 +18,9 @@ extension GitClient {
         public var payload: Data
         /// The program's status lines; empty when it never ran.
         public var status: String
-        /// The program's stderr, the text git shows; `nil` when the check
-        /// failed before the program ran, as git leaves it.
+        /// The program's stderr, the text git shows: empty when it could
+        /// not be launched, `nil` when the check failed before a launch
+        /// was tried (no tagger, another format), as git leaves it.
         public var output: String?
         public var succeeded: Bool
     }
@@ -209,10 +210,12 @@ extension GitClient {
     /// git's `verify_gpg_signed_buffer` launch: the program with
     /// `--keyid-format=long --status-fd=1 --verify <signature file> -`,
     /// the payload on its stdin. A program that can't be launched is
-    /// reported as git reports it, and counts as a failed verification.
+    /// reported as git reports it, and counts as a failed verification
+    /// with nothing said by the program: git's output is empty then, and
+    /// a merge message gets no `gpg verification failed.` line.
     private func runVerifier(_ program: String, payload: Data, signature: Data) async throws -> VerifierRun {
         let shell = Shell.current
-        let unlaunched = VerifierRun(failed: true, status: "", output: nil)
+        let unlaunched = VerifierRun(failed: true, status: "", output: "")
         let executable: Executable
         #if os(Windows)
         let separators: Set<Character> = ["/", "\\"]
@@ -237,18 +240,28 @@ extension GitClient {
             var reason = "No such file or directory"
             var found: String?
             let search = shell.environment["PATH"] ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
-            for directory in search.split(separator: pathSeparator, omittingEmptySubsequences: false) {
-                let path = (directory.isEmpty ? "." : String(directory)) + "/" + program
-                let url = URL(fileURLWithPath: path, relativeTo: workingDirectory)
-                var isDirectory: ObjCBool = false
-                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
-                      !isDirectory.boolValue
-                else { continue }
-                if FileManager.default.isExecutableFile(atPath: url.path) {
-                    found = url.path
-                    break
+            #if os(Windows)
+            // A bare `gpg` is `gpg.exe` on Windows: PATHEXT's suffixes are
+            // tried after the name as given, as the launcher will.
+            let pathext = shell.environment["PATHEXT"] ?? ProcessInfo.processInfo.environment["PATHEXT"]
+            let suffixes = [""] + (pathext ?? ".COM;.EXE;.BAT;.CMD").split(separator: ";").map(String.init)
+            #else
+            let suffixes = [""]
+            #endif
+            directories: for directory in search.split(separator: pathSeparator, omittingEmptySubsequences: false) {
+                for suffix in suffixes {
+                    let path = (directory.isEmpty ? "." : String(directory)) + "/" + program + suffix
+                    let url = URL(fileURLWithPath: path, relativeTo: workingDirectory)
+                    var isDirectory: ObjCBool = false
+                    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                          !isDirectory.boolValue
+                    else { continue }
+                    if FileManager.default.isExecutableFile(atPath: url.path) {
+                        found = url.path
+                        break directories
+                    }
+                    reason = "Permission denied"
                 }
-                reason = "Permission denied"
             }
             guard found != nil else {
                 shell.stderr.write("error: cannot run \(program): \(reason)\n")
@@ -263,8 +276,9 @@ extension GitClient {
         do {
             try signature.write(to: file)
         } catch {
+            // git gives up before the program runs, its output still unset.
             shell.stderr.write("error: could not create temporary file: \(error.localizedDescription)\n")
-            return unlaunched
+            return VerifierRun(failed: true, status: "", output: nil)
         }
         defer { try? FileManager.default.removeItem(at: file) }
 
@@ -297,7 +311,13 @@ extension GitClient {
 private final class CapturedOutput: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
-    private(set) lazy var sink = OutputSink(bufferingPolicy: .bufferingOldest(0)) { [self] chunk in
+    // Weak: the sink keeps this closure for its lifetime, and `self`
+    // keeps the sink, so a strong capture would never be freed.
+    private(set) lazy var sink = OutputSink(bufferingPolicy: .bufferingOldest(0)) { [weak self] chunk in
+        self?.append(chunk)
+    }
+
+    private func append(_ chunk: Data) {
         lock.lock()
         data.append(chunk)
         lock.unlock()

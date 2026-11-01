@@ -181,18 +181,22 @@ struct GitCommandVerifyTagTests {
         }
     }
 
-    @Test("merge of a signed tag that fast-forwards or is merged already launches no verifier")
-    func mergeSignedTagWithoutMergeCommit() async throws {
+    @Test("merge of a signed tag runs the verifier before a fast-forward, as git does, not once merged")
+    func mergeSignedTagFastForward() async throws {
         let repo = try makeRepo(program: nil)
         defer { try? FileManager.default.removeItem(at: repo) }
         try systemGit(["config", "gpg.program", "/nonexistent/gpg"], in: repo)
-        try systemGit(["checkout", "-q", "-B", "ff", "main~1"], in: repo)
-        // `v1` is a commit ahead of `main~1`'s fork point, which `ff` is.
+        // `behind` is `v1`'s parent, so merging `v1` fast-forwards. git
+        // prepares the merge message, verifier and all, before it knows
+        // that: the missing program is reported and the merge goes on.
         try systemGit(["checkout", "-q", "-B", "behind", "v1~1"], in: repo)
         let forward = try await git(["merge", "v1"], in: repo)
-        #expect(!forward.stderr.contains("cannot exec"))
+        #expect(forward.stderr == "fatal: cannot exec '/nonexistent/gpg': No such file or directory\n")
+        #expect(forward.status == 0)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: repo) == systemGit(["rev-parse", "v1^{commit}"], in: repo))
+        // Already up to date: no message to prepare, no verifier.
         let again = try await git(["merge", "v1"], in: repo)
-        #expect(!again.stderr.contains("cannot exec"))
+        #expect(again.stderr.isEmpty && again.status == 0)
     }
 
     @Test("merge of a signed tag: the message carries the signature and verification, commented")
