@@ -188,11 +188,14 @@ extension GitClient {
             // changing it is always the sandbox's business.
             let system = Self.configFilePath(.system)
             let reading = Shell.current.sandbox != nil && !GitSandboxPolicy.allowsHostSystemConfig
-            if writing || reading, !system.isEmpty {
+            if writing || reading, !system.isEmpty, writing || location(of: system) != "/dev/null" {
                 try await Shell.authorize(URL(fileURLWithPath: location(of: system)))
             }
         } else if let scope, let named = Self.configFileOverride(scope), !named.isEmpty {
-            try await Shell.authorize(URL(fileURLWithPath: location(of: named)))
+            // `/dev/null` reads as an empty config; nothing of the host's is in it.
+            if writing || location(of: named) != "/dev/null" {
+                try await Shell.authorize(URL(fileURLWithPath: location(of: named)))
+            }
         } else if scope == nil, Self.configFileOverride(.global) != nil {
             // GIT_CONFIG_GLOBAL stands in for both home files; the file it
             // names is let in by `environmentConfig()`.

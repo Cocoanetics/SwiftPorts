@@ -141,6 +141,12 @@ struct Config: AsyncParsableCommand {
     private func configure() async throws {
         let client = CommandContext.gitClient()
 
+        if showOrigin && (writes || (!list && args.count != 1)) {
+            throw CLIError.stderr(
+                "error: --show-origin is only applicable to --get, --get-all, --get-regexp, and --list",
+                exitCode: 129)
+        }
+
         if list {
             for line in try await client.configLines(scope: readScope, showOrigin: showOrigin) {
                 Shell.print(line)

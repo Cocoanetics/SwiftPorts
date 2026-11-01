@@ -60,6 +60,42 @@ struct EnvironmentConfigTests {
                 == ["error: x", "fatal: unable to parse command-line config"])
     }
 
+    /// The count is read as git's `strtoul` reads it (checked against /usr/bin/git).
+    @Test func readsTheCountAsStrtoulDoes() throws {
+        func outcome(_ count: String) -> String {
+            do { return "\(try GitClient.commandLineConfig(["GIT_CONFIG_COUNT": count]).count)" }
+            catch let error as CommandLineConfigError { return error.reason }
+            catch { return "\(error)" }
+        }
+        #expect(outcome("") == "0")
+        #expect(outcome("-0") == "0")
+        #expect(outcome("abc") == "bogus count in GIT_CONFIG_COUNT")
+        #expect(outcome("3x") == "bogus count in GIT_CONFIG_COUNT")
+        #expect(outcome("0x1") == "bogus count in GIT_CONFIG_COUNT")
+        #expect(outcome("  ") == "bogus count in GIT_CONFIG_COUNT")
+        #expect(outcome("-1") == "too many entries in GIT_CONFIG_COUNT")
+        #expect(outcome("2147483648") == "too many entries in GIT_CONFIG_COUNT")
+        #expect(outcome("99999999999999999999") == "too many entries in GIT_CONFIG_COUNT")
+        #expect(outcome("-99999999999999999999") == "too many entries in GIT_CONFIG_COUNT")
+        #expect(outcome(" 1") == "missing config key GIT_CONFIG_KEY_0")
+        #expect(outcome("+1") == "missing config key GIT_CONFIG_KEY_0")
+    }
+
+    @Test func refusesKeysAsGitParsesThem() throws {
+        func key(_ key: String) -> String {
+            do { return try GitClient.normalizedKey(key) }
+            catch let error as CommandLineConfigError { return error.reason }
+            catch { return "\(error)" }
+        }
+        #expect(key(".b") == "key does not contain a section: .b")
+        #expect(key("a b.c") == "invalid key: a b.c")
+        #expect(key("a.b c") == "invalid key: a.b c")
+        #expect(key("a.1b") == "invalid key: a.1b")
+        #expect(key("1a.b") == "1a.b")
+        #expect(key("A.B.C.D") == "a.B.C.d")
+        #expect(key("a..b") == "a..b")
+    }
+
     /// The overrides switch off the levels they replace and nothing more.
     @Test func overridesSwitchOffTheirLevels() async throws {
         Libgit2.ensureInitialized()

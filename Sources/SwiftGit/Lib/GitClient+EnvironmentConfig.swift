@@ -121,12 +121,22 @@ extension GitClient {
     /// can't read stops the command.
     static func commandLineConfig(_ variables: [String: String]) throws -> [String] {
         guard let text = variables["GIT_CONFIG_COUNT"] else { return [] }
-        guard let count = Int(text) else {
+        // git reads the count with `strtoul(…, 10)` and refuses what doesn't
+        // end where the number does: an empty value is 0, leading white
+        // space and a sign are taken, a negative or overflowing one is
+        // "too many".
+        var end: UnsafeMutablePointer<CChar>?
+        let parsed = text.withCString { start -> (value: UInt, rest: Bool) in
+            let value = UInt(strtoul(start, &end, 10))
+            return (value, end.map { $0.pointee != 0 } ?? true)
+        }
+        guard !parsed.rest else {
             throw CommandLineConfigError(reason: "bogus count in GIT_CONFIG_COUNT")
         }
-        guard count >= 0 else {
+        guard parsed.value <= UInt(Int32.max) else {
             throw CommandLineConfigError(reason: "too many entries in GIT_CONFIG_COUNT")
         }
+        let count = Int(parsed.value)
         var entries: [String] = []
         for index in 0..<count {
             guard let key = variables["GIT_CONFIG_KEY_\(index)"] else {
@@ -145,16 +155,32 @@ extension GitClient {
     /// complaint about one it can't take.
     static func normalizedKey(_ key: String) throws -> String {
         guard !key.isEmpty else { throw CommandLineConfigError(reason: "empty config key") }
-        guard let first = key.firstIndex(of: "."), let last = key.lastIndex(of: ".") else {
+        // git_config_parse_key: the last dot must come after the first
+        // character, and the variable name must be there.
+        guard let first = key.firstIndex(of: "."), let last = key.lastIndex(of: "."), last != key.startIndex else {
             throw CommandLineConfigError(reason: "key does not contain a section: \(key)")
         }
         guard last != key.index(before: key.endIndex) else {
             throw CommandLineConfigError(reason: "key does not contain variable name: \(key)")
         }
-        let section = key[..<first].lowercased()
-        let variable = key[key.index(after: last)...].lowercased()
-        let subsection = first < last ? String(key[first..<last]) : ""
-        return section + subsection + "." + variable
+        // The section and the variable name take letters, digits and `-`,
+        // the variable name starting with a letter; a subsection takes
+        // anything but a newline.
+        func keyCharacter(_ byte: UInt8) -> Bool {
+            (byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x5A)
+                || (byte >= 0x61 && byte <= 0x7A) || byte == 0x2D
+        }
+        let section = key[..<first], subsection = key[first..<last], variable = key[key.index(after: last)...]
+        for part in [section, variable] where !part.utf8.allSatisfy(keyCharacter) {
+            throw CommandLineConfigError(reason: "invalid key: \(key)")
+        }
+        if let initial = variable.utf8.first, initial >= 0x30 && initial <= 0x39 || initial == 0x2D {
+            throw CommandLineConfigError(reason: "invalid key: \(key)")
+        }
+        guard !subsection.contains("\n") else {
+            throw CommandLineConfigError(reason: "invalid key (newline): \(key)")
+        }
+        return section.lowercased() + subsection + "." + variable.lowercased()
     }
 
     // MARK: Installing

@@ -87,7 +87,7 @@ public struct GitClient: ForgeKit.GitClient {
         let progress = shellProgressSink()
         // Tier-2 (#18): apply env→option bridge before clone so the
         // freshly-init'd repo's config is loaded against the sandbox.
-        try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+        try await isolated {
             _ = try Repository.clone(
                 from: url, to: destURL,
                 depth: depth,

@@ -233,6 +233,10 @@ struct GitCommandConfigEnvTests: ConfigTestHelpers {
         let none = try await git(["config", "--list"], root: fixture.root, home: fixture.home, work: fixture.work,
                                  environment: ["GIT_CONFIG_GLOBAL": "/dev/null"])
         #expect(none.stdout == "" && none.status == 0)
+        // Nor is it refused when it is the file an explicit scope reads.
+        let scoped = try await git(["config", "--global", "--list"], root: fixture.root, home: fixture.home,
+                                   work: fixture.work, environment: ["GIT_CONFIG_GLOBAL": "/dev/null"])
+        #expect(scoped.stdout == "" && scoped.status == 0)
         // An include in a file of the sandbox's own is still refused.
         let included = fixture.root.appendingPathComponent("included.cfg")
         try write("[include]\n\tpath = /etc/gitconfig\n", to: included)
@@ -296,6 +300,12 @@ struct GitCommandConfigEnvTests: ConfigTestHelpers {
             ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a.b"],
             ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "ab", "GIT_CONFIG_VALUE_0": "1"],
             ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "", "GIT_CONFIG_VALUE_0": "1"],
+            ["GIT_CONFIG_COUNT": "99999999999999999999"],
+            ["GIT_CONFIG_COUNT": "3x"],
+            ["GIT_CONFIG_COUNT": " 1"],
+            ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": ".b", "GIT_CONFIG_VALUE_0": "1"],
+            ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a b.c", "GIT_CONFIG_VALUE_0": "1"],
+            ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a.1b", "GIT_CONFIG_VALUE_0": "1"],
         ]
         for environment in cases {
             let ours = try await git(

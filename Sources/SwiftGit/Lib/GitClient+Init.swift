@@ -27,7 +27,7 @@ extension GitClient {
         // Tier-2 (#18): apply env→option bridge before init so the
         // freshly-created repo's seeded config is loaded against the
         // sandbox's view, not the host's.
-        try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+        try await isolated {
             _ = try Repository.initialize(
                 at: workingDirectory,
                 bare: bare, initialBranch: initialBranch, reinit: reinit)

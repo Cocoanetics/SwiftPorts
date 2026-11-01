@@ -388,7 +388,7 @@ extension GitClient {
         }
         try await Shell.authorize(destination)
         let progress = shellProgressSink()
-        try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+        try await isolated {
             _ = try Repository.clone(
                 fromRemote: source, to: destination,
                 depth: depth, singleBranch: singleBranch, branch: branch,
