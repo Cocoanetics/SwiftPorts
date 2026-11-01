@@ -276,7 +276,15 @@ struct GitCommandVerifyTagSSHTests {
             let fixture = try makeFixture()
             let theirs = fixture.repo.deletingLastPathComponent().appendingPathComponent("theirs")
             defer { try? FileManager.default.removeItem(at: fixture.repo.deletingLastPathComponent()) }
-            try FileManager.default.copyItem(at: fixture.repo, to: theirs)
+            // git's background maintenance may remove its lock mid-copy.
+            for attempt in 1...5 {
+                do {
+                    try FileManager.default.copyItem(at: fixture.repo, to: theirs)
+                    break
+                } catch where attempt < 5 {
+                    try? FileManager.default.removeItem(at: theirs)
+                }
+            }
             _ = try await git(["merge"] + heads, in: fixture.repo)
             try systemGit(["merge"] + heads, in: theirs)
             let message = try systemGit(["log", "-1", "--format=%B"], in: fixture.repo)
