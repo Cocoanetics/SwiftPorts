@@ -26,17 +26,6 @@ struct GitCommandRemoteTests {
             .appendingPathComponent("\(label)-\(UUID().uuidString)")
     }
 
-    /// HOME + no system config so a host `pull.rebase` / `pull.ff` can't
-    /// change what the system `git` does under `expectLikeGit` /
-    /// `expectRefusal`. Matches the shell the port runs in here (no HOME).
-    private func systemGitEnvironment() -> [String: String] {
-        [
-            "PATH": "/usr/bin:/bin",
-            "HOME": tmp("GitRemoteEmptyHome").path,
-            "GIT_CONFIG_NOSYSTEM": "1",
-        ]
-    }
-
     /// The system `git`, for setup and inspection.
     @discardableResult
     private func systemGit(_ args: [String], in dir: URL) throws -> String {
@@ -45,7 +34,6 @@ struct GitCommandRemoteTests {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com"] + args
         process.currentDirectoryURL = dir
-        process.environment = systemGitEnvironment()
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
@@ -67,7 +55,6 @@ struct GitCommandRemoteTests {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com"] + args
         process.currentDirectoryURL = dir
-        process.environment = systemGitEnvironment()
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
@@ -78,14 +65,34 @@ struct GitCommandRemoteTests {
         return (message, process.terminationStatus)
     }
 
+    /// Shell for the port: the fixture host by default; a caller-supplied
+    /// sandbox keeps its own environment so `GIT_CONFIG_GLOBAL` isn't
+    /// pointed at a home outside a path-mapped root.
+    private func portShell(
+        stdout: OutputSink? = nil, stderr: OutputSink? = nil,
+        variables: [String: String] = [:], workingDirectory: String,
+        sandbox: Sandbox?
+    ) -> Shell {
+        let shell: Shell
+        if let sandbox {
+            shell = Shell(stdout: stdout, stderr: stderr,
+                          environment: Environment(variables: variables, workingDirectory: workingDirectory))
+            shell.sandbox = sandbox
+        } else {
+            shell = Shell(stdout: stdout, stderr: stderr,
+                          environment: host.environment(variables, workingDirectory: workingDirectory))
+            shell.sandbox = host.sandbox
+        }
+        return shell
+    }
+
     /// SwiftPorts' `git`'s stderr, its error's lines included, as git
     /// would print them, and its exit status.
     private func gitStderr(
         _ args: [String], in dir: URL, sandbox: Sandbox? = nil
     ) async throws -> (stderr: String, status: Int32) {
         let out = OutputSink(), err = OutputSink()
-        let shell = Shell(stdout: out, stderr: err, environment: host.environment(workingDirectory: dir.path))
-        shell.sandbox = sandbox ?? host.sandbox
+        let shell = portShell(stdout: out, stderr: err, workingDirectory: dir.path, sandbox: sandbox)
         var failure: CLIError?
         do {
             try await shell.withCurrent {
@@ -117,9 +124,8 @@ struct GitCommandRemoteTests {
         sandbox: Sandbox? = nil
     ) async throws -> (stdout: String, stderr: String) {
         let out = OutputSink(), err = OutputSink()
-        let shell = Shell(stdout: out, stderr: err,
-                          environment: host.environment(variables, workingDirectory: dir.path))
-        shell.sandbox = sandbox ?? host.sandbox
+        let shell = portShell(stdout: out, stderr: err, variables: variables,
+                              workingDirectory: dir.path, sandbox: sandbox)
         try await shell.withCurrent {
             // As both entry points do, git's shorthands first.
             let parsed = try GitCommand.parseAsRoot(GitCommand.preprocess(args))
@@ -1718,7 +1724,6 @@ struct GitCommandRemoteTests {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + args
         process.currentDirectoryURL = dir
-        process.environment = systemGitEnvironment()
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
@@ -2421,7 +2426,6 @@ struct GitCommandRemoteTests {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + args
         process.currentDirectoryURL = dir
-        process.environment = systemGitEnvironment()
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
