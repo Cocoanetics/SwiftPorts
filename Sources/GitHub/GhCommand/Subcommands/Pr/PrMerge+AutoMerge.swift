@@ -16,7 +16,13 @@ extension PrMerge {
             """
             query($owner: String!, $name: String!, $number: Int!) {
               repository(owner: $owner, name: $name) {
-                pullRequest(number: $number) { id state mergeStateStatus }
+                pullRequest(number: $number) {
+                  id
+                  state
+                  mergeStateStatus
+                  baseRefName
+                  isMergeQueueEnabled
+                }
               }
             }
             """,
@@ -33,13 +39,26 @@ extension PrMerge {
             message = "Auto-merge disabled for pull request \(target.slug)#\(number)"
         } else {
             if pr.state == "MERGED" { return true }
-            if ["CLEAN", "HAS_HOOKS", "UNSTABLE"].contains(pr.mergeStateStatus) { return false }
-            if let method { input["mergeMethod"] = .string(method.rawValue.uppercased()) }
+            if !pr.isMergeQueueEnabled,
+               ["CLEAN", "HAS_HOOKS", "UNSTABLE"].contains(pr.mergeStateStatus) {
+                guard method != nil else {
+                    throw ValidationError("--merge, --rebase, or --squash required when not running interactively")
+                }
+                return false
+            }
+            guard let method = method ?? (pr.isMergeQueueEnabled ? .merge : nil) else {
+                throw ValidationError("--merge, --rebase, or --squash required when not running interactively")
+            }
+            input["mergeMethod"] = .string(method.rawValue.uppercased())
             if let commitTitle, !commitTitle.isEmpty { input["commitHeadline"] = .string(commitTitle) }
             if let commitMessage { input["commitBody"] = .string(commitMessage) }
             mutation = PullRequestMutations.enablePullRequestAutoMerge
-            let via = method == .squash ? " via squash" : method == .rebase ? " via rebase" : ""
-            message = "Pull request \(target.slug)#\(number) will be automatically merged\(via) when all requirements are met"
+            if pr.isMergeQueueEnabled {
+                message = "Pull request \(target.slug)#\(number) will be added to the merge queue for \(pr.baseRefName) when ready"
+            } else {
+                let via = method == .squash ? " via squash" : method == .rebase ? " via rebase" : ""
+                message = "Pull request \(target.slug)#\(number) will be automatically merged\(via) when all requirements are met"
+            }
         }
         let _: AutoMergeResponse = try await gql.query(mutation, variables: ["input": .object(input)])
         if TTY.isStdoutTTY {
@@ -59,6 +78,8 @@ extension PrMerge {
             let id: String
             let state: String
             let mergeStateStatus: String
+            let baseRefName: String
+            let isMergeQueueEnabled: Bool
         }
     }
 }

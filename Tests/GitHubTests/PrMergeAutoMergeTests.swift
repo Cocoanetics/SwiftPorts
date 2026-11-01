@@ -10,7 +10,7 @@ import Testing
 
 extension HTTPMockedNetworkTests {
     @Suite struct PrMergeAutoMergeTests {
-        @Test(arguments: ["merge", "squash", "rebase", "default"])
+        @Test(arguments: ["merge", "squash", "rebase"])
         func enablesAutoMerge(method: String) async throws {
             let session = MockURLProtocol.session()
             let calls = TestLockedBox(0)
@@ -32,7 +32,7 @@ extension HTTPMockedNetworkTests {
                 #expect(query.contains("enablePullRequestAutoMerge(input: $input)"))
                 let input = try #require(variables["input"] as? [String: String])
                 #expect(input["pullRequestId"] == "PR_node")
-                #expect(input["mergeMethod"] == (method == "default" ? nil : method.uppercased()))
+                #expect(input["mergeMethod"] == method.uppercased())
                 #expect(input["commitHeadline"] == "Custom subject")
                 #expect(input["commitBody"] == "Custom body")
                 #expect(input["commitTitle"] == nil)
@@ -40,8 +40,47 @@ extension HTTPMockedNetworkTests {
                 return Self.response(request, json: #"{"data":{"enablePullRequestAutoMerge":{"clientMutationId":null}}}"#)
             }
             var args = ["1", "--auto", "--subject", "Custom subject", "--body", "Custom body"]
-            if method != "default" { args.append("--\(method)") }
+            args.append("--\(method)")
             try await Self.run(args, session: session)
+            #expect(calls.withLock { $0 } == 2)
+        }
+
+        @Test(arguments: ["CLEAN", "BLOCKED"])
+        func requiresMergeMethodOutsideMergeQueue(status: String) async throws {
+            let session = MockURLProtocol.session()
+            let calls = TestLockedBox(0)
+            MockURLProtocol.handler = { request in
+                calls.withLock { $0 += 1 }
+                return Self.response(request, json: Self.status(status))
+            }
+            await #expect(throws: ValidationError.self) {
+                try await Self.run(["1", "--auto"], session: session)
+            }
+            #expect(calls.withLock { $0 } == 1)
+        }
+
+        @Test(arguments: ["CLEAN", "BLOCKED"])
+        func mergeQueueUsesAutoMergeWhenMethodIsOmitted(status: String) async throws {
+            let session = MockURLProtocol.session()
+            let calls = TestLockedBox(0)
+            MockURLProtocol.handler = { request in
+                let call = calls.withLock { value in value += 1; return value }
+                if call == 1 {
+                    let body = try Self.body(request)
+                    let query = try #require(body["query"] as? String)
+                    #expect(query.contains("isMergeQueueEnabled"))
+                    return Self.response(request, json: Self.status(status, mergeQueueEnabled: true))
+                }
+                let body = try Self.body(request)
+                let query = try #require(body["query"] as? String)
+                #expect(query.contains("enablePullRequestAutoMerge(input: $input)"))
+                let variables = try #require(body["variables"] as? [String: Any])
+                let input = try #require(variables["input"] as? [String: String])
+                #expect(input["pullRequestId"] == "PR_node")
+                #expect(input["mergeMethod"] == "MERGE")
+                return Self.response(request, json: #"{"data":{"enablePullRequestAutoMerge":{"clientMutationId":null}}}"#)
+            }
+            try await Self.run(["1", "--auto"], session: session)
             #expect(calls.withLock { $0 } == 2)
         }
 
@@ -203,8 +242,8 @@ extension HTTPMockedNetworkTests {
             return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         }
 
-        private static func status(_ status: String) -> String {
-            "{\"data\":{\"repository\":{\"pullRequest\":{\"id\":\"PR_node\",\"state\":\"OPEN\",\"mergeStateStatus\":\"\(status)\"}}}}"
+        private static func status(_ status: String, mergeQueueEnabled: Bool = false) -> String {
+            "{\"data\":{\"repository\":{\"pullRequest\":{\"id\":\"PR_node\",\"state\":\"OPEN\",\"mergeStateStatus\":\"\(status)\",\"baseRefName\":\"main\",\"isMergeQueueEnabled\":\(mergeQueueEnabled)}}}}"
         }
 
         private static func response(_ request: URLRequest, json: String) -> (HTTPURLResponse, Data) {
