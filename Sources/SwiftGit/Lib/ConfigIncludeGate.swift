@@ -75,12 +75,15 @@ extension GitClient {
     /// `[include]` files libgit2 may read meanwhile: global, system and
     /// repository configs alike. A file not yet authorised fails the run,
     /// which is repeated once the sandbox has allowed it (or the denial is
-    /// thrown). Without a sandbox nothing is gated.
+    /// thrown). Without a sandbox nothing is gated. The shell's
+    /// `GIT_CONFIG_*` plan is applied for the run, as ``isolated`` did.
     func isolatedGated<T>(_ body: () throws -> T) async throws -> T {
+        let plan = try await environmentConfig()
         let gate = ConfigIncludeGate(enforcing: Shell.current.sandbox != nil)
         while true {
             do {
-                return try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) { try gate.run(body) }
+                return try Libgit2Sandboxing.shared.runIsolated(
+                    Shell.current.sandbox, environment: plan) { try gate.run(body) }
             } catch {
                 guard try await gate.authorizeRefused() else { throw error }
             }

@@ -2,6 +2,7 @@
 import CLibgit2Shim
 import Foundation
 import GitKit
+import ShellKit
 import Testing
 @testable import SwiftGit
 
@@ -23,9 +24,10 @@ struct GitClientSystemConfigPathTests {
         }
     }
 
-    /// Without a sandbox the process's XDG_CONFIG_HOME names the XDG config
-    /// directory, as it does for git.
-    @Test func processXDGConfigHome() throws {
+    /// Without a sandbox the shell's HOME and XDG_CONFIG_HOME name the
+    /// directories (as `apply` pins them), else the process's, as they do
+    /// for git, which has one environment.
+    @Test func shellThenProcessXDGConfigHome() async throws {
         let saved = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
         defer {
             if let saved { setenv("XDG_CONFIG_HOME", saved, 1) } else { unsetenv("XDG_CONFIG_HOME") }
@@ -33,11 +35,33 @@ struct GitClientSystemConfigPathTests {
         let savedHome = ProcessInfo.processInfo.environment["HOME"]
         defer { if let savedHome { setenv("HOME", savedHome, 1) } }
         setenv("HOME", "/custom/home", 1)
-        #expect(Libgit2Sandboxing.shared.home(for: nil) == "/custom/home")
+
+        // A shell that says nothing has no home: the host's is not borrowed.
+        let silent = Shell(environment: Environment(variables: [:], workingDirectory: "/"))
+        try await silent.withCurrent {
+            #expect(Libgit2Sandboxing.shared.homeIsUnset(for: nil))
+            #expect(Libgit2Sandboxing.shared.home(for: nil) == "")
+        }
+        // An empty HOME is the root, not the host's home.
+        let empty = Shell(environment: Environment(variables: ["HOME": ""], workingDirectory: "/"))
+        try await empty.withCurrent {
+            #expect(!Libgit2Sandboxing.shared.homeIsUnset(for: nil))
+            #expect(Libgit2Sandboxing.shared.home(for: nil) == "")
+        }
+
+        // What the shell names wins over the process's.
         setenv("XDG_CONFIG_HOME", "/custom/xdg", 1)
-        #expect(Libgit2Sandboxing.shared.xdgConfigHome(for: nil) == "/custom/xdg")
-        unsetenv("XDG_CONFIG_HOME")
-        #expect(Libgit2Sandboxing.shared.xdgConfigHome(for: nil) == "/custom/home/.config")
+        let named = Shell(environment: Environment(
+            variables: ["HOME": "/shell/home", "XDG_CONFIG_HOME": "/shell/xdg"], workingDirectory: "/"))
+        try await named.withCurrent {
+            #expect(Libgit2Sandboxing.shared.home(for: nil) == "/shell/home")
+            #expect(Libgit2Sandboxing.shared.xdgConfigHome(for: nil) == "/shell/xdg")
+        }
+        let homeOnly = Shell(environment: Environment(variables: ["HOME": "/shell/home"], workingDirectory: "/"))
+        try await homeOnly.withCurrent {
+            // A shell with a home of its own doesn't get the host's XDG directory.
+            #expect(Libgit2Sandboxing.shared.xdgConfigHome(for: nil) == "/shell/home/.config")
+        }
     }
 
     /// The search path is a list: the file may be in a later directory.

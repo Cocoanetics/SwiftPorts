@@ -24,7 +24,7 @@ extension GitClient {
 
     /// The file `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM` names for `scope`,
     /// which git takes as is: an empty value is a file called `''`.
-    private static func configFileOverride(_ scope: ConfigScope) -> String? {
+    static func configFileOverride(_ scope: ConfigScope) -> String? {
         let variable = scope == .global ? "GIT_CONFIG_GLOBAL" : "GIT_CONFIG_SYSTEM"
         return Shell.current.environment[variable]
     }
@@ -126,15 +126,22 @@ extension GitClient {
         scope: ConfigScope?, missing: MissingConfigFile = .fail, _ body: (OpaquePointer?) throws -> T
     ) async throws -> T {
         try await Shell.authorize(workingDirectory)
+        if scope == .global, Self.configFileOverride(.global) == nil,
+           Libgit2Sandboxing.shared.homeIsUnset(for: Shell.current.sandbox) {
+            throw GitDiagnosticError(lines: ["fatal: $HOME not set"], exitCode: 128)
+        }
         try await authorizeConfigFile(of: scope, writing: missing == .create || missing == .emptyForWrite)
         // A scope's own file is opened by itself: the default config
         // would parse the files it supersedes (a bad ~/.gitconfig
         // under GIT_CONFIG_GLOBAL) as well.
         return try await isolatedGated {
             guard let scope, scope != .local else {
+                // Libgit2Sandboxing has switched off the levels the
+                // environment replaces; its files and entries come in here.
                 var base: OpaquePointer?
                 try Self.check(git_config_open_default(&base))
                 defer { git_config_free(base) }
+                try Self.installEnvironmentConfig(into: base, repo: nil)
                 return try body(base)
             }
             let file = try self.openScopedConfig(scope, missing: missing)
@@ -149,8 +156,10 @@ extension GitClient {
     private func authorizeConfigFile(of scope: ConfigScope?, writing: Bool) async throws {
         guard scope != .local else { return }
         try await authorizeSelectedFile(of: scope, writing: writing)
+        // An unscoped read also touches the XDG file; GIT_CONFIG_GLOBAL
+        // stands in for both home files (authorised by `environmentConfig()`).
         guard Shell.current.sandbox != nil, scope == nil else { return }
-        // An unscoped read reads both global files (the XDG one too).
+        guard Self.configFileOverride(.global) == nil else { return }
         let xdg = Libgit2Sandboxing.shared.xdgConfigHome(for: Shell.current.sandbox) + "/git/config"
         try await Shell.authorize(URL(fileURLWithPath: xdg))
     }
@@ -162,11 +171,18 @@ extension GitClient {
             // changing it is always the sandbox's business.
             let system = Self.configFilePath(.system)
             let reading = Shell.current.sandbox != nil && !GitSandboxPolicy.allowsHostSystemConfig
-            if writing || reading, !system.isEmpty {
+            if writing || reading, !system.isEmpty, writing || location(of: system) != "/dev/null" {
                 try await Shell.authorize(URL(fileURLWithPath: location(of: system)))
             }
         } else if let scope, let named = Self.configFileOverride(scope), !named.isEmpty {
-            try await Shell.authorize(URL(fileURLWithPath: location(of: named)))
+            // `/dev/null` reads as an empty config; nothing of the host's is in it.
+            if writing || location(of: named) != "/dev/null" {
+                try await Shell.authorize(URL(fileURLWithPath: location(of: named)))
+            }
+        } else if scope == nil, Self.configFileOverride(.global) != nil {
+            // GIT_CONFIG_GLOBAL stands in for both home files; the file it
+            // names is let in by `environmentConfig()`.
+            return
         } else {
             let home = Libgit2Sandboxing.shared.home(for: Shell.current.sandbox)
             try await Shell.authorize(URL(fileURLWithPath: home).appendingPathComponent(".gitconfig"))
@@ -247,29 +263,45 @@ extension GitClient {
         return found
     }
 
-    /// What `git config --list` prints for `config`'s entries, lowest level
+    /// One entry of a listing: where it comes from (`--show-origin`'s text)
+    /// and what it says.
+    struct ListedConfigEntry {
+        let level: Int32
+        let offset: Int
+        let origin: String
+        let name: String
+        /// `nil` for a key without a value.
+        let value: String?
+
+        /// `name=value`, or just `name` for a key without a value.
+        var line: String { value.map { "\(name)=\($0)" } ?? name }
+    }
+
+    /// The entries `git config --list` prints for `config`, lowest level
     /// first (libgit2 iterates the highest first) and each file top to
-    /// bottom: `name=value`, or just `name` for a key without a value.
-    /// With `level`, only that level's entries.
-    static func configLines(
-        in config: OpaquePointer?, level only: git_config_level_t? = nil, withIncludes: Bool = true
-    ) throws -> [String] {
+    /// bottom. With `level`, only that level's entries; `base` is the work
+    /// tree's top, which the repository's own files are shown relative to.
+    func configEntries(
+        in config: OpaquePointer?, level only: git_config_level_t? = nil, withIncludes: Bool = true,
+        base: String? = nil
+    ) throws -> [ListedConfigEntry] {
         var iterator: UnsafeMutablePointer<git_config_iterator>?
-        try check(git_config_iterator_new(&iterator, config))
+        try Self.check(git_config_iterator_new(&iterator, config))
         defer { git_config_iterator_free(iterator) }
-        struct Listed { let level: Int32, offset: Int, line: String }
-        var entries: [Listed] = []
+        var entries: [ListedConfigEntry] = []
         while true {
             var entry: UnsafeMutablePointer<git_config_entry>?
             let result = git_config_next(&entry, iterator)
             if result == GIT_ITEROVER.rawValue { break }
-            try check(result)
+            try Self.check(result)
             guard let entry = entry?.pointee, let name = entry.name else { continue }
             if let only, entry.level != only { continue }
             if !withIncludes && entry.include_depth > 0 { continue }
-            let line = entry.value.map { "\(String(cString: name))=\(String(cString: $0))" } ?? String(cString: name)
-            entries.append(Listed(level: Int32(entry.level.rawValue), offset: entries.count, line: line))
+            entries.append(ListedConfigEntry(
+                level: Int32(entry.level.rawValue), offset: entries.count,
+                origin: originName(of: entry, base: base),
+                name: String(cString: name), value: entry.value.map { String(cString: $0) }))
         }
-        return entries.sorted { ($0.level, $0.offset) < ($1.level, $1.offset) }.map(\.line)
+        return entries.sorted { ($0.level, $0.offset) < ($1.level, $1.offset) }
     }
 }

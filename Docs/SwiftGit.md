@@ -239,3 +239,36 @@ await GitSandboxPolicy.$allowsHostSystemConfig.withValue(true) { … }
 
 `GIT_CONFIG_NOSYSTEM=1` still leaves the system level out. Without a sandbox
 nothing changes. There is no `git` CLI flag for this.
+
+## The environment's config
+
+The shell's `HOME`, `XDG_CONFIG_HOME`, `GIT_CONFIG_GLOBAL`,
+`GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM` and `GIT_CONFIG_COUNT` /
+`GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` change what every command reads
+(commit identity included), sandbox or not, not only `git config --global`:
+
+- `HOME` / `XDG_CONFIG_HOME` (the shell's, else the process's without a
+  sandbox) point libgit2's global and XDG search at them.
+- `GIT_CONFIG_GLOBAL` replaces `~/.gitconfig` *and* the XDG file; a relative
+  name is the shell's working directory's, and `--show-origin` prints it as
+  typed. `/dev/null` or an empty value leaves both out.
+- `GIT_CONFIG_SYSTEM` names the system file, unless `GIT_CONFIG_NOSYSTEM` is
+  true. A sandbox reads it only inside its root (or with
+  `allowsHostSystemConfig`); a file a sandbox may not read is left out, as the
+  host's own is. A `GIT_CONFIG_GLOBAL` file outside the root is a denial
+  (`/dev/null` excepted). Each `[include]` / `[includeIf]` path libgit2 opens
+  is authorised through the sandbox (GitKit 2.9.0); a path outside the root
+  is a denial.
+- `GIT_CONFIG_COUNT` entries are the highest level, shown by `--show-origin`
+  as `command line:`. What git can't parse stops the command with git's
+  `fatal: unable to parse command-line config`.
+
+libgit2 reads none of these itself, so `Libgit2Sandboxing` switches off the
+levels they replace and `GitClient.installEnvironmentConfig` adds the file or
+entries to the open config. GitKit's `Repository` keeps its handle internal;
+`withRepository` reaches it by reflection (a test fails if GitKit stops having
+it). `clone` and `init` open their repository inside GitKit, so they see
+`HOME` / `XDG_CONFIG_HOME` but not the `GIT_CONFIG_*` overrides yet.
+
+`git config --show-origin` (with `--list` or a single key) prints
+`file:<path>` / `command line:` and a tab before each entry.

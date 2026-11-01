@@ -263,8 +263,11 @@ public struct GitClient: ForgeKit.GitClient {
         // option block before opening the repo. The repo's frozen
         // config is then loaded against the sandbox's view, not the
         // host process env.
+        // The environment's config (GIT_CONFIG_GLOBAL / _SYSTEM / _COUNT)
+        // goes onto the repository's live config before anything reads it.
         return try await isolatedGated {
             let repo = try Repository.open(at: workingDirectory)
+            try Self.installEnvironmentConfig(into: repo)
             return try body(repo)
         }
     }

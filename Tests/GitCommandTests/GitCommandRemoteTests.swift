@@ -2,6 +2,9 @@
 // `commit` / `pull` / `clone` take `-q` (#123). Runs the subcommands in a
 // ShellKit shell against local bare repositories, with the system `git`
 // setting up and inspecting them.
+//
+// swiftlint:disable file_length type_body_length
+// A single end-to-end suite against shared local bare remotes; will be split separately.
 #if os(macOS) || os(Linux)
 import Foundation
 import Testing
@@ -65,14 +68,34 @@ struct GitCommandRemoteTests {
         return (message, process.terminationStatus)
     }
 
+    /// Shell for the port: the fixture host by default; a caller-supplied
+    /// sandbox keeps its own environment so `GIT_CONFIG_GLOBAL` isn't
+    /// pointed at a home outside a path-mapped root.
+    private func portShell(
+        stdout: OutputSink? = nil, stderr: OutputSink? = nil,
+        variables: [String: String] = [:], workingDirectory: String,
+        sandbox: Sandbox?
+    ) -> Shell {
+        let shell: Shell
+        if let sandbox {
+            shell = Shell(stdout: stdout, stderr: stderr,
+                          environment: Environment(variables: variables, workingDirectory: workingDirectory))
+            shell.sandbox = sandbox
+        } else {
+            shell = Shell(stdout: stdout, stderr: stderr,
+                          environment: host.environment(variables, workingDirectory: workingDirectory))
+            shell.sandbox = host.sandbox
+        }
+        return shell
+    }
+
     /// SwiftPorts' `git`'s stderr, its error's lines included, as git
     /// would print them, and its exit status.
     private func gitStderr(
         _ args: [String], in dir: URL, sandbox: Sandbox? = nil
     ) async throws -> (stderr: String, status: Int32) {
         let out = OutputSink(), err = OutputSink()
-        let shell = Shell(stdout: out, stderr: err, environment: host.environment(workingDirectory: dir.path))
-        shell.sandbox = sandbox ?? host.sandbox
+        let shell = portShell(stdout: out, stderr: err, workingDirectory: dir.path, sandbox: sandbox)
         var failure: CLIError?
         do {
             try await shell.withCurrent {
@@ -104,9 +127,8 @@ struct GitCommandRemoteTests {
         sandbox: Sandbox? = nil
     ) async throws -> (stdout: String, stderr: String) {
         let out = OutputSink(), err = OutputSink()
-        let shell = Shell(stdout: out, stderr: err,
-                          environment: host.environment(variables, workingDirectory: dir.path))
-        shell.sandbox = sandbox ?? host.sandbox
+        let shell = portShell(stdout: out, stderr: err, variables: variables,
+                              workingDirectory: dir.path, sandbox: sandbox)
         try await shell.withCurrent {
             // As both entry points do, git's shorthands first.
             let parsed = try GitCommand.parseAsRoot(GitCommand.preprocess(args))
@@ -2745,3 +2767,4 @@ struct GitCommandRemoteTests {
     }
 }
 #endif
+// swiftlint:enable file_length type_body_length

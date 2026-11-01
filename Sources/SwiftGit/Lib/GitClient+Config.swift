@@ -67,15 +67,36 @@ extension GitClient {
     /// first, a key without a value as just its name. With `--global` or
     /// `--system` that file only (which must exist), with `--local` the
     /// repository's own; with no scope, every level, and outside a
-    /// repository the global and system config.
-    public func configLines(scope: ConfigScope? = nil) async throws -> [String] {
+    /// repository the global and system config. `showOrigin` puts where
+    /// each came from before it (`file:<path>` or `command line:`, a tab).
+    public func configLines(scope: ConfigScope? = nil, showOrigin: Bool = false) async throws -> [String] {
+        try await configEntries(scope: scope).map { showOrigin ? "\($0.origin)\t\($0.line)" : $0.line }
+    }
+
+    /// `git config --show-origin <name>`: where the value git gets for
+    /// `name` comes from, and the value; `nil` when it isn't set.
+    public func configGetShowingOrigin(
+        _ name: String, scope: ConfigScope? = nil
+    ) async throws -> (origin: String, value: String)? {
+        let key: String
+        do { key = try Self.normalizedKey(name) } catch let error as CommandLineConfigError {
+            // Config's own key check, which exits 1 where the environment's is fatal.
+            throw GitDiagnosticError(lines: ["error: \(error.reason)"], exitCode: 1)
+        }
+        guard let entry = try await configEntries(scope: scope).last(where: { $0.name == key }) else {
+            return nil
+        }
+        return (entry.origin, entry.value ?? "")
+    }
+
+    func configEntries(scope: ConfigScope?) async throws -> [ListedConfigEntry] {
         if scope == .global || scope == .system {
             return try await withDefaultConfig(scope: scope, missing: .fail) {
-                try Self.configLines(in: $0, withIncludes: false)
+                try configEntries(in: $0, withIncludes: false)
             }
         }
         try await Shell.authorize(workingDirectory)
-        let inRepository: [String]? = try await isolatedGated {
+        let inRepository: [ListedConfigEntry]? = try await isolatedGated {
             var repo: OpaquePointer?
             var config: OpaquePointer?
             defer {
@@ -85,8 +106,11 @@ extension GitClient {
             let opened = git_repository_open_ext(&repo, workingDirectory.path, 0, nil)
             if opened == GIT_ENOTFOUND.rawValue { return nil }
             try Self.check(opened)
+            try Self.installEnvironmentConfig(intoRepository: repo)
             try Self.check(git_repository_config_snapshot(&config, repo))
-            return try Self.configLines(in: config, level: scope == .local ? GIT_CONFIG_LEVEL_LOCAL : nil)
+            let base = (git_repository_workdir(repo) ?? git_repository_path(repo)).map { String(cString: $0) }
+            return try configEntries(
+                in: config, level: scope == .local ? GIT_CONFIG_LEVEL_LOCAL : nil, base: base)
         }
         if let inRepository { return inRepository }
         if scope == .local {
@@ -94,7 +118,7 @@ extension GitClient {
                 code: GIT_ENOTFOUND.rawValue, klass: Int32(GIT_ERROR_REPOSITORY.rawValue),
                 message: "could not find repository at '\(workingDirectory.path)'")
         }
-        return try await withDefaultConfig(scope: nil, missing: .empty) { try Self.configLines(in: $0) }
+        return try await withDefaultConfig(scope: nil, missing: .empty) { try configEntries(in: $0) }
     }
 
     /// Whether `error` is libgit2 not finding a repository to open.
@@ -146,6 +170,7 @@ extension GitClient {
             git_repository_free(repo)
         }
         try check(git_repository_open_ext(&repo, directory.path, 0, nil))
+        try installEnvironmentConfig(intoRepository: repo)
         try check(git_repository_config_snapshot(&config, repo))
         try check(iterate(config, &iterator))
         var values: [(level: Int, value: String)] = []
@@ -183,6 +208,7 @@ extension GitClient {
             git_repository_free(repo)
         }
         try check(git_repository_open_ext(&repo, directory.path, 0, nil))
+        try installEnvironmentConfig(intoRepository: repo)
         try check(git_repository_config_snapshot(&config, repo))
         try check(git_config_iterator_glob_new(&iterator, config, "^remote\\..*\\.push$"))
         var found: [(key: String, path: String, level: Int)] = []
@@ -431,6 +457,7 @@ extension GitClient {
             git_repository_free(repo)
         }
         try check(git_repository_open_ext(&repo, directory.path, 0, nil))
+        try installEnvironmentConfig(intoRepository: repo)
         try check(git_repository_config_snapshot(&config, repo))
         let result = git_config_get_entry(&entry, config, name)
         if result == GIT_ENOTFOUND.rawValue { return nil }

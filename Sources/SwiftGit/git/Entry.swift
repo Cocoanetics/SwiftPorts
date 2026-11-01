@@ -39,6 +39,10 @@ struct Entry {
             }
         } catch let cli as CLIError {
             cli.emitAndExit()
+        } catch let failure as CommandFailure {
+            // Says what it prints and how it exits (a bad GIT_CONFIG_COUNT).
+            Shell.current.stderr.write(Data(failure.diagnostic.utf8))
+            exit(failure.exitStatus.code)
         } catch {
             // Hand off to ArgumentParser's default formatter for usage
             // errors / validation failures; preserves help output etc.

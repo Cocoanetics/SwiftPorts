@@ -125,6 +125,7 @@ extension GitClient {
             git_repository_free(repo)
         }
         try check(git_repository_open_ext(&repo, directory.path, 0, nil))
+        try installEnvironmentConfig(intoRepository: repo)
         try check(git_remote_lookup(&remote, repo, name))
         func value(_ pointer: UnsafePointer<CChar>?) -> String? {
             pointer.map { String(cString: $0) }.flatMap { $0.isEmpty ? nil : $0 }
@@ -149,10 +150,16 @@ extension GitClient {
         }
         if let directory {
             try check(git_repository_open_ext(&repo, directory.path, 0, nil))
+            try installEnvironmentConfig(intoRepository: repo)
             try check(git_remote_create_anonymous(&remote, repo, spelling))
         } else {
+            // No repository to read: an empty in-memory one carries the
+            // default config, with the environment's added, for the rewrite.
+            try check(git_repository_new(&repo))
+            try installEnvironmentConfig(intoRepository: repo)
             var options = git_remote_create_options()
             try check(git_remote_create_options_init(&options, UInt32(GIT_REMOTE_CREATE_OPTIONS_VERSION)))
+            options.repository = repo
             try check(git_remote_create_with_opts(&remote, spelling, &options))
         }
         let pushURL = use == .push ? git_remote_pushurl(remote) : nil
