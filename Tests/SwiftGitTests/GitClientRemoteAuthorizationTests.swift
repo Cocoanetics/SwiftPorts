@@ -3,19 +3,9 @@ import Testing
 import ShellKit
 @testable import SwiftGit
 
-private let isAndroid: Bool = {
-    #if os(Android)
-    true
-    #else
-    false
-    #endif
-}()
-
 /// Issue #122: `git clone` authorizes scp-like remotes by their host, not as host-less URLs.
 @Suite struct GitClientRemoteAuthorizationTests {
-    // Android's Foundation (Swift 6.4) returns nil from URL(string:) for scp-style
-    // IPv6 remotes like "git@[::1]:repo.git"; the other platforms parse them.
-    @Test(.disabled(if: isAndroid, "URL(string:) rejects scp-style IPv6 remotes"))
+    @Test
     func scpLikeRemotesAuthorizeAsSSHURLs() throws {
         let cases: [(remote: String, authorized: String, host: String)] = [
             ("git@github.com:Cocoanetics/SwiftPorts.git", "ssh://git@github.com/Cocoanetics/SwiftPorts.git", "github.com"),
@@ -28,8 +18,7 @@ private let isAndroid: Bool = {
             ("git@[fe80::1%en0]:repo.git", "ssh://git@[fe80::1%25en0]/repo.git", "fe80::1%en0"),
         ]
         for testCase in cases {
-            let remote = try #require(URL(string: testCase.remote))
-            let url = GitClient.authorizationURL(forRemote: remote)
+            let url = try #require(GitClient.scpLikeAuthorizationURL(forRemote: testCase.remote))
             #expect(url.absoluteString == testCase.authorized)
             #expect(url.host == testCase.host)
         }
@@ -196,7 +185,7 @@ private let isAndroid: Bool = {
     }
     #endif
 
-    @Test(.disabled(if: isAndroid, "URL(string:) rejects scp-style IPv6 remotes"))
+    @Test
     func cloneOfBracketedIPv6RemoteIsJudgedByHost() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitClientRemoteAuthorizationTests-\(UUID().uuidString)")
@@ -207,7 +196,7 @@ private let isAndroid: Bool = {
         let denial = await #expect(throws: Sandbox.Denial.self) {
             try await shell.withCurrent {
                 try await GitClient(workingDirectory: root).clone(
-                    url: try #require(URL(string: "git@[::1]:repo.git")),
+                    remote: "git@[::1]:repo.git",
                     directory: root.appendingPathComponent("repo"))
             }
         }

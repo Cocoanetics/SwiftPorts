@@ -176,6 +176,10 @@ extension GitClient {
     /// sandbox still sees its host; one that still can't be read is
     /// refused under a sandbox rather than let through.
     static func authorizeURL(_ remote: String) async throws {
+        if let scpLike = scpLikeAuthorizationURL(forRemote: remote) {
+            try await Shell.authorize(scpLike)
+            return
+        }
         let url = URL(string: remote)
             ?? remote.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed).flatMap(URL.init(string:))
         guard let url else {
