@@ -90,18 +90,16 @@ private final class GitKitSSHDedicatedThreadExecutor: @unchecked Sendable, Seria
     private var jobs: [QueuedJob] = []
     private let threadName: String
 
-    // Named from *inside* the closure, once it's actually running as the
-    // thread's entry point, rather than via `thread.name = name` beforehand:
-    // on Linux, `Thread`'s `name` setter only reaches the live pthread when
-    // the thread calling it is the one being named (`pthread_setname_np`'s
-    // single-thread-targeting form) — setting it on a `Thread` that hasn't
-    // started yet silently never reaches the OS thread at all there, so
-    // `Thread.current.name` (and `pthread_getname_np`) keeps reporting
-    // whatever name the process inherited. Darwin doesn't have this gap
-    // (confirmed: this threading suite passes there), but naming from
-    // within the thread works unconditionally on both.
+    // Name from inside the thread, after dequeuing the first job. On Linux,
+    // Foundation's `Thread.start()` stores the pthread handle only after
+    // creating the thread; its entry closure can run before that assignment,
+    // making even `Thread.current.name = ...` silently do nothing. The first
+    // enqueue happens after this executor's initialization (and `start()`)
+    // returns, so the queue's condition also synchronizes that assignment.
+    // See Thread.start() and Thread.name in swift-corelibs-foundation:
+    // https://github.com/swiftlang/swift-corelibs-foundation/blob/swift-6.3-RELEASE/Sources/Foundation/Thread.swift
     private lazy var thread: Thread = Thread { [weak self] in
-        Thread.current.name = self?.threadName
+        var needsName = true
         while true {
             guard let self else { return }
             self.condition.lock()
@@ -110,6 +108,10 @@ private final class GitKitSSHDedicatedThreadExecutor: @unchecked Sendable, Seria
             }
             let job = self.jobs.removeFirst()
             self.condition.unlock()
+            if needsName {
+                Thread.current.name = self.threadName
+                needsName = false
+            }
             self.run(job)
         }
     }
