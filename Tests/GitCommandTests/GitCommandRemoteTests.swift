@@ -23,6 +23,17 @@ struct GitCommandRemoteTests {
             .appendingPathComponent("\(label)-\(UUID().uuidString)")
     }
 
+    /// HOME + no system config so a host `pull.rebase` / `pull.ff` can't
+    /// change what the system `git` does under `expectLikeGit` /
+    /// `expectRefusal`. Matches the shell the port runs in here (no HOME).
+    private func systemGitEnvironment() -> [String: String] {
+        [
+            "PATH": "/usr/bin:/bin",
+            "HOME": tmp("GitRemoteEmptyHome").path,
+            "GIT_CONFIG_NOSYSTEM": "1",
+        ]
+    }
+
     /// The system `git`, for setup and inspection.
     @discardableResult
     private func systemGit(_ args: [String], in dir: URL) throws -> String {
@@ -30,6 +41,7 @@ struct GitCommandRemoteTests {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com"] + args
         process.currentDirectoryURL = dir
+        process.environment = systemGitEnvironment()
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
@@ -50,6 +62,7 @@ struct GitCommandRemoteTests {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com"] + args
         process.currentDirectoryURL = dir
+        process.environment = systemGitEnvironment()
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
@@ -1696,6 +1709,7 @@ struct GitCommandRemoteTests {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + args
         process.currentDirectoryURL = dir
+        process.environment = systemGitEnvironment()
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
@@ -2382,6 +2396,7 @@ struct GitCommandRemoteTests {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + args
         process.currentDirectoryURL = dir
+        process.environment = systemGitEnvironment()
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
