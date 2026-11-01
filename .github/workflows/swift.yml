@@ -307,8 +307,10 @@ jobs:
         with:
           # Pin to a full patch version. The floating "6.3" key drifts the
           # cached host toolchain (6.3.1) ahead of the SDK (6.3) and breaks
-          # module imports; 6.3.2 ships matching host + SDK tarballs.
-          swift-version: "6.3.2"
+          # module imports. 6.4.2 ships matching host + SDK tarballs, including
+          # the ubuntu26.04 host toolchain that ubuntu-latest now needs (6.3.2
+          # has none, so its download 404s).
+          swift-version: "6.4.2"
           # SDK + NDK + emulator overrun the runner's ~14 GiB free space.
           free-disk-space: true
           # Cross-build + run the SDK suite with both engine traits, so the
@@ -317,5 +319,8 @@ jobs:
           # run on the x86_64 emulator — the on-device target these features are
           # meant for. (The other platforms keep a default, traits-off run; the
           # off-state contract is asserted by the #else branches there.)
-          swift-build-flags: "--traits FTS5,SQLiteVec"
-          swift-test-flags: "--traits FTS5,SQLiteVec"
+          # Swift 6.4 defaults to the swiftbuild backend, which emits resource
+          # bundles the action doesn't pack for the emulator (GlamKit's
+          # Bundle.module then traps). Keep the native backend, as on 6.3.
+          swift-build-flags: "--traits FTS5,SQLiteVec --build-system native"
+          swift-test-flags: "--traits FTS5,SQLiteVec --build-system native"
