@@ -23,10 +23,18 @@ extension GitClient {
         // literal's brackets and colons (`git@[::1]:repo.git` reads back
         // as `git@%5B%3A%3A1%5D%3Arepo.git`) — so parse it as typed.
         let remote = url.absoluteString.removingPercentEncoding ?? url.absoluteString
+        return scpLikeAuthorizationURL(forRemote: remote) ?? url
+    }
+
+    /// The `ssh://` form of a scp-like remote as typed, or `nil` when
+    /// it isn't one. Works on the string, so it doesn't depend on whether
+    /// the platform's `URL(string:)` accepts the remote (Android's
+    /// rejects `git@[::1]:repo.git`, #152).
+    static func scpLikeAuthorizationURL(forRemote remote: String) -> URL? {
         guard !remote.contains("://"),
               let firstColon = remote.firstIndex(of: ":"),
               !remote[..<firstColon].contains("/")
-        else { return url }
+        else { return nil }
 
         // `[::1]:path` / `user@[::1]:path`: the path colon is the first one
         // after the closing bracket, not the first in the address.
@@ -36,15 +44,15 @@ extension GitClient {
         if remote[hostStart] == "[", let closingBracket = remote[hostStart...].firstIndex(of: "]") {
             pathColonSearchStart = closingBracket
         }
-        guard let pathColon = remote[pathColonSearchStart...].firstIndex(of: ":") else { return url }
+        guard let pathColon = remote[pathColonSearchStart...].firstIndex(of: ":") else { return nil }
 
         let userAndHost = remote[..<pathColon]
         #if os(Windows)
         // `C:/repo` is a drive letter, not a host (git's `has_dos_drive_prefix`).
-        if userAndHost.count == 1, userAndHost.first?.isLetter == true { return url }
+        if userAndHost.count == 1, userAndHost.first?.isLetter == true { return nil }
         #endif
         let path = remote[remote.index(after: pathColon)...]
         let separator = path.hasPrefix("/") ? "" : "/"
-        return URL(string: "ssh://\(userAndHost)\(separator)\(path)") ?? url
+        return URL(string: "ssh://\(userAndHost)\(separator)\(path)")
     }
 }
