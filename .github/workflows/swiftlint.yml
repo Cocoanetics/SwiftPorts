@@ -1,0 +1,39 @@
+---
+name: SwiftLint
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/swiftlint.yml'
+      - '.swiftlint.yml'
+      - '.swiftlint-version'
+      - '.swiftlint-baseline.json'
+      - 'Scripts/lint-regression.sh'
+      - '**/*.swift'
+  push:
+    branches:
+      - main
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  lint:
+    # Pinned to .swiftlint-version so a new release can't change a rule under us.
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install SwiftLint
+        run: |
+          version="$(cat .swiftlint-version)"
+          curl -fsSL -o swiftlint.zip \
+            "https://github.com/realm/SwiftLint/releases/download/${version}/portable_swiftlint.zip"
+          mkdir -p "$RUNNER_TEMP/swiftlint"
+          unzip -oq swiftlint.zip -d "$RUNNER_TEMP/swiftlint"
+          echo "$RUNNER_TEMP/swiftlint" >> "$GITHUB_PATH"
+      - name: SwiftLint version
+        run: swiftlint --version
+      - name: Lint (new violations only)
+        run: swiftlint lint --strict --quiet --baseline .swiftlint-baseline.json
+      - name: Lint gate regression
+        run: Scripts/lint-regression.sh
