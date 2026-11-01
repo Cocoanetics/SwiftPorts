@@ -41,7 +41,9 @@ extension HTTPMockedNetworkTests {
                     #expect(input["commitTitle"] == nil)
                     #expect(input["commitMessage"] == nil)
                 }
-                return Self.response(request, json: #"{"data":{"enablePullRequestAutoMerge":{"clientMutationId":null}}}"#)
+                return Self.response(
+                    request,
+                    json: #"{"data":{"enablePullRequestAutoMerge":{"clientMutationId":null}}}"#)
             }
             var args = ["1", "--auto", "--subject", "Custom subject", "--body", "Custom body"]
             args.append("--\(method)")
@@ -84,7 +86,9 @@ extension HTTPMockedNetworkTests {
                     #expect(input["pullRequestId"] == "PR_node")
                     #expect(input["mergeMethod"] == "MERGE")
                 }
-                return Self.response(request, json: #"{"data":{"enablePullRequestAutoMerge":{"clientMutationId":null}}}"#)
+                return Self.response(
+                    request,
+                    json: #"{"data":{"enablePullRequestAutoMerge":{"clientMutationId":null}}}"#)
             }
             try await Self.run(["1", "--auto"], session: session)
             #expect(calls.withLock { $0 } == 2)
@@ -106,7 +110,9 @@ extension HTTPMockedNetworkTests {
                     let input = try #require(variables["input"] as? [String: String])
                     #expect(input == ["pullRequestId": "PR_node"])
                 }
-                return Self.response(request, json: #"{"data":{"disablePullRequestAutoMerge":{"clientMutationId":null}}}"#)
+                return Self.response(
+                    request,
+                    json: #"{"data":{"disablePullRequestAutoMerge":{"clientMutationId":null}}}"#)
             }
             try await Self.run(["1", "--disable-auto", "--squash", "--subject", "ignored"], session: session)
             #expect(calls.withLock { $0 } == 2)
@@ -166,7 +172,9 @@ extension HTTPMockedNetworkTests {
                     #expect(input["commitHeadline"] == nil)
                     #expect(input["commitBody"] == (explicitEmpty ? "" : nil))
                 }
-                return Self.response(request, json: #"{"data":{"enablePullRequestAutoMerge":{"clientMutationId":null}}}"#)
+                return Self.response(
+                    request,
+                    json: #"{"data":{"enablePullRequestAutoMerge":{"clientMutationId":null}}}"#)
             }
             let args = ["1", "--auto", "--merge"] + (explicitEmpty ? ["--body", ""] : [])
             try await Self.run(args, session: session)
@@ -253,20 +261,26 @@ extension HTTPMockedNetworkTests {
         }
 
         private static func status(_ status: String, mergeQueueEnabled: Bool = false) -> String {
-            "{\"data\":{\"repository\":{\"pullRequest\":{\"id\":\"PR_node\",\"state\":\"OPEN\",\"mergeStateStatus\":\"\(status)\",\"baseRefName\":\"main\",\"isMergeQueueEnabled\":\(mergeQueueEnabled)}}}}"
+            let queue = mergeQueueEnabled ? "true" : "false"
+            return #"""
+                {"data":{"repository":{"pullRequest":{
+                  "id":"PR_node","state":"OPEN","mergeStateStatus":"\#(status)",
+                  "baseRefName":"main","isMergeQueueEnabled":\#(queue)}}}}
+                """#
         }
 
         private static func response(_ request: URLRequest, json: String) -> (HTTPURLResponse, Data) {
             (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
                              headerFields: ["Content-Type": "application/json"])!, Data(json.utf8))
         }
+    }
 
-        private struct AutoMergeStateResponse: Decodable, Sendable {
-            let node: Node
-            struct Node: Decodable, Sendable {
-                let autoMergeRequest: GQLAutoMerge?
-            }
-        }
+    private struct AutoMergeStateResponse: Decodable, Sendable {
+        let node: AutoMergeStateNode
+    }
+
+    private struct AutoMergeStateNode: Decodable, Sendable {
+        let autoMergeRequest: GQLAutoMerge?
     }
 }
 #endif
