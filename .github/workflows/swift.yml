@@ -298,7 +298,9 @@ jobs:
   #      suites are C++-free and link + run cleanly. (GitHubTests still
   #      runs on the four full-build platforms.)
   build-android:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is now 26.04, and swift.org has no Swift host toolchain
+    # for ubuntu26.04 yet (download 404s). Move back to ubuntu-latest once it does.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
