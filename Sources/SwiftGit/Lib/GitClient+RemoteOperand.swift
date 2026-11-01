@@ -54,7 +54,7 @@ extension GitClient {
             try await Self.authorize(location: location)
             return RemoteConnection(remote: remote, location: location)
         }
-        let rewritten = try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+        let rewritten = try await isolatedGated {
             try Self.effectiveLocation(of: remote, for: use, in: workingDirectory)
         }
         let location = Self.connectionLocation(of: rewritten, relativeTo: top)
@@ -176,6 +176,10 @@ extension GitClient {
     /// sandbox still sees its host; one that still can't be read is
     /// refused under a sandbox rather than let through.
     static func authorizeURL(_ remote: String) async throws {
+        if let scpLike = scpLikeAuthorizationURL(forRemote: remote) {
+            try await Shell.authorize(scpLike)
+            return
+        }
         let url = URL(string: remote)
             ?? remote.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed).flatMap(URL.init(string:))
         guard let url else {
@@ -202,12 +206,12 @@ extension GitClient {
         _ remote: String, relativeTo directory: String? = nil,
         for use: RemoteUse = .fetch, in repository: URL? = nil
     ) async throws -> String {
-        func location(of spelling: String) throws -> String {
-            try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+        func location(of spelling: String) async throws -> String {
+            try await isolatedGated {
                 try Self.effectiveLocation(of: spelling, for: use, in: repository)
             }
         }
-        let rewritten = try location(of: remote)
+        let rewritten = try await location(of: remote)
         let spelling = Self.isURLOrSCPLike(rewritten)
             ? remote : Self.connectionLocation(of: rewritten, relativeTo: directory)
         try await Self.authorize(location: location(of: spelling))
@@ -386,7 +390,7 @@ extension GitClient {
         }
         try await Shell.authorize(destination)
         let progress = shellProgressSink()
-        try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+        try await isolatedGated {
             _ = try Repository.clone(
                 fromRemote: source, to: destination,
                 depth: depth, singleBranch: singleBranch, branch: branch,

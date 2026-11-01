@@ -1,0 +1,56 @@
+included:
+  - Sources
+  - Tests
+
+excluded:
+  - .build
+  - .swiftpm
+  - vendor
+
+disabled_rules:
+  # Git data (blob content, sideband progress, signatures) is not guaranteed
+  # UTF-8; the SDK deliberately uses lossy String(decoding:) so porcelain
+  # output never fails on stray bytes. The failable initializer this rule
+  # prefers would change that behavior.
+  - optional_data_string_conversion
+  # The C-callback trampolines place libgit2's long parameter lists on their
+  # own line below the opening brace — deliberate layout for signatures like
+  # (outPtr, urlCStr, userCStr, allowedTypes, payload).
+  - closure_parameter_position
+  # Tabular alignment is house style for clusters of similar one-liners —
+  # ColorPalette's SGR table aligns `->` and trailing color comments;
+  # Repository+Status's bitmask cascades align braces and use uncuddled
+  # `else if` rows. These rules (and their --fix) would flatten the tables.
+  - opening_brace
+  - return_arrow_whitespace
+  - statement_position
+
+identifier_name:
+  # Wrapping a C library makes single-letter names the house idiom:
+  # `rc` for libgit2 return codes, `u`/`p` in withCString closures,
+  # `p`/`n` in the glob matcher. Length checks off; case checks stay.
+  min_length: 1
+
+line_length:
+  ignores_comments: true
+  ignores_urls: true
+
+# Thresholds below are sized to the current outliers — functions that
+# assemble libgit2 option structs and drive C state machines linearly
+# (status porcelain, log formatting, merge). Strict enough to flag growth.
+cyclomatic_complexity:
+  warning: 25
+function_body_length:
+  warning: 110
+type_body_length:
+  warning: 450
+file_length:
+  warning: 700
+
+# Git operations genuinely take many independent options (strategy,
+# signature, message, ...); results like (summary, added, deleted) are
+# named-member tuples in public API.
+function_parameter_count:
+  warning: 8
+large_tuple:
+  warning: 3
