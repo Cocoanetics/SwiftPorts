@@ -298,9 +298,7 @@ jobs:
   #      suites are C++-free and link + run cleanly. (GitHubTests still
   #      runs on the four full-build platforms.)
   build-android:
-    # Pinned: ubuntu-latest is now 26.04, and swift.org has no Swift host toolchain
-    # for ubuntu26.04 yet (download 404s). Move back to ubuntu-latest once it does.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
@@ -309,8 +307,10 @@ jobs:
         with:
           # Pin to a full patch version. The floating "6.3" key drifts the
           # cached host toolchain (6.3.1) ahead of the SDK (6.3) and breaks
-          # module imports; 6.3.2 ships matching host + SDK tarballs.
-          swift-version: "6.3.2"
+          # module imports. 6.4.2 ships matching host + SDK tarballs, including
+          # the ubuntu26.04 host toolchain that ubuntu-latest now needs (6.3.2
+          # has none, so its download 404s).
+          swift-version: "6.4.2"
           # SDK + NDK + emulator overrun the runner's ~14 GiB free space.
           free-disk-space: true
           # Cross-build + run the SDK suite with both engine traits, so the

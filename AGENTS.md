@@ -98,7 +98,7 @@ to `main` and PRs. Matrix:
 - **Linux** — `swift:6.2-jammy` container, full `swift build && swift test`
 - **Windows** — `windows-latest` + `SwiftyLab/setup-swift`, full
   `swift build --build-tests` + `swift test` (libgit2 C deps via vcpkg)
-- **Android** — `ubuntu-24.04` (pinned: no Swift toolchain for 26.04 yet) + `skiptools/swift-android-action`;
+- **Android** — `ubuntu-latest` + `skiptools/swift-android-action` (Swift 6.4.2, which has a 26.04 host toolchain);
   cross-builds the **SDK libraries** and **runs their test suites** on an
   x86_64 emulator (283 tests / 43 suites). The ArgumentParser
   command/executable layer is dropped on Android (keyed on
