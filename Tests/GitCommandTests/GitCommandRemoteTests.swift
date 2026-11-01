@@ -2,6 +2,9 @@
 // `commit` / `pull` / `clone` take `-q` (#123). Runs the subcommands in a
 // ShellKit shell against local bare repositories, with the system `git`
 // setting up and inspecting them.
+//
+// swiftlint:disable file_length type_body_length
+// A single end-to-end suite against shared local bare remotes; will be split separately.
 #if os(macOS) || os(Linux)
 import Foundation
 import Testing
@@ -2764,3 +2767,4 @@ struct GitCommandRemoteTests {
     }
 }
 #endif
+// swiftlint:enable file_length type_body_length
