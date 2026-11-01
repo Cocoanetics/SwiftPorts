@@ -68,12 +68,16 @@ struct Tag: AsyncParsableCommand {
         // typing `git tag -a v2.0 -m "..."` would have `-m` stuck in useRest).
         var positionals: [String] = []
         var pulledForce = force
+        var pulledVerify = verify
         var pulledMessage = message
         var i = 0
         while i < rest.count {
             let tok = rest[i]
             if tok == "-f" || tok == "--force" {
                 pulledForce = true; i += 1; continue
+            }
+            if tok == "-v" || tok == "--verify" {
+                pulledVerify = true; i += 1; continue
             }
             if tok == "-m" || tok == "--message", i + 1 < rest.count {
                 pulledMessage = rest[i + 1]
@@ -93,7 +97,11 @@ struct Tag: AsyncParsableCommand {
         let client = CommandContext.gitClient()
 
         // Verify path: only the tags' own refs, with their contents shown.
-        if verify {
+        if pulledVerify {
+            if useForce || annotate || delete || list {
+                throw CLIError.stderr(
+                    "error: options '-v' and '-f', '-a', '-d' or '-l' cannot be used together", exitCode: 129)
+            }
             guard !useRest.isEmpty else { throw ValidationError("tag name required") }
             try await VerifyTag.verify(useRest, inTagNamespace: true, verbose: true, raw: false)
             return

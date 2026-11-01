@@ -67,6 +67,8 @@ struct GitCommandVerifyTagTests {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("VerifyCLI-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try systemGit(["init", "-q", "-b", "main"], in: dir)
+        try systemGit(["config", "user.name", "Test"], in: dir)
+        try systemGit(["config", "user.email", "test@example.com"], in: dir)
         func commit(_ file: String) throws {
             try Data("\(file)\n".utf8).write(to: dir.appendingPathComponent(file))
             try systemGit(["add", "."], in: dir)

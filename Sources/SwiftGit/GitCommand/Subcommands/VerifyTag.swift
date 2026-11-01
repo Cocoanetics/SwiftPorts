@@ -37,7 +37,13 @@ struct VerifyTag: AsyncParsableCommand {
         let stdout = Shell.current.stdout, stderr = Shell.current.stderr
         var failed = false
         for name in names {
-            switch try await client.verifyTag(name, inTagNamespace: inTagNamespace) {
+            let verification: GitClient.TagVerification
+            do {
+                verification = try await client.verifyTag(name, inTagNamespace: inTagNamespace)
+            } catch let error as Libgit2Error where error.message.hasPrefix("unsupported value for gpg.") {
+                throw CLIError.stderr("fatal: \(error.message)", exitCode: 128)
+            }
+            switch verification {
             case .notFound:
                 stderr.write("error: tag '\(name)' not found.\n")
             case .notATag(let type):

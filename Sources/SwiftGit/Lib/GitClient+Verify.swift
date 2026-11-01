@@ -143,7 +143,11 @@ extension GitClient {
             case "gpg.program", "gpg.openpgp.program":
                 program = entry.value
             case "gpg.mintrustlevel":
-                if let level = Self.trustLevel(entry.value.uppercased()) { minimumTrust = level }
+                guard let level = Self.trustLevel(entry.value.uppercased()) else {
+                    throw Libgit2Error(code: -1, klass: 0,
+                        message: "unsupported value for gpg.minTrustLevel: \(entry.value)")
+                }
+                minimumTrust = level
             default:
                 break
             }
@@ -199,7 +203,7 @@ extension GitClient {
     private struct VerifierRun {
         var failed: Bool
         var status: String
-        var output: String
+        var output: String?
     }
 
     /// git's `verify_gpg_signed_buffer` launch: the program with
@@ -208,9 +212,16 @@ extension GitClient {
     /// reported as git reports it, and counts as a failed verification.
     private func runVerifier(_ program: String, payload: Data, signature: Data) async throws -> VerifierRun {
         let shell = Shell.current
-        let unlaunched = VerifierRun(failed: true, status: "", output: "")
+        let unlaunched = VerifierRun(failed: true, status: "", output: nil)
         let executable: Executable
-        if program.contains("/") {
+        #if os(Windows)
+        let separators: Set<Character> = ["/", "\\"]
+        let pathSeparator: Character = ";"
+        #else
+        let separators: Set<Character> = ["/"]
+        let pathSeparator: Character = ":"
+        #endif
+        if program.contains(where: separators.contains) {
             var isDirectory: ObjCBool = false
             let url = URL(fileURLWithPath: program, relativeTo: workingDirectory)
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
@@ -226,7 +237,7 @@ extension GitClient {
             var reason = "No such file or directory"
             var found: String?
             let search = shell.environment["PATH"] ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
-            for directory in search.split(separator: ":", omittingEmptySubsequences: false) {
+            for directory in search.split(separator: pathSeparator, omittingEmptySubsequences: false) {
                 let path = (directory.isEmpty ? "." : String(directory)) + "/" + program
                 let url = URL(fileURLWithPath: path, relativeTo: workingDirectory)
                 var isDirectory: ObjCBool = false
