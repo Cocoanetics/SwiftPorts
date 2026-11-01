@@ -53,6 +53,19 @@ struct EnvironmentConfigTests {
                 == "[url \"https://x/?a=b\"]\n\tinsteadof = y\n")
         #expect(GitClient.commandLineConfigFile(entries) ==
                 "[user]\n\tname = A=B\n[remote \"Origin\"]\n\turl = \"\"\n[a \"b\"]\n\tc = v\n")
+        // Multi-byte UTF-8 must survive the config-file serializer intact.
+        let accented = try GitClient.commandLineConfig([
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "user.name", "GIT_CONFIG_VALUE_0": "José"
+        ])
+        #expect(GitClient.commandLineConfigFile(accented) == "[user]\n\tname = José\n")
+        let subsection = try GitClient.commandLineConfig([
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "url.https://café.example.insteadOf",
+            "GIT_CONFIG_VALUE_0": "https://cafe.example"
+        ])
+        #expect(GitClient.commandLineConfigFile(subsection)
+                == "[url \"https://café.example\"]\n\tinsteadof = https://cafe.example\n")
     }
 
     @Test func refusesWhatGitRefuses() {

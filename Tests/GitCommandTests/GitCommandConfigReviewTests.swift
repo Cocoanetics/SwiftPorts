@@ -87,6 +87,34 @@ struct GitCommandConfigReviewTests: ConfigTestHelpers {
         #expect(ours.stderr == theirs.err, "\(ours.stderr)")
     }
 
+    @Test("GIT_CONFIG_COUNT keeps multi-byte UTF-8 in values and subsections")
+    func commandLineUTF8() async throws {
+        guard Self.hasRealGit else { return }
+        let fixture = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let environment = [
+            "GIT_CONFIG_COUNT": "2",
+            "GIT_CONFIG_KEY_0": "user.name", "GIT_CONFIG_VALUE_0": "José",
+            "GIT_CONFIG_KEY_1": "url.https://café.example.insteadOf",
+            "GIT_CONFIG_VALUE_1": "https://cafe.example"
+        ]
+        let ours = try await git(
+            ["config", "user.name"], root: fixture.root, home: fixture.home,
+            work: fixture.work, environment: environment, sandboxed: false)
+        let theirs = try real(
+            ["config", "user.name"], work: fixture.work,
+            environment: ["HOME": fixture.home.path, "GIT_CONFIG_NOSYSTEM": "1"].merging(environment) { $1 })
+        #expect(ours.status == 0, "\(ours.stderr)")
+        #expect(theirs.status == 0, "\(theirs.err)")
+        #expect(ours.stdout == "José\n")
+        #expect(ours.stdout == theirs.out)
+        let list = try await git(
+            ["config", "--get", "url.https://café.example.insteadOf"], root: fixture.root,
+            home: fixture.home, work: fixture.work, environment: environment, sandboxed: false)
+        #expect(list.status == 0)
+        #expect(list.stdout == "https://cafe.example\n")
+    }
+
     @Test("GIT_CONFIG_COUNT keeps '=' inside a subsection name")
     func commandLineKeyWithEquals() async throws {
         guard Self.hasRealGit else { return }

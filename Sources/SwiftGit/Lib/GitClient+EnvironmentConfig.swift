@@ -187,17 +187,19 @@ extension GitClient {
     }
 
     /// libgit2 `escape_value`: `\n`, `\t`, `\b`, `"`, `\` → backslash form.
+    /// Walks unicode scalars (not UTF-8 bytes) so multi-byte characters such
+    /// as `é` stay intact instead of being re-encoded as Latin-1.
     private static func escapeConfigText(_ value: String) -> String {
         var out = ""
         out.reserveCapacity(value.utf8.count)
-        for byte in value.utf8 {
-            switch byte {
+        for scalar in value.unicodeScalars {
+            switch scalar.value {
             case 0x0A: out += "\\n"
             case 0x09: out += "\\t"
             case 0x08: out += "\\b"
             case 0x22: out += "\\\""
             case 0x5C: out += "\\\\"
-            default: out.append(Character(UnicodeScalar(byte)))
+            default: out.unicodeScalars.append(scalar)
             }
         }
         return out
