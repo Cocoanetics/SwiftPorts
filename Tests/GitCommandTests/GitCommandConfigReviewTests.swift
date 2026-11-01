@@ -64,8 +64,11 @@ struct GitCommandConfigReviewTests: ConfigTestHelpers {
                               environment: ["HOME": fixture.home.path].merging(environment) { $1 })
         #expect(theirs.status == 128)
         #expect(ours.status == 128)
+        // git 2.54 (and this port) say "environment value"; older /usr/bin/git
+        // on Linux still says "config value". Both exit 128 naming the variable.
         #expect(ours.stderr.contains("fatal: bad boolean environment value 'garbage' for 'GIT_CONFIG_NOSYSTEM'"))
-        #expect(theirs.err.contains("bad boolean environment value 'garbage' for 'GIT_CONFIG_NOSYSTEM'"))
+        #expect(theirs.err.contains("'garbage'"), "\(theirs.err)")
+        #expect(theirs.err.contains("GIT_CONFIG_NOSYSTEM"), "\(theirs.err)")
     }
 
     @Test("--show-origin keeps the key diagnostic and exit 1")
@@ -89,7 +92,14 @@ struct GitCommandConfigReviewTests: ConfigTestHelpers {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         try "[user]\n\tname = Host\n".write(
             to: fixture.home.appendingPathComponent(".gitconfig"), atomically: true, encoding: .utf8)
+        // Poison the process HOME so a regression that falls back to
+        // ProcessInfo would return "Host". Restore it: other suites (e.g.
+        // GitHub's ConfigFileStore path test) read the process HOME.
+        let savedHome = getenv("HOME").map { String(cString: $0) }
         setenv("HOME", fixture.home.path, 1)
+        defer {
+            if let savedHome { setenv("HOME", savedHome, 1) } else { unsetenv("HOME") }
+        }
         let empty = try await git(["config", "user.name"], root: fixture.root, home: fixture.home,
                                   work: fixture.work, environment: ["HOME": ""], sandboxed: false)
         #expect(empty.status == 1)
