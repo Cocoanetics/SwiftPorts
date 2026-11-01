@@ -31,8 +31,17 @@ struct EnvironmentConfig: Equatable, Sendable {
     /// The file `GIT_CONFIG_SYSTEM` names, `nil` for an empty value or one a
     /// sandbox won't read.
     var systemFile: File?
-    /// `GIT_CONFIG_COUNT`'s entries as `name=value`, names normalized.
-    var commandLine: [String] = []
+    /// One `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` pair, name normalized.
+    struct CommandLineEntry: Equatable, Sendable {
+        let name: String
+        let value: String
+    }
+
+    /// `GIT_CONFIG_COUNT`'s entries, names normalized. Kept as pairs — not
+    /// `name=value` strings — because libgit2's `git_config_backend_from_values`
+    /// splits on the first `=`, and a subsection may contain `=` (e.g.
+    /// `url.https://x/?a=b.insteadOf`).
+    var commandLine: [CommandLineEntry] = []
 
     static let none = EnvironmentConfig()
 
@@ -115,10 +124,12 @@ extension GitClient {
 
     // MARK: GIT_CONFIG_COUNT
 
-    /// `GIT_CONFIG_COUNT` entries as `name=value`, git's way: a count, then
-    /// a `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` for each. What git
+    /// `GIT_CONFIG_COUNT` entries, git's way: a count, then a
+    /// `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` for each. What git
     /// can't read stops the command.
-    static func commandLineConfig(_ variables: [String: String]) throws -> [String] {
+    static func commandLineConfig(
+        _ variables: [String: String]
+    ) throws -> [EnvironmentConfig.CommandLineEntry] {
         guard let text = variables["GIT_CONFIG_COUNT"] else { return [] }
         // git reads the count with `strtoul(…, 10)` and refuses what doesn't
         // end where the number does: an empty value is 0, leading white
@@ -136,7 +147,7 @@ extension GitClient {
             throw CommandLineConfigError(reason: "too many entries in GIT_CONFIG_COUNT")
         }
         let count = Int(parsed.value)
-        var entries: [String] = []
+        var entries: [EnvironmentConfig.CommandLineEntry] = []
         for index in 0..<count {
             guard let key = variables["GIT_CONFIG_KEY_\(index)"] else {
                 throw CommandLineConfigError(reason: "missing config key GIT_CONFIG_KEY_\(index)")
@@ -144,9 +155,60 @@ extension GitClient {
             guard let value = variables["GIT_CONFIG_VALUE_\(index)"] else {
                 throw CommandLineConfigError(reason: "missing config value GIT_CONFIG_VALUE_\(index)")
             }
-            entries.append("\(try normalizedKey(key))=\(value)")
+            entries.append(.init(name: try normalizedKey(key), value: value))
         }
         return entries
+    }
+
+    /// Config-file text for `git_config_backend_from_string`, matching
+    /// libgit2's own writer (`escape_value` + `write_section` +
+    /// `quotes_for_value`). Subsections with `=` must go through this form;
+    /// `git_config_backend_from_values` can't represent them.
+    static func commandLineConfigFile(_ entries: [EnvironmentConfig.CommandLineEntry]) -> String {
+        var text = ""
+        for entry in entries {
+            let name = entry.name
+            guard let first = name.firstIndex(of: "."), let last = name.lastIndex(of: ".") else {
+                continue
+            }
+            let section = name[..<first]
+            let variable = name[name.index(after: last)...]
+            if first == last {
+                text += "[\(section)]\n"
+            } else {
+                let subsection = escapeConfigText(String(name[name.index(after: first)..<last]))
+                text += "[" + section + " \"" + subsection + "\"]\n"
+            }
+            let escaped = escapeConfigText(entry.value)
+            let quote = quotesForConfigValue(escaped)
+            text += "\t\(variable) = \(quote)\(escaped)\(quote)\n"
+        }
+        return text
+    }
+
+    /// libgit2 `escape_value`: `\n`, `\t`, `\b`, `"`, `\` → backslash form.
+    private static func escapeConfigText(_ value: String) -> String {
+        var out = ""
+        out.reserveCapacity(value.utf8.count)
+        for byte in value.utf8 {
+            switch byte {
+            case 0x0A: out += "\\n"
+            case 0x09: out += "\\t"
+            case 0x08: out += "\\b"
+            case 0x22: out += "\\\""
+            case 0x5C: out += "\\\\"
+            default: out.append(Character(UnicodeScalar(byte)))
+            }
+        }
+        return out
+    }
+
+    /// libgit2 `quotes_for_value` on an already-escaped string.
+    private static func quotesForConfigValue(_ value: String) -> String {
+        if value.isEmpty { return "\"" }
+        if value.first == " " || value.last == " " { return "\"" }
+        if value.contains(where: { $0 == ";" || $0 == "#" }) { return "\"" }
+        return ""
     }
 
     /// A config key as libgit2 stores it, section and variable name
@@ -228,14 +290,15 @@ extension GitClient {
             try check(git_config_add_file_ondisk(config, file.resolved, GIT_CONFIG_LEVEL_SYSTEM, repo, 1))
         }
         guard !plan.commandLine.isEmpty else { return }
-        var pointers: [UnsafePointer<CChar>?] = plan.commandLine.map { UnsafePointer(strdup($0)) }
-        defer { pointers.forEach { free(UnsafeMutablePointer(mutating: $0)) } }
+        let file = commandLineConfigFile(plan.commandLine)
         var backend: UnsafeMutablePointer<git_config_backend>?
-        try "command line".withCString { type in
-            var options = git_config_backend_memory_options()
-            options.version = UInt32(GIT_CONFIG_BACKEND_MEMORY_OPTIONS_VERSION)
-            options.backend_type = type
-            try check(git_config_backend_from_values(&backend, &pointers, pointers.count, &options))
+        try file.withCString { text in
+            try "command line".withCString { type in
+                var options = git_config_backend_memory_options()
+                options.version = UInt32(GIT_CONFIG_BACKEND_MEMORY_OPTIONS_VERSION)
+                options.backend_type = type
+                try check(git_config_backend_from_string(&backend, text, file.utf8.count, &options))
+            }
         }
         try check(git_config_add_backend(config, backend, GIT_CONFIG_LEVEL_APP, repo, 0))
     }

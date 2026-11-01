@@ -87,6 +87,34 @@ struct GitCommandConfigReviewTests: ConfigTestHelpers {
         #expect(ours.stderr == theirs.err, "\(ours.stderr)")
     }
 
+    @Test("GIT_CONFIG_COUNT keeps '=' inside a subsection name")
+    func commandLineKeyWithEquals() async throws {
+        guard Self.hasRealGit else { return }
+        let fixture = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let environment = [
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "url.https://x/?a=b.insteadOf",
+            "GIT_CONFIG_VALUE_0": "y"
+        ]
+        let ours = try await git(
+            ["config", "--list", "--show-origin"], root: fixture.root, home: fixture.home,
+            work: fixture.work, environment: environment, sandboxed: false)
+        let theirs = try real(
+            ["config", "--list", "--show-origin"], work: fixture.work,
+            environment: ["HOME": fixture.home.path, "GIT_CONFIG_NOSYSTEM": "1"].merging(environment) { $1 })
+        #expect(ours.status == 0, "\(ours.stderr)")
+        #expect(theirs.status == 0, "\(theirs.err)")
+        #expect(ours.stdout.contains("command line:\turl.https://x/?a=b.insteadof=y\n"),
+                "\(ours.stdout)")
+        #expect(ours.stdout == theirs.out, "ours:\n\(ours.stdout)\ntheirs:\n\(theirs.out)")
+        let get = try await git(
+            ["config", "--get", "url.https://x/?a=b.insteadOf"], root: fixture.root, home: fixture.home,
+            work: fixture.work, environment: environment, sandboxed: false)
+        #expect(get.status == 0)
+        #expect(get.stdout == "y\n")
+    }
+
     @Test("an empty HOME makes --global read /.gitconfig, never the host's HOME")
     func homeEmptyOrMissing() async throws {
         guard Self.hasRealGit else { return }

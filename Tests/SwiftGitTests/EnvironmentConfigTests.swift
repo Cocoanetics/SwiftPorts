@@ -36,7 +36,23 @@ struct EnvironmentConfigTests {
             // Past the count: not read.
             "GIT_CONFIG_KEY_3": "x.y", "GIT_CONFIG_VALUE_3": "z"
         ])
-        #expect(entries == ["user.name=A=B", "remote.Origin.url=", "a.b.c=v"])
+        #expect(entries == [
+            .init(name: "user.name", value: "A=B"),
+            .init(name: "remote.Origin.url", value: ""),
+            .init(name: "a.b.c", value: "v")
+        ])
+        // Subsections with `=` must round-trip through config-file text —
+        // `git_config_backend_from_values` would split on the first `=`.
+        let withEquals = try GitClient.commandLineConfig([
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "url.https://x/?a=b.insteadOf",
+            "GIT_CONFIG_VALUE_0": "y"
+        ])
+        #expect(withEquals == [.init(name: "url.https://x/?a=b.insteadof", value: "y")])
+        #expect(GitClient.commandLineConfigFile(withEquals)
+                == "[url \"https://x/?a=b\"]\n\tinsteadof = y\n")
+        #expect(GitClient.commandLineConfigFile(entries) ==
+                "[user]\n\tname = A=B\n[remote \"Origin\"]\n\turl = \"\"\n[a \"b\"]\n\tc = v\n")
     }
 
     @Test func refusesWhatGitRefuses() {
