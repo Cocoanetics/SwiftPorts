@@ -85,7 +85,7 @@ let client = GitClient(
 | `addRemote(name:url:)` / `remoteDelete / remoteRename / remoteSetURL` | `git remote add / remove / rename / set-url` |
 | `branchDelete(name:force:)` / `branchRename(...)` | `git branch -d/-D / -m/-M` |
 | `tagCreate(name:target:force:)` / `tagCreateAnnotated(...)` / `tagDelete(name:)` | `git tag` family |
-| `verifyTag(_:inTagNamespace:)` | `git verify-tag` / `git tag -v` — OpenPGP verification through `gpg.program` / `gpg.openpgp.program` (launched via the shell's `ProcessLauncher`); signed tags in merge / pull messages carry the verification, commented |
+| `verifyTag(_:inTagNamespace:)` | `git verify-tag` / `git tag -v` — OpenPGP verification through `gpg.program` / `gpg.openpgp.program`, SSH verification through `gpg.ssh.program` (`ssh-keygen -Y find-principals` / `verify`) against `gpg.ssh.allowedSignersFile` and `gpg.ssh.revocationFile` (launched via the shell's `ProcessLauncher`; x509 is reported unsupported); signed tags in merge / pull messages carry the verification, commented |
 | `move(from:to:)` / `remove(paths:keepWorktree:force:)` | `git mv` / `git rm` |
 | `stashSave(message:author:flags:)` / `stashApply / stashPop / stashDrop / stashList / stashClear / stashShow / stashBranch` | `git stash` family |
 | `worktreeAdd(path:branch:force:)` / `worktreeRemove(name:force:)` | `git worktree add/remove` |
