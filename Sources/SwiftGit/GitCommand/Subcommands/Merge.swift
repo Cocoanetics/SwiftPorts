@@ -127,7 +127,9 @@ struct Merge: AsyncParsableCommand {
     /// Whether merging `ref` makes a merge commit: always with `--no-ff`
     /// (unless already merged), otherwise only when neither side contains
     /// the other.
-    static func makesMergeCommit(_ ref: String, mode: FastForwardMode, client: SwiftGit.GitClient) async throws -> Bool {
+    static func makesMergeCommit(
+        _ ref: String, mode: FastForwardMode, client: SwiftGit.GitClient
+    ) async throws -> Bool {
         guard let head = try? await client.resolveOID("HEAD"),
               let target = try? await client.resolveOID(ref + "^{commit}"),
               let base = try? await client.mergeBase(head, target) else { return false }

@@ -110,7 +110,7 @@ extension GitClient {
 
     private static let signatureMarkers: [[UInt8]] = [
         "-----BEGIN PGP SIGNATURE-----", "-----BEGIN PGP MESSAGE-----",
-        "-----BEGIN SIGNED MESSAGE-----", "-----BEGIN SSH SIGNATURE-----",
+        "-----BEGIN SIGNED MESSAGE-----", "-----BEGIN SSH SIGNATURE-----"
     ].map { Array($0.utf8) }
 
     /// git's `check_signature` for a tag: the signature through the
@@ -177,7 +177,7 @@ extension GitClient {
         let checks: [(result: Character?, prefix: String, exclusive: Bool)] = [
             ("G", "GOODSIG ", true), ("B", "BADSIG ", true), ("E", "ERRSIG ", true),
             ("X", "EXPSIG ", true), ("Y", "EXPKEYSIG ", true), ("R", "REVKEYSIG ", true),
-            (nil, "VALIDSIG ", false), (nil, "TRUST_", false),
+            (nil, "VALIDSIG ", false), (nil, "TRUST_", false)
         ]
         var result: Character = "N"
         var trust = 0

@@ -124,7 +124,9 @@ struct GitClientVerifyTagTests {
 
     @Test("a good signature below gpg.minTrustLevel fails")
     func minimumTrust() async throws {
-        let marginal = try fakeGPG(stderr: "gpg: Good", status: ["NEWSIG", "GOODSIG A U", "VALIDSIG F 1", "TRUST_MARGINAL 0 pgp"])
+        let marginal = try fakeGPG(
+            stderr: "gpg: Good",
+            status: ["NEWSIG", "GOODSIG A U", "VALIDSIG F 1", "TRUST_MARGINAL 0 pgp"])
         let repo = try makeRepo(program: marginal)
         defer { try? FileManager.default.removeItem(at: repo) }
         let client = SwiftGit.GitClient(workingDirectory: repo)
@@ -167,7 +169,7 @@ struct GitClientVerifyTagTests {
         let cases: [(program: String, message: String)] = [
             ("/nonexistent/gpg", "fatal: cannot exec '/nonexistent/gpg': No such file or directory\n"),
             ("nonexistent-gpg-program", "error: cannot run nonexistent-gpg-program: No such file or directory\n"),
-            (plain.path, "fatal: cannot exec '\(plain.path)': Permission denied\n"),
+            (plain.path, "fatal: cannot exec '\(plain.path)': Permission denied\n")
         ]
         for (program, message) in cases {
             try systemGit(["config", "gpg.openpgp.program", program], in: repo)

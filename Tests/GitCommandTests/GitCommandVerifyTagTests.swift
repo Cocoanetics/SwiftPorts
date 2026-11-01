@@ -221,7 +221,8 @@ struct GitCommandVerifyTagTests {
         defer { try? FileManager.default.removeItem(at: repo) }
         _ = try await git(["merge", "v1", "v2"], in: repo)
         let message = try systemGit(["log", "-1", "--format=%B"], in: repo)
-        #expect(message.hasPrefix("Merge tags 'v1' and 'v2'\n\n# tag 'v1'\nrelease v1\n\n# -----BEGIN PGP SIGNATURE-----"))
+        #expect(message.hasPrefix(
+            "Merge tags 'v1' and 'v2'\n\n# tag 'v1'\nrelease v1\n\n# -----BEGIN PGP SIGNATURE-----"))
         #expect(message.contains("# gpg: BAD signature\n\n# tag 'v2'\nrelease v2\n"))
         #expect(message.hasSuffix("# -----END PGP SIGNATURE-----\n# gpg: BAD signature"))
     }
