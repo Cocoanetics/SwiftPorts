@@ -123,12 +123,14 @@ jobs:
           set -euo pipefail
           # `name=iPhone 16,OS=latest` doesn't reliably match after a runtime
           # download (no seeded device set), so resolve a concrete available iOS
-          # simulator — creating one if needed — and test against it by UDID.
+          # simulator on the newest runtime (the image also carries older ones the
+          # Xcode 27 SDK can't install to) — creating one if needed — and test
+          # against it by UDID.
           UDID=$(xcrun simctl list devices available --json \
-            | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; ids=[x['udid'] for r,v in d.items() if 'iOS' in r for x in v if x.get('isAvailable')]; print(ids[0] if ids else '')")
+            | python3 -c "import json,re,sys; d=json.load(sys.stdin)['devices']; ids=[x['udid'] for r,v in sorted(d.items(), key=lambda kv: [int(n) for n in re.findall(r'\\d+', kv[0])], reverse=True) if 'iOS' in r for x in v if x.get('isAvailable')]; print(ids[0] if ids else '')")
           if [ -z "$UDID" ]; then
             RT=$(xcrun simctl list runtimes iOS --json \
-              | python3 -c "import json,sys; r=[x['identifier'] for x in json.load(sys.stdin)['runtimes'] if x.get('isAvailable')]; print(r[0])")
+              | python3 -c "import json,re,sys; r=sorted([x for x in json.load(sys.stdin)['runtimes'] if x.get('isAvailable')], key=lambda x: [int(n) for n in re.findall(r'\\d+', x['version'])], reverse=True); print(r[0]['identifier'])")
             UDID=$(xcrun simctl create ci-iphone "iPhone 16" "$RT")
           fi
           echo "Testing on iOS simulator $UDID"
@@ -168,10 +170,14 @@ jobs:
           swift --version
           swift --version 2>&1 | grep -qE "Swift version 6\.4" \
             || { echo "::error::Expected Swift 6.4"; exit 1; }
+      # Swift 6.4 defaults `swift build` to the swift-build engine. Under it the
+      # first CI run crashed the GitHub/GitLab test runners in URLSession.init
+      # on Linux and failed to link zstd (undefined ZSTD_*) on Windows. Stay on
+      # the native engine these lanes used under 6.3.
       - name: Build (Linux)
-        run: swift build --build-tests -v
+        run: swift build --build-system native --build-tests -v
       - name: Test (Linux)
-        run: swift test -v --skip-build --no-parallel
+        run: swift test --build-system native -v --skip-build --no-parallel
       - name: Smoke-test standalone argv handling (Linux)
         # The standalone binaries read argv through `Shell.arguments`
         # ($@ semantics); the unit suites never exercise that seam. A
@@ -186,13 +192,13 @@ jobs:
         # closed, a shape ShellKit's stdin plumbing should tolerate
         # but that is its own (tracked) concern, not this smoke's.
         run: |
-          swift build --product gh
+          swift build --build-system native --product gh
           .build/debug/gh --version < /dev/null
       - name: Test engine traits FTS5 + SQLiteVec (Linux)
         # One rebuild with both engine traits: validates FTS5 full-text search
         # and the sqlite-vec amalgamation compile + KNN on Linux. The default
         # run above covers the off-state.
-        run: swift test -v --traits FTS5,SQLiteVec --filter fullTextSearchFTS5 --filter semanticSearchSQLiteVec --filter vec0BlobBind
+        run: swift test --build-system native -v --traits FTS5,SQLiteVec --filter fullTextSearchFTS5 --filter semanticSearchSQLiteVec --filter vec0BlobBind
 
   build-windows:
     # Full Windows build. The libgit2 fork
@@ -272,13 +278,13 @@ jobs:
       - name: Build (Windows)
         shell: pwsh
         run: |
-          swift build --build-tests -v `
+          swift build --build-system native --build-tests -v `
             -Xcc "-I$env:VCPKG_BASE\include" `
             -Xlinker "/LIBPATH:$env:VCPKG_BASE\lib"
       - name: Test (Windows)
         shell: pwsh
         run: |
-          swift test -v --skip-build --no-parallel `
+          swift test --build-system native -v --skip-build --no-parallel `
             -Xcc "-I$env:VCPKG_BASE\include" `
             -Xlinker "/LIBPATH:$env:VCPKG_BASE\lib"
       - name: Test engine traits FTS5 + SQLiteVec (Windows)
@@ -287,7 +293,7 @@ jobs:
         # both on-state proofs; the default run above covers the off-state.
         shell: pwsh
         run: |
-          swift test -v --traits FTS5,SQLiteVec --filter fullTextSearchFTS5 --filter semanticSearchSQLiteVec --filter vec0BlobBind `
+          swift test --build-system native -v --traits FTS5,SQLiteVec --filter fullTextSearchFTS5 --filter semanticSearchSQLiteVec --filter vec0BlobBind `
             -Xcc "-I$env:VCPKG_BASE\include" `
             -Xlinker "/LIBPATH:$env:VCPKG_BASE\lib"
 
