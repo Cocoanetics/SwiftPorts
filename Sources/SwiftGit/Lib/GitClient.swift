@@ -268,6 +268,8 @@ public struct GitClient: ForgeKit.GitClient {
         return try await isolatedGated {
             let repo = try Repository.open(at: workingDirectory)
             try Self.installEnvironmentConfig(into: repo)
+            // What git refuses of its config stops it before anything else.
+            try self.checkConfigSyntax(of: repo)
             return try body(repo)
         }
     }
