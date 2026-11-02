@@ -84,8 +84,13 @@ extension GitClient {
     /// once it is locked, in git's order: a file that isn't there has
     /// nothing to unset, then the pattern is compiled, then the file is
     /// read, and the matching entry cut out and the file put back.
-    private func unset(_ key: String, matching pattern: String?, in path: String, named: String) throws -> Bool {
-        guard FileManager.default.fileExists(atPath: path) else { return false }
+    private func unset(_ key: String, matching pattern: String?, in given: String, named: String) throws -> Bool {
+        guard FileManager.default.fileExists(atPath: given) else { return false }
+        // git edits what a symlinked config points at, locking that.
+        let path = Self.resolvingSymlinks(given)
+        let lock = try Self.acquireLock(for: path, named: named)
+        var committed = false
+        defer { if !committed { try? FileManager.default.removeItem(atPath: lock) } }
         let matcher = try pattern.map { try ConfigValuePattern($0) }
         guard let data = FileManager.default.contents(atPath: path) else {
             throw GitDiagnosticError(lines: ["error: opening \(named): Permission denied"], exitCode: 3)
@@ -102,8 +107,41 @@ extension GitClient {
         guard matched.count == 1 else {
             throw GitDiagnosticError(lines: ["warning: \(key) has multiple values"], exitCode: 5)
         }
-        try Self.commit(file.removing(entriesAt: matched), to: path, named: named)
+        try Self.commit(file.removing(entriesAt: matched), to: path, lock: lock, named: named)
+        committed = true
         return true
+    }
+
+    /// `path` with a chain of symlinks followed to the file at its end.
+    private static func resolvingSymlinks(_ path: String) -> String {
+        var current = path
+        for _ in 0..<40 {
+            guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: current) else { break }
+            current = target.hasPrefix("/")
+                ? target : ((current as NSString).deletingLastPathComponent as NSString).appendingPathComponent(target)
+        }
+        return current
+    }
+
+    /// Creates `<path>.lock` exclusively, as git's lock file does, failing
+    /// where another process holds it.
+    private static func acquireLock(for path: String, named: String) throws -> String {
+        let lock = path + ".lock"
+        #if os(Windows)
+        guard FileManager.default.createFile(atPath: lock, contents: nil) else {
+            throw GitDiagnosticError(
+                lines: ["error: could not lock config file \(named): Permission denied"], exitCode: 255)
+        }
+        #else
+        let descriptor = open(lock, O_WRONLY | O_CREAT | O_EXCL, 0o666)
+        guard descriptor >= 0 else {
+            let reason = errno == EEXIST ? "File exists" : String(cString: strerror(errno))
+            throw GitDiagnosticError(
+                lines: ["error: could not lock config file \(named): \(reason)"], exitCode: 255)
+        }
+        close(descriptor)
+        #endif
+        return lock
     }
 
     /// The repository's own config file (`<gitdir>/config`): where it is,
@@ -127,15 +165,18 @@ extension GitClient {
     /// Puts `bytes` in the file at `path` the way git commits its lock
     /// file: written to `<path>.lock` with the file's own mode, then
     /// renamed over it.
-    private static func commit(_ bytes: [UInt8], to path: String, named: String) throws {
-        let lock = path + ".lock"
+    private static func commit(_ bytes: [UInt8], to path: String, lock: String, named: String) throws {
         var attributes: [FileAttributeKey: Any] = [:]
         #if !os(Windows)
         if let mode = try? FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] {
             attributes[.posixPermissions] = mode
         }
         #endif
-        guard FileManager.default.createFile(atPath: lock, contents: Data(bytes), attributes: attributes) else {
+        do {
+            try Data(bytes).write(to: URL(fileURLWithPath: lock))
+            if !attributes.isEmpty { try FileManager.default.setAttributes(attributes, ofItemAtPath: lock) }
+        } catch {
+            try? FileManager.default.removeItem(atPath: lock)
             throw GitDiagnosticError(
                 lines: ["error: could not lock config file \(named): Permission denied"], exitCode: 255)
         }
