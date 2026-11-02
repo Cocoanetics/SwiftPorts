@@ -45,7 +45,7 @@ struct ConfigFileLock {
         let handle = lockPath.withCString(encodedAs: UTF16.self) {
             CreateFileW($0, DWORD(GENERIC_WRITE), 0, nil, DWORD(CREATE_NEW), DWORD(FILE_ATTRIBUTE_NORMAL), nil)
         }
-        guard handle != INVALID_HANDLE_VALUE else {
+        guard let handle, handle != INVALID_HANDLE_VALUE else {
             throw Self.failure(named: named, reason: Self.reason(for: GetLastError()))
         }
         self.handle = handle
