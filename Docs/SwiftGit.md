@@ -151,8 +151,9 @@ git blame <path>
 git mv <src> <dst>
 git rm [--cached] [-f] <paths>...
 git clean [-f] [-n] [-d] [<paths>...]
-git config [--global / --system / --local] [--get / --unset /
-            --list / -l] <name> [<value>]
+git config [--global / --system / --local] [--show-origin]
+           [--get <name> [<value-pattern>] / --unset <name> [<value-pattern>] /
+            --list / -l / <name> [<value>]]
 git stash {push, list, apply, pop, drop, clear, show, branch}
 git tag {-a -m, -d, -l, -n, -f, -v}
 git verify-tag {-v, --raw}
@@ -270,5 +271,30 @@ entries to the open config. GitKit's `Repository` keeps its handle internal;
 it). `clone` and `init` open their repository inside GitKit, so they see
 `HOME` / `XDG_CONFIG_HOME` but not the `GIT_CONFIG_*` overrides yet.
 
-`git config --show-origin` (with `--list` or a single key) prints
+`git config --show-origin` (with `--list` or a `--get`) prints
 `file:<path>` / `command line:` and a tab before each entry.
+
+`--get <name> <value-pattern>` and `--unset <name> <value-pattern>` take
+git's value pattern: a POSIX extended regular expression (the platform's
+`regcomp`, as git's; `NSRegularExpression` on Windows), negated by a leading
+`!`. A get shows the last value the pattern admits, a key without a value
+reading as empty; an unset removes the one value it admits (a key without a
+value only for a negated pattern), and is `warning: <name> has multiple
+values` (status 5) when several would go. A pattern that doesn't compile is
+`error: invalid pattern: <pattern>` (status 6), checked after the key and
+before any config is read; a key git can't parse is its `error: key does not
+contain a section: …` (status 1 for a get, 2 for an unset) or `error: invalid
+key: …` (1). An unset, with or without a pattern, rewrites the file as git
+does (`GitConfigFile`): the entry's line goes with the white space before it,
+and a section left empty goes too unless a comment is next to it. The file is
+locked as git locks it (`ConfigFileLock`): `<file>.lock` made exclusively by
+the file a symlink points at, written, given the file's mode and renamed over
+it; a lock another process holds is `could not lock config file <file>: File
+exists` (status 255). The repository's own file is named `.git/config`.
+
+Config files are read with git's own syntax rules, where libgit2's parser is
+more lenient (an unterminated quote, a key starting with a digit or `-`, an
+escape git doesn't know): what git refuses is `fatal: bad config line <n> in
+file <path>` (status 128), for the scope's file, what it includes, and every
+file a repository reads. A config path under a regular file is reported as
+git reports it (`Not a directory`), to lock and to read.

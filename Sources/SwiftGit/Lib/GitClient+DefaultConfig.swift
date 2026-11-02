@@ -38,27 +38,53 @@ extension GitClient {
         return !path.isEmpty && FileManager.default.fileExists(atPath: location(of: path))
     }
 
-    /// git's lock failure for a config file it can't lock: its directory
-    /// isn't there or isn't writable (the lock is a file next to it), or
-    /// the lock is already held.
-    func requireDirectory(of path: String) throws {
+    /// git's lock failure for a config file it can't lock, told before
+    /// libgit2 writes: its directory isn't there (or a part of its path is
+    /// no directory), isn't writable (the lock is a file next to it, by
+    /// the file a symlink names), or the lock is already held. `named` is
+    /// the file as git names it, when that isn't `path`.
+    func requireDirectory(of path: String, named: String? = nil) throws {
         guard !path.isEmpty else { return }
-        let directory = URL(fileURLWithPath: location(of: path)).deletingLastPathComponent().path
+        let named = named ?? path
+        let target = ConfigFileLock.resolvedTarget(of: location(of: path))
+        let directory = URL(fileURLWithPath: target).deletingLastPathComponent().path
         var isDirectory: ObjCBool = false
         let exists = FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory)
             && isDirectory.boolValue
         guard exists, FileManager.default.isWritableFile(atPath: directory) else {
             throw Libgit2Error(
                 code: GIT_ENOTFOUND.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
-                message: "could not lock config file \(path): "
-                    + (exists ? "Permission denied" : "No such file or directory"))
+                message: "could not lock config file \(named): "
+                    + (exists ? "Permission denied" : Self.unreachableReason(directory)))
         }
         // Another process holds the lock.
-        if FileManager.default.fileExists(atPath: location(of: path) + ".lock") {
+        if FileManager.default.fileExists(atPath: target + ".lock") {
             throw Libgit2Error(
                 code: GIT_EEXISTS.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
-                message: "could not lock config file \(path): File exists")
+                message: "could not lock config file \(named): File exists")
         }
+    }
+
+    /// Why `path` can't be reached, as `strerror` words what `open` says
+    /// of it: a part of the path that is there but is no directory is
+    /// `Not a directory`, one that isn't there `No such file or directory`.
+    static func unreachableReason(_ path: String) -> String {
+        // The path and its ancestors, the root (or the first name of a
+        // relative path) last; checked from there down, as `open` walks.
+        var ancestors = [path]
+        while let current = ancestors.last {
+            let parent = (current as NSString).deletingLastPathComponent
+            guard !parent.isEmpty, parent != current else { break }
+            ancestors.append(parent)
+        }
+        for ancestor in ancestors.reversed() {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: ancestor, isDirectory: &isDirectory) else {
+                return "No such file or directory"
+            }
+            if !isDirectory.boolValue { return "Not a directory" }
+        }
+        return "No such file or directory"
     }
 
     /// The file git reads and writes for `scope`, as it names it.
@@ -142,10 +168,13 @@ extension GitClient {
                 try Self.check(git_config_open_default(&base))
                 defer { git_config_free(base) }
                 try Self.installEnvironmentConfig(into: base, repo: nil)
+                try self.checkConfigSyntax(readBy: base)
                 return try body(base)
             }
             let file = try self.openScopedConfig(scope, missing: missing)
             defer { git_config_free(file) }
+            // The file itself was checked as it was opened; its includes now.
+            try self.checkConfigSyntax(readBy: file)
             return try body(file)
         }
     }
@@ -203,12 +232,15 @@ extension GitClient {
                     code: GIT_EUSER.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
                     message: "unable to access '\(path)': Permission denied")
             }
+            // What git refuses before libgit2 reads it, named as typed.
+            try Self.checkConfigSyntax(at: location(of: path), named: path)
         } else {
             switch missing {
             case .fail:
                 throw Libgit2Error(
                     code: GIT_ENOTFOUND.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
-                    message: "unable to read config file '\(path)': No such file or directory")
+                    message: "unable to read config file '\(path)': "
+                        + Self.unreachableReason(location(of: path)))
             case .empty:
                 try Self.check(git_config_new(&file))
                 return file
@@ -269,6 +301,8 @@ extension GitClient {
         let level: Int32
         let offset: Int
         let origin: String
+        /// The file it was read from, `nil` for a command-line entry.
+        let path: String?
         let name: String
         /// `nil` for a key without a value.
         let value: String?
@@ -300,8 +334,45 @@ extension GitClient {
             entries.append(ListedConfigEntry(
                 level: Int32(entry.level.rawValue), offset: entries.count,
                 origin: originName(of: entry, base: base),
+                path: entry.origin_path.map { String(cString: $0) },
                 name: String(cString: name), value: entry.value.map { String(cString: $0) }))
         }
         return entries.sorted { ($0.level, $0.offset) < ($1.level, $1.offset) }
+    }
+
+    // MARK: - What git refuses to read
+
+    /// git's `fatal: bad config line N in file P` for the first file git
+    /// would refuse among those `config` was read from, in git's reading
+    /// order: libgit2 takes some of what git doesn't (``GitConfigFile``).
+    func checkConfigSyntax(readBy config: OpaquePointer?, base: String? = nil) throws {
+        var checked: Set<String> = []
+        for entry in try configEntries(in: config, base: base) {
+            guard let path = entry.path, checked.insert(path).inserted else { continue }
+            try Self.checkConfigSyntax(at: path, named: String(entry.origin.dropFirst("file:".count)))
+        }
+    }
+
+    /// The same for the config files `repository` reads.
+    func checkConfigSyntax(of repository: Repository) throws {
+        guard let repo = Self.handle(of: repository) else {
+            throw Libgit2Error(
+                code: -1, klass: Int32(GIT_ERROR_CONFIG.rawValue),
+                message: "cannot reach GitKit's repository handle to check its config")
+        }
+        var config: OpaquePointer?
+        try Self.check(git_repository_config_snapshot(&config, repo))
+        defer { git_config_free(config) }
+        let base = (git_repository_workdir(repo) ?? git_repository_path(repo)).map { String(cString: $0) }
+        try checkConfigSyntax(readBy: config, base: base)
+    }
+
+    /// git's refusal of the config file at `path`, named `named` as git
+    /// names it; nothing for a file git reads whole, or one that isn't there.
+    static func checkConfigSyntax(at path: String, named: String) throws {
+        guard let data = FileManager.default.contents(atPath: path),
+              let line = GitConfigFile.parse(data).badLine
+        else { return }
+        throw GitDiagnosticError(lines: ["fatal: bad config line \(line) in file \(named)"], exitCode: 128)
     }
 }

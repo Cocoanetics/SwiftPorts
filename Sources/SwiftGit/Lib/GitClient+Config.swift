@@ -37,25 +37,94 @@ extension GitClient {
             }
             return
         }
-        try await withRepository { try $0.configSet(name, value, scope: scope) }
+        try await withRepository { repository in
+            // git's lock failure comes in git's words, for the repository's own file too.
+            let file = try Self.localConfigFile(of: repository)
+            try self.requireDirectory(of: file.path, named: file.name)
+            try repository.configSet(name, value, scope: scope)
+        }
     }
 
-    /// Remove a config entry. Returns true if removed, false if absent.
+    /// `git config --unset <name> [<value-pattern>]`: removes the one entry
+    /// of `name`, or the one whose value `pattern` admits
+    /// (``ConfigValuePattern``). Returns true if removed, false if there
+    /// was nothing to remove. Several entries to remove are git's
+    /// `warning: <name> has multiple values` (status 5), a pattern it can't
+    /// compile its `error: invalid pattern: …` (6), a key it can't parse
+    /// its `error: key does not contain a section: …` (2) or
+    /// `error: invalid key: …` (1). The file is rewritten as git rewrites
+    /// it: the entry's line goes, and a section it leaves empty goes too.
     @discardableResult
-    public func configUnset(_ name: String, scope: ConfigScope = .local) async throws -> Bool {
+    public func configUnset(
+        _ name: String, matching pattern: String? = nil, scope: ConfigScope = .local
+    ) async throws -> Bool {
+        let key: String
+        do { key = try Self.normalizedKey(name) } catch let error as CommandLineConfigError {
+            // git_config_parse_key: a missing section or variable name is
+            // CONFIG_NO_SECTION_OR_NAME, anything else CONFIG_INVALID_KEY.
+            let status: Int32 = error.reason.hasPrefix("key does not contain") ? 2 : 1
+            throw GitDiagnosticError(lines: ["error: \(error.reason)"], exitCode: status)
+        }
         if scope == .global || scope == .system {
-            return try await withDefaultConfig(scope: scope, missing: .emptyForWrite) { config in
-                // git locks the file first, whether or not the key is there.
-                try self.requireDirectory(of: Self.configFilePath(scope))
-                // An absent key (or file) is nothing to remove.
-                guard try Self.configString(name, in: config, withIncludes: false) != nil else { return false }
-                let result = git_config_delete_entry(config, name)
-                if result == GIT_ENOTFOUND.rawValue { return false }
-                try Self.check(result)
-                return true
+            let path = Self.configFilePath(scope)
+            return try await withDefaultConfig(scope: scope, missing: .emptyForWrite) { _ in
+                try self.unset(key, matching: pattern, in: self.location(of: path), named: path)
             }
         }
-        return try await withRepository { try $0.configUnset(name, scope: scope) }
+        return try await withRepository { repository in
+            let file = try Self.localConfigFile(of: repository)
+            return try self.unset(key, matching: pattern, in: file.path, named: file.name)
+        }
+    }
+
+    /// The unset itself, on the file at `path` (named `named` to the
+    /// user), in git's order: the lock comes first, whether or not the key
+    /// is there; a file that isn't there is then nothing to unset, the
+    /// pattern is compiled, the file read, and the matching entry cut out
+    /// and the file put back through the lock.
+    private func unset(_ key: String, matching pattern: String?, in path: String, named: String) throws -> Bool {
+        let lock = try ConfigFileLock(path: path, named: named)
+        var committed = false
+        defer { if !committed { lock.rollback() } }
+        guard let data = FileManager.default.contents(atPath: lock.target) else {
+            guard FileManager.default.fileExists(atPath: lock.target) else { return false }
+            throw GitDiagnosticError(lines: ["error: opening \(named): Permission denied"], exitCode: 3)
+        }
+        let matcher = try pattern.map { try ConfigValuePattern($0) }
+        let file = GitConfigFile.parse(data)
+        if let line = file.badLine {
+            throw GitDiagnosticError(lines: ["fatal: bad config line \(line) in file \(named)"], exitCode: 128)
+        }
+        let name = Array(key.utf8)
+        let matched = file.entries.indices.filter {
+            file.entries[$0].key == name && (matcher?.admitsForUnset(file.entries[$0].value) ?? true)
+        }
+        guard !matched.isEmpty else { return false }
+        guard matched.count == 1 else {
+            throw GitDiagnosticError(lines: ["warning: \(key) has multiple values"], exitCode: 5)
+        }
+        // commit closes the lock and removes it itself when it fails.
+        committed = true
+        try lock.commit(file.removing(entriesAt: matched), named: named)
+        return true
+    }
+
+    /// The repository's own config file (`<gitdir>/config`): where it is,
+    /// and how git names it, relative to the top of the work tree wherever
+    /// the command runs from (`.git/config`).
+    static func localConfigFile(of repository: Repository) throws -> (path: String, name: String) {
+        guard let repo = handle(of: repository) else {
+            throw Libgit2Error(
+                code: -1, klass: Int32(GIT_ERROR_CONFIG.rawValue),
+                message: "cannot reach GitKit's repository handle to find its config file")
+        }
+        var buffer = git_buf()
+        defer { git_buf_dispose(&buffer) }
+        try check(git_repository_item_path(&buffer, repo, GIT_REPOSITORY_ITEM_CONFIG))
+        let path = buffer.ptr.map { String(cString: $0) } ?? ""
+        let base = (git_repository_workdir(repo) ?? git_repository_path(repo)).map { String(cString: $0) }
+        if let base, path.hasPrefix(base) { return (path, String(path.dropFirst(base.count))) }
+        return (path, path)
     }
 
     /// Walk every config entry visible to the repo — matches `git config --list`.
@@ -73,25 +142,32 @@ extension GitClient {
         try await configEntries(scope: scope).map { showOrigin ? "\($0.origin)\t\($0.line)" : $0.line }
     }
 
-    /// `git config --show-origin <name>`: where the value git gets for
-    /// `name` comes from, and the value; `nil` when it isn't set.
+    /// `git config --get <name> [<value-pattern>]`, with `--show-origin`'s
+    /// origin: the last value of `name` git reads (the one it shows), or
+    /// the last one `pattern` admits (``ConfigValuePattern``), and where
+    /// it comes from; `nil` when there is none. A key git can't parse is
+    /// its `error: key does not contain a section: …` (status 1), a
+    /// pattern it can't compile its `error: invalid pattern: …` (6),
+    /// checked in that order before any config is read.
     public func configGetShowingOrigin(
-        _ name: String, scope: ConfigScope? = nil
+        _ name: String, matching pattern: String? = nil, scope: ConfigScope? = nil
     ) async throws -> (origin: String, value: String)? {
         let key: String
         do { key = try Self.normalizedKey(name) } catch let error as CommandLineConfigError {
             // Config's own key check, which exits 1 where the environment's is fatal.
             throw GitDiagnosticError(lines: ["error: \(error.reason)"], exitCode: 1)
         }
-        guard let entry = try await configEntries(scope: scope).last(where: { $0.name == key }) else {
-            return nil
-        }
+        let matcher = try pattern.map { try ConfigValuePattern($0) }
+        // A scope's file that isn't there has nothing, as for any get.
+        guard let entry = try await configEntries(scope: scope, missing: .empty).last(where: {
+            $0.name == key && (matcher?.admitsForGet($0.value) ?? true)
+        }) else { return nil }
         return (entry.origin, entry.value ?? "")
     }
 
-    func configEntries(scope: ConfigScope?) async throws -> [ListedConfigEntry] {
+    func configEntries(scope: ConfigScope?, missing: MissingConfigFile = .fail) async throws -> [ListedConfigEntry] {
         if scope == .global || scope == .system {
-            return try await withDefaultConfig(scope: scope, missing: .fail) {
+            return try await withDefaultConfig(scope: scope, missing: missing) {
                 try configEntries(in: $0, withIncludes: false)
             }
         }
@@ -109,6 +185,7 @@ extension GitClient {
             try Self.installEnvironmentConfig(intoRepository: repo)
             try Self.check(git_repository_config_snapshot(&config, repo))
             let base = (git_repository_workdir(repo) ?? git_repository_path(repo)).map { String(cString: $0) }
+            try checkConfigSyntax(readBy: config, base: base)
             return try configEntries(
                 in: config, level: scope == .local ? GIT_CONFIG_LEVEL_LOCAL : nil, base: base)
         }
@@ -235,134 +312,12 @@ extension GitClient {
         return (first.key, file, line)
     }
 
-    /// What's between a header line's `[` and its `]`, a `]` inside the
-    /// quoted subsection (`[remote "orig]in"]`) not counting.
-    private static func sectionHeader(_ line: String) -> Substring {
-        let body = line.dropFirst()
-        var quoted = false
-        var escaped = false
-        for index in body.indices {
-            let character = body[index]
-            if escaped {
-                escaped = false
-            } else if quoted, character == "\\" {
-                escaped = true
-            } else if character == "\"" {
-                quoted.toggle()
-            } else if character == "]", !quoted {
-                return body[..<index]
-            }
-        }
-        return body
-    }
-
-    /// Whether a value (or the part of it on this line) goes on to the
-    /// next line, as git's parse_value reads it: a backslash escapes the
-    /// next character, and one ending the line carries the value on;
-    /// quotes toggle, and an unquoted `#` or `;` starts a comment, which
-    /// a backslash can't carry on.
-    private static func valueContinues(_ value: Substring, quoted: inout Bool) -> Bool {
-        var escaped = false
-        for character in value {
-            if escaped {
-                escaped = false
-            } else if character == "\\" {
-                escaped = true
-            } else if character == "\"" {
-                quoted.toggle()
-            } else if !quoted, character == "#" || character == ";" {
-                return false
-            }
-        }
-        return escaped
-    }
-
-    /// A quoted subsection as git reads it: `"orig\"in"` is `orig"in`,
-    /// a backslash taking the next character as it is.
-    private static func decodedSubsection(_ quoted: Substring) -> String {
-        var body = quoted.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))[...]
-        if body.hasPrefix("\"") { body = body.dropFirst() }
-        // The closing quote ends the header, whatever comes before it.
-        if body.hasSuffix("\"") { body = body.dropLast() }
-        var decoded = ""
-        var escaped = false
-        for character in body {
-            if escaped {
-                decoded.append(character)
-                escaped = false
-            } else if character == "\\" {
-                escaped = true
-            } else {
-                decoded.append(character)
-            }
-        }
-        return decoded
-    }
-
     /// The line of `file` where `key` (`remote.origin.push`) is written
-    /// without a value, counting from 1.
+    /// without a value, counting from 1, as git reads the file.
     private static func valuelessLine(of key: String, in file: URL) -> Int? {
-        // git reads config as bytes: a value that isn't UTF-8 doesn't stop
-        // it, nor the line count here.
-        guard var data = try? Data(contentsOf: file) else { return nil }
-        // git skips a UTF-8 byte order mark at the start of a file.
-        if data.starts(with: [0xEF, 0xBB, 0xBF]) { data.removeFirst(3) }
-        let parts = key.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count >= 3 else { return nil }
-        let subsection = parts.dropFirst().dropLast().joined(separator: ".")
-        let variable = String(parts.last!)
-        var inSection = false
-        // Whether the previous line's value goes on (`value\`), and
-        // inside a quote, which carries on with it.
-        var continued = false
-        var quoted = false
-        // git counts lines by LF bytes alone, a CR before one folded in;
-        // other Unicode line breaks (NEL) are part of a value.
-        for (index, bytes) in data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false)
-            .enumerated() {
-            let raw = bytes.last == UInt8(ascii: "\r") ? bytes.dropLast() : bytes[...]
-            let line = String(decoding: raw, as: UTF8.self).trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
-            let isContinuation = continued
-            if isContinuation {
-                continued = Self.valueContinues(Substring(line), quoted: &quoted)
-                continue
-            }
-            // A whole-line comment is no key, `=` or not.
-            if line.hasPrefix("#") || line.hasPrefix(";") {
-                continued = false
-                continue
-            }
-            if !line.hasPrefix("["), let equals = line.firstIndex(of: "=") {
-                quoted = false
-                continued = Self.valueContinues(line[line.index(after: equals)...], quoted: &quoted)
-            } else {
-                continued = false
-            }
-            if line.hasPrefix("[") {
-                // `[remote "origin"]`: the section ignores case, the
-                // subsection doesn't.
-                let header = Self.sectionHeader(line)
-                // Spaces and tabs both separate a section from its
-                // subsection.
-                let pieces = header.split(maxSplits: 1, whereSeparator: { $0 == " " || $0 == "\t" })
-                if pieces.count == 2 {
-                    inSection = pieces[0].lowercased() == String(parts[0])
-                        && decodedSubsection(pieces[1]) == subsection
-                } else if let dot = header.firstIndex(of: ".") {
-                    // The older `[remote.origin]`, which git reads with
-                    // the subsection lowercased.
-                    inSection = header[..<dot].lowercased() == String(parts[0])
-                        && header[header.index(after: dot)...].lowercased() == subsection.lowercased()
-                } else {
-                    inSection = false
-                }
-                continue
-            }
-            if inSection, !line.contains("="), line.lowercased() == variable {
-                return index + 1
-            }
-        }
-        return nil
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        let name = Array(key.utf8)
+        return GitConfigFile.parse(data).entries.first { $0.key == name && $0.value == nil }?.line
     }
 
     /// Whether git takes `refspec` as a push refspec (refspec.c's

@@ -87,15 +87,14 @@ struct Config: AsyncParsableCommand {
         if message.hasPrefix("unable to read config file") {
             return CLIError.stderr("fatal: \(message)", exitCode: 128)
         }
-        if message.contains("not unique") && (unset || args.count == 2) {
+        if message.contains("not unique") && args.count == 2 {
             // More than one line has the key: git changes nothing.
             let key = args.first ?? ""
-            var lines = ["warning: \(key) has multiple values"]
-            if !unset {
-                lines += ["error: cannot overwrite multiple values with a single value",
-                          "       Use a regexp, --add or --replace-all to change \(key)."]
-            }
-            return CLIError.stderr(lines, exitCode: 5)
+            return CLIError.stderr(
+                ["warning: \(key) has multiple values",
+                 "error: cannot overwrite multiple values with a single value",
+                 "       Use a regexp, --add or --replace-all to change \(key)."],
+                exitCode: 5)
         }
         if message.hasPrefix("unable to access") { return unreadable(message) }
         if message.hasPrefix("could not lock config file") {
@@ -141,10 +140,16 @@ struct Config: AsyncParsableCommand {
     private func configure() async throws {
         let client = CommandContext.gitClient()
 
-        if showOrigin && (writes || (!list && args.count != 1)) {
+        // A read with a value pattern is still a --get.
+        let reads = args.count == 1 || (get && args.count == 2)
+        if showOrigin && (writes || (!list && !reads)) {
             throw CLIError.stderr(
                 "error: --show-origin is only applicable to --get, --get-all, --get-regexp, and --list",
                 exitCode: 129)
+        }
+        // git's check_argc: --get and --unset take a name and an optional value pattern.
+        if (get || unset) && !(1...2).contains(args.count) {
+            throw CLIError.stderr("error: wrong number of arguments, should be from 1 to 2", exitCode: 129)
         }
 
         if list {
@@ -154,40 +159,24 @@ struct Config: AsyncParsableCommand {
             return
         }
 
-        // A value pattern would narrow a get or unset to some of a key's
-        // values. Not supported yet; it must never be taken as a value to
-        // set, or a key to remove by name alone.
-        if (get || unset) && args.count == 2 {
-            throw CLIError.stderr("fatal: a value pattern is not supported yet", exitCode: 128)
-        }
-
+        let pattern = args.count == 2 ? args[1] : nil
         if unset {
-            guard let name = args.first else {
-                throw CLIError.stderr(
-                    "fatal: --unset requires a key", exitCode: 128)
-            }
-            // Like git, a key that wasn't there is exit status 5.
-            guard try await client.configUnset(name, scope: scope) else {
+            // Like git, nothing to unset is exit status 5.
+            guard try await client.configUnset(args[0], matching: pattern, scope: scope) else {
                 throw CLIError(lines: [], exitCode: 5)
             }
             return
         }
 
+        if reads {
+            // `git config <name>`, `git config --get <name> [<value-pattern>]`.
+            guard let found = try await client.configGetShowingOrigin(args[0], matching: pattern, scope: readScope)
+            else { throw CLIError(lines: [], exitCode: 1) }
+            Shell.print(showOrigin ? "\(found.origin)\t\(found.value)" : found.value)
+            return
+        }
+
         switch args.count {
-        case 1:
-            // Read form: `git config <name>` or `git config --get <name>`.
-            let name = args[0]
-            if showOrigin {
-                guard let found = try await client.configGetShowingOrigin(name, scope: readScope) else {
-                    throw CLIError(lines: [], exitCode: 1)
-                }
-                Shell.print("\(found.origin)\t\(found.value)")
-            } else if let value = try await client.configGet(name, scope: readScope) {
-                Shell.print(value)
-            } else {
-                throw CLIError(lines: [], exitCode: 1)
-            }
-            _ = get  // explicit flag is fine but doesn't change behaviour
         case 2:
             // Write form: `git config <name> <value>`.
             try await client.configSet(args[0], args[1], scope: scope)

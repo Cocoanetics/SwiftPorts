@@ -123,8 +123,8 @@ struct GitCommandConfigErrorTests: ConfigTestHelpers {
         #expect(try String(contentsOf: file, encoding: .utf8) == before)
     }
 
-    @Test("a lock another process holds, and a value pattern that must not write")
-    func lockHeldAndValuePattern() async throws {
+    @Test("a lock another process holds stops a change, whether or not the key is there")
+    func lockHeld() async throws {
         let fixture = try makeRoot()
         let (root, home, work) = (fixture.root, fixture.home, fixture.work)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -135,19 +135,10 @@ struct GitCommandConfigErrorTests: ConfigTestHelpers {
             try await git(["config", "--global"] + args, root: root, home: home, work: work)
         }
 
-        // A value pattern is refused: never a value to set, never a key to
-        // remove by name alone. The file is left as it was.
-        for args in [["--get", "a.b", "hel+"], ["--unset", "a.b", "zzz"]] {
-            let refused = try await run(args)
-            #expect(refused.stderr == "fatal: a value pattern is not supported yet\n")
-            #expect(refused.status == 128)
-        }
-        #expect(try String(contentsOf: file, encoding: .utf8) == contents)
-
-        // A held lock stops a change, whether or not the key is there.
+        // The lock comes before the key, or a value pattern, is looked at.
         let lock = home.appendingPathComponent(".gitconfig.lock")
         try "".write(to: lock, atomically: true, encoding: .utf8)
-        for args in [["x.y", "z"], ["--unset", "x.y"], ["--unset", "a.b"]] {
+        for args in [["x.y", "z"], ["--unset", "x.y"], ["--unset", "a.b"], ["--unset", "a.b", "hel+"]] {
             let result = try await run(args)
             #expect(result.stderr == "error: could not lock config file \(file.path): File exists\n")
             #expect(result.status == 255)
