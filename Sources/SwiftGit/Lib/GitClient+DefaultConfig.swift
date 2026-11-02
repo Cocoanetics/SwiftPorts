@@ -69,9 +69,15 @@ extension GitClient {
     /// of it: a part of the path that is there but is no directory is
     /// `Not a directory`, one that isn't there `No such file or directory`.
     static func unreachableReason(_ path: String) -> String {
-        let components = (path as NSString).pathComponents
-        for count in 1...max(components.count, 1) {
-            let ancestor = NSString.path(withComponents: Array(components.prefix(count)))
+        // The path and its ancestors, the root (or the first name of a
+        // relative path) last; checked from there down, as `open` walks.
+        var ancestors = [path]
+        while let current = ancestors.last {
+            let parent = (current as NSString).deletingLastPathComponent
+            guard !parent.isEmpty, parent != current else { break }
+            ancestors.append(parent)
+        }
+        for ancestor in ancestors.reversed() {
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: ancestor, isDirectory: &isDirectory) else {
                 return "No such file or directory"
