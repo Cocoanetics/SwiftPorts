@@ -103,8 +103,9 @@ extension GitClient {
         guard matched.count == 1 else {
             throw GitDiagnosticError(lines: ["warning: \(key) has multiple values"], exitCode: 5)
         }
-        try lock.commit(file.removing(entriesAt: matched), named: named)
+        // commit closes the lock and removes it itself when it fails.
         committed = true
+        try lock.commit(file.removing(entriesAt: matched), named: named)
         return true
     }
 
