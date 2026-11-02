@@ -102,6 +102,23 @@ struct GitConfigFileTests {
     }
 
     #if os(macOS) || os(Linux)
+    /// The system git's version, `major.minor`, from `git version 2.34.1`.
+    private static func systemGitVersion() throws -> (Int, Int)? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["--version"]
+        let out = Pipe()
+        process.standardOutput = out
+        try process.run()
+        let output = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        let words = output.split(separator: " ")
+        guard words.count >= 3 else { return nil }
+        let numbers = words[2].split(separator: ".").compactMap { Int($0) }
+        guard numbers.count >= 2 else { return nil }
+        return (numbers[0], numbers[1])
+    }
+
     @Test("the system git says the same of every case",
           .enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/git")))
     func systemGitAgrees() throws {
@@ -110,6 +127,10 @@ struct GitConfigFileTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("config")
+        // git before 2.45 turned white space inside a value into spaces
+        // (`parse_value` keeps it since); an older git is not asked about
+        // the entries that hold a tab.
+        let keepsWhitespace = try Self.systemGitVersion().map { $0 >= (2, 45) } ?? true
         for (contents, verdict) in Self.cases {
             try Data(contents).write(to: file)
             let process = Process()
@@ -130,7 +151,9 @@ struct GitConfigFileTests {
                 #expect(stderr == "fatal: bad config line \(line) in file \(file.path)\n", label)
             case .entries(let expected):
                 #expect(process.terminationStatus == 0, label)
-                #expect(stdout == expected.map { $0 + "\n" }.joined(), label)
+                if keepsWhitespace || !expected.contains(where: { $0.contains("\t") }) {
+                    #expect(stdout == expected.map { $0 + "\n" }.joined(), label)
+                }
             }
         }
     }
