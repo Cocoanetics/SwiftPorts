@@ -22,17 +22,14 @@ concurrency:
 jobs:
 
   build-macos:
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
-      # Use the newest stable Xcode on the hosted image. SwiftPorts needs at
-      # least Swift 6.2 for package manifests, and newer Xcodes avoid spelling a
-      # stale exact version once the runner image advances.
-      - name: Select newest Xcode
+      - name: Select Xcode 27.1 (Swift 6.4)
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: latest-stable
+          xcode-version: "27.1"
       - name: Install C dependencies (Homebrew)
         # bzip2 / zstd are needed by Bzip2Kit / ZstdKit and by
         # libarchive's bz2 / zstd filters. xz is no longer needed on
@@ -49,7 +46,11 @@ jobs:
               || brew install "$pkg"
           done
       - name: Verify Swift version
-        run: swift --version
+        shell: bash
+        run: |
+          swift --version
+          swift --version 2>&1 | grep -qE "Swift version 6\.4" \
+            || { echo "::error::Expected Swift 6.4"; exit 1; }
       - name: Stage libswiftCompatibilitySpan for test-bundle dlopen
         # Xcode 26 keeps libswiftCompatibilitySpan.dylib in the toolchain but does
         # not stage it next to SwiftPM products, so on a macos-latest runner whose
@@ -91,14 +92,20 @@ jobs:
     # integration tests are gated `#if os(macOS) || os(Linux)` so they
     # don't compile here; the unit-shape suites in GitCommandTests,
     # GitLabTests, GitHubTests, ZipKitTests still run.
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
-      - name: Select newest Xcode
+      - name: Select Xcode 27.1 (Swift 6.4)
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: latest-stable
+          xcode-version: "27.1"
+      - name: Verify Swift version
+        shell: bash
+        run: |
+          swift --version
+          swift --version 2>&1 | grep -qE "Swift version 6\.4" \
+            || { echo "::error::Expected Swift 6.4"; exit 1; }
       - name: Install iOS platform
         # The hosted image can lag the selected Xcode's iOS runtime. The
         # download occasionally flakes, so retry before failing the job.
@@ -116,12 +123,14 @@ jobs:
           set -euo pipefail
           # `name=iPhone 16,OS=latest` doesn't reliably match after a runtime
           # download (no seeded device set), so resolve a concrete available iOS
-          # simulator — creating one if needed — and test against it by UDID.
+          # simulator on the newest runtime (the image also carries older ones the
+          # Xcode 27 SDK can't install to) — creating one if needed — and test
+          # against it by UDID.
           UDID=$(xcrun simctl list devices available --json \
-            | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; ids=[x['udid'] for r,v in d.items() if 'iOS' in r for x in v if x.get('isAvailable')]; print(ids[0] if ids else '')")
+            | python3 -c "import json,re,sys; d=json.load(sys.stdin)['devices']; ids=[x['udid'] for r,v in sorted(d.items(), key=lambda kv: [int(n) for n in re.findall(r'\\d+', kv[0])], reverse=True) if 'iOS' in r for x in v if x.get('isAvailable')]; print(ids[0] if ids else '')")
           if [ -z "$UDID" ]; then
             RT=$(xcrun simctl list runtimes iOS --json \
-              | python3 -c "import json,sys; r=[x['identifier'] for x in json.load(sys.stdin)['runtimes'] if x.get('isAvailable')]; print(r[0])")
+              | python3 -c "import json,re,sys; r=sorted([x for x in json.load(sys.stdin)['runtimes'] if x.get('isAvailable')], key=lambda x: [int(n) for n in re.findall(r'\\d+', x['version'])], reverse=True); print(r[0]['identifier'])")
             UDID=$(xcrun simctl create ci-iphone "iPhone 16" "$RT")
           fi
           echo "Testing on iOS simulator $UDID"
@@ -131,12 +140,12 @@ jobs:
     # Linux: full build + test, parity with Apple platforms.
     # libgit2 1.9.x needs OpenSSL + zlib + ca-certificates for HTTPS
     # clones; pkg-config wires libgit2's CMake config up correctly.
-    # Use the current Swift 6.3 toolchain; the package's minimum tools-version
-    # remains 6.2, but CI should track the newer stable Linux compiler.
+    # Use the Swift 6.4 toolchain; the package's minimum tools-version
+    # remains 6.2, but CI tracks the newer compiler.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     container:
-      image: swift:6.3-jammy
+      image: swift:6.4.2-jammy
     steps:
       - uses: actions/checkout@v6
       - name: Install C dependencies
@@ -156,11 +165,19 @@ jobs:
                              zlib1g-dev libbz2-dev liblzma-dev \
                              libzstd-dev liblz4-dev libsecret-1-dev
       - name: Verify Swift version
-        run: swift --version
+        shell: bash
+        run: |
+          swift --version
+          swift --version 2>&1 | grep -qE "Swift version 6\.4" \
+            || { echo "::error::Expected Swift 6.4"; exit 1; }
+      # Swift 6.4 defaults `swift build` to the swift-build engine. Under it the
+      # first CI run crashed the GitHub/GitLab test runners in URLSession.init
+      # on Linux and failed to link zstd (undefined ZSTD_*) on Windows. Stay on
+      # the native engine these lanes used under 6.3.
       - name: Build (Linux)
-        run: swift build --build-tests -v
+        run: swift build --build-system native --build-tests -v
       - name: Test (Linux)
-        run: swift test -v --skip-build --no-parallel
+        run: swift test --build-system native -v --skip-build --no-parallel
       - name: Smoke-test standalone argv handling (Linux)
         # The standalone binaries read argv through `Shell.arguments`
         # ($@ semantics); the unit suites never exercise that seam. A
@@ -175,13 +192,13 @@ jobs:
         # closed, a shape ShellKit's stdin plumbing should tolerate
         # but that is its own (tracked) concern, not this smoke's.
         run: |
-          swift build --product gh
+          swift build --build-system native --product gh
           .build/debug/gh --version < /dev/null
       - name: Test engine traits FTS5 + SQLiteVec (Linux)
         # One rebuild with both engine traits: validates FTS5 full-text search
         # and the sqlite-vec amalgamation compile + KNN on Linux. The default
         # run above covers the off-state.
-        run: swift test -v --traits FTS5,SQLiteVec --filter fullTextSearchFTS5 --filter semanticSearchSQLiteVec --filter vec0BlobBind
+        run: swift test --build-system native -v --traits FTS5,SQLiteVec --filter fullTextSearchFTS5 --filter semanticSearchSQLiteVec --filter vec0BlobBind
 
   build-windows:
     # Full Windows build. The libgit2 fork
@@ -201,9 +218,13 @@ jobs:
       - name: Setup Swift
         uses: SwiftyLab/setup-swift@latest
         with:
-          swift-version: "6.3.1"
+          swift-version: "6.4.2"
       - name: Verify Swift version
-        run: swift --version
+        shell: bash
+        run: |
+          swift --version
+          swift --version 2>&1 | grep -qE "Swift version 6\.4" \
+            || { echo "::error::Expected Swift 6.4"; exit 1; }
       - name: Install C dependencies (vcpkg)
         # vcpkg is preinstalled on windows-latest at C:\vcpkg.
         # x64-windows-static-md gives us .lib files linked against
@@ -257,13 +278,13 @@ jobs:
       - name: Build (Windows)
         shell: pwsh
         run: |
-          swift build --build-tests -v `
+          swift build --build-system native --build-tests -v `
             -Xcc "-I$env:VCPKG_BASE\include" `
             -Xlinker "/LIBPATH:$env:VCPKG_BASE\lib"
       - name: Test (Windows)
         shell: pwsh
         run: |
-          swift test -v --skip-build --no-parallel `
+          swift test --build-system native -v --skip-build --no-parallel `
             -Xcc "-I$env:VCPKG_BASE\include" `
             -Xlinker "/LIBPATH:$env:VCPKG_BASE\lib"
       - name: Test engine traits FTS5 + SQLiteVec (Windows)
@@ -272,7 +293,7 @@ jobs:
         # both on-state proofs; the default run above covers the off-state.
         shell: pwsh
         run: |
-          swift test -v --traits FTS5,SQLiteVec --filter fullTextSearchFTS5 --filter semanticSearchSQLiteVec --filter vec0BlobBind `
+          swift test --build-system native -v --traits FTS5,SQLiteVec --filter fullTextSearchFTS5 --filter semanticSearchSQLiteVec --filter vec0BlobBind `
             -Xcc "-I$env:VCPKG_BASE\include" `
             -Xlinker "/LIBPATH:$env:VCPKG_BASE\lib"
 
