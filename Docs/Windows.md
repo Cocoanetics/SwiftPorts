@@ -1,6 +1,6 @@
 # Windows support
 
-SwiftPorts compiles a subset of its targets on Windows (Swift 6.3.1, MSVC
+SwiftPorts compiles a subset of its targets on Windows (Swift 6.4.2, MSVC
 toolchain via [SwiftyLab/setup-swift](https://github.com/SwiftyLab/setup-swift)).
 The CI matrix's `build-windows` job reflects exactly what works today.
 
