@@ -101,6 +101,7 @@ struct GitConfigFileTests {
         }
     }
 
+    #if os(macOS) || os(Linux)
     @Test("the system git says the same of every case",
           .enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/git")))
     func systemGitAgrees() throws {
@@ -133,6 +134,7 @@ struct GitConfigFileTests {
             }
         }
     }
+    #endif
 
     /// An unset of `key` (of its entry with `value`, when given) in `file`,
     /// and what git leaves of the file.

@@ -38,14 +38,16 @@ extension GitClient {
         return !path.isEmpty && FileManager.default.fileExists(atPath: location(of: path))
     }
 
-    /// git's lock failure for a config file it can't lock: its directory
-    /// isn't there (or a part of its path is no directory), isn't writable
-    /// (the lock is a file next to it), or the lock is already held.
-    /// `named` is the file as git names it, when that isn't `path`.
+    /// git's lock failure for a config file it can't lock, told before
+    /// libgit2 writes: its directory isn't there (or a part of its path is
+    /// no directory), isn't writable (the lock is a file next to it, by
+    /// the file a symlink names), or the lock is already held. `named` is
+    /// the file as git names it, when that isn't `path`.
     func requireDirectory(of path: String, named: String? = nil) throws {
         guard !path.isEmpty else { return }
         let named = named ?? path
-        let directory = URL(fileURLWithPath: location(of: path)).deletingLastPathComponent().path
+        let target = ConfigFileLock.resolvedTarget(of: location(of: path))
+        let directory = URL(fileURLWithPath: target).deletingLastPathComponent().path
         var isDirectory: ObjCBool = false
         let exists = FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory)
             && isDirectory.boolValue
@@ -56,7 +58,7 @@ extension GitClient {
                     + (exists ? "Permission denied" : Self.unreachableReason(directory)))
         }
         // Another process holds the lock.
-        if FileManager.default.fileExists(atPath: location(of: path) + ".lock") {
+        if FileManager.default.fileExists(atPath: target + ".lock") {
             throw Libgit2Error(
                 code: GIT_EEXISTS.rawValue, klass: Int32(GIT_ERROR_CONFIG.rawValue),
                 message: "could not lock config file \(named): File exists")

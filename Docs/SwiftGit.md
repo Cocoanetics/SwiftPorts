@@ -286,8 +286,11 @@ before any config is read; a key git can't parse is its `error: key does not
 contain a section: …` (status 1 for a get, 2 for an unset) or `error: invalid
 key: …` (1). An unset, with or without a pattern, rewrites the file as git
 does (`GitConfigFile`): the entry's line goes with the white space before it,
-and a section left empty goes too unless a comment is next to it; the file's
-mode is kept, and the repository's own file is named `.git/config`.
+and a section left empty goes too unless a comment is next to it. The file is
+locked as git locks it (`ConfigFileLock`): `<file>.lock` made exclusively by
+the file a symlink points at, written, given the file's mode and renamed over
+it; a lock another process holds is `could not lock config file <file>: File
+exists` (status 255). The repository's own file is named `.git/config`.
 
 Config files are read with git's own syntax rules, where libgit2's parser is
 more lenient (an unterminated quote, a key starting with a digit or `-`, an

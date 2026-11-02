@@ -234,6 +234,33 @@ struct GitCommandConfigPatternTests: ConfigTestHelpers {
         #expect(try String(contentsOf: config, encoding: .utf8) == "")
     }
 
+    @Test("a config file that is a symlink is edited where it points, the link kept, and locked there")
+    func symlinkedConfig() async throws {
+        let fixture = try makeRoot()
+        let (root, home, work) = (fixture.root, fixture.home, fixture.work)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let real = home.appendingPathComponent("real.cfg")
+        try "[a]\n\tb = hello\n\tc = x\n".write(to: real, atomically: true, encoding: .utf8)
+        let link = home.appendingPathComponent(".gitconfig")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "real.cfg")
+        func run(_ args: [String]) async throws -> ConfigOutput {
+            try await git(["config", "--global"] + args, root: root, home: home, work: work)
+        }
+
+        // A lock held by the target is the link's too.
+        let lock = home.appendingPathComponent("real.cfg.lock")
+        try "".write(to: lock, atomically: true, encoding: .utf8)
+        let held = try await run(["--unset", "a.b"])
+        #expect(held.stderr == "error: could not lock config file \(link.path): File exists\n" && held.status == 255)
+        try FileManager.default.removeItem(at: lock)
+
+        #expect(try await run(["--unset", "a.b"]).status == 0)
+        #expect(try String(contentsOf: real, encoding: .utf8) == "[a]\n\tc = x\n")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == "real.cfg")
+        #expect(!FileManager.default.fileExists(atPath: lock.path))
+        #expect(!FileManager.default.fileExists(atPath: link.path + ".lock"))
+    }
+
     @Test("a config path under a regular file is `Not a directory`, to lock and to read")
     func notADirectory() async throws {
         let fixture = try makeRoot()
