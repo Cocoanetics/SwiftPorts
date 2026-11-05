@@ -375,7 +375,7 @@ private struct RequiredPayload: Decodable, Sendable {
     let requiredValue: String
 }
 
-private func requestBodyData(_ request: URLRequest) -> Data {
+func requestBodyData(_ request: URLRequest) -> Data {
     if let body = request.httpBody { return body }
     guard let stream = request.httpBodyStream else { return Data() }
 

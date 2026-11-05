@@ -23,37 +23,26 @@ struct CiRun: AsyncParsableCommand {
             help: "Pipeline variable in KEY=VALUE form; repeatable.")
     var variables: [String] = []
 
-    private struct CreateRequest: Encodable {
-        struct Variable: Encodable {
-            let key: String
-            let value: String
-        }
-        let ref: String
-        let variables: [Variable]?
-    }
-
     func run() async throws {
         let target = try await CommandContext.resolveRepo(flag: repo)
         let client = try await CommandContext.apiClient(host: target.host)
         let gitClient: any ForgeKit.GitClient = CommandContext.gitClient()
         let ref = try await CiSupport.pickRef(branch: branch, gitClient: gitClient)
 
-        let parsedVars: [CreateRequest.Variable] = try variables.map { raw in
+        let parsedVars: [PipelineCreateRequest.Variable] = try variables.map { raw in
             guard let eq = raw.firstIndex(of: "=") else {
                 throw CiRunError.malformedVariable(raw)
             }
-            return CreateRequest.Variable(
+            return PipelineCreateRequest.Variable(
                 key: String(raw[..<eq]),
-                value: String(raw[raw.index(after: eq)...]))
+                value: String(raw[raw.index(after: eq)...]),
+                variableType: .envVar)
         }
 
-        let request = CreateRequest(
+        let pipeline = try await client.createPipeline(
+            project: target,
             ref: ref,
-            variables: parsedVars.isEmpty ? nil : parsedVars)
-        let pipeline: Pipeline = try await client.send(
-            method: .post,
-            path: "projects/\(target.encodedPath)/pipeline",
-            body: request)
+            variables: parsedVars)
         Shell.print("Triggered #\(pipeline.id) on \(ref): \(CiSupport.renderStatus(pipeline.status))")
         Shell.print(pipeline.webUrl.absoluteString)
     }
