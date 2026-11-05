@@ -35,7 +35,8 @@ struct CiRun: AsyncParsableCommand {
             }
             return PipelineCreateRequest.Variable(
                 key: String(raw[..<eq]),
-                value: String(raw[raw.index(after: eq)...]))
+                value: String(raw[raw.index(after: eq)...]),
+                variableType: .envVar)
         }
 
         let pipeline = try await client.createPipeline(
