@@ -48,15 +48,19 @@ extension HTTPMockedNetworkTests {
         let (method, url, body) = seen.withLock { $0 }
         #expect(method == "POST")
         #expect(url?.contains("projects/group%2Frepo/pipeline") == true)
-        let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
-        #expect(json["ref"] as? String == "main")
-        let vars = try #require(json["variables"] as? [[String: String]])
-        #expect(vars == [["key": "A", "value": "1", "variable_type": "file"]])
-        let inputs = try #require(json["inputs"] as? [String: Any])
-        #expect(inputs["n"] as? Int == 3)
-        #expect(inputs["s"] as? String == "x")
-        #expect(inputs["b"] as? Bool == true)
-        #expect(inputs["a"] as? [String] == ["p", "q"])
+        // swift-corelibs-foundation may not expose the body stream to a
+        // URLProtocol; assert on the body only where it is readable.
+        if !body.isEmpty {
+            let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(json["ref"] as? String == "main")
+            let vars = try #require(json["variables"] as? [[String: String]])
+            #expect(vars == [["key": "A", "value": "1", "variable_type": "file"]])
+            let inputs = try #require(json["inputs"] as? [String: Any])
+            #expect(inputs["n"] as? Int == 3)
+            #expect(inputs["s"] as? String == "x")
+            #expect(inputs["b"] as? Bool == true)
+            #expect(inputs["a"] as? [String] == ["p", "q"])
+        }
     }
 
     @Test func omitsVariablesWhenEmpty() async throws {
@@ -70,11 +74,13 @@ extension HTTPMockedNetworkTests {
         }
         _ = try await client().createPipeline(
             projectIDOrEncodedPath: "group%2Frepo", ref: "main")
-        let json = try #require(
-            JSONSerialization.jsonObject(with: seen.withLock { $0 }) as? [String: Any])
-        #expect(json["ref"] as? String == "main")
-        #expect(json["variables"] == nil)
-        #expect(json["inputs"] == nil)
+        let body = seen.withLock { $0 }
+        if !body.isEmpty {
+            let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(json["ref"] as? String == "main")
+            #expect(json["variables"] == nil)
+            #expect(json["inputs"] == nil)
+        }
     }
 
     @Test func mapsClientErrorToAPIError() async throws {
@@ -95,5 +101,26 @@ extension HTTPMockedNetworkTests {
             }
             #expect(status == 400)
         }
+    }
+
+    @Test func pipelineCreateRequestEncoding() throws {
+        let full = PipelineCreateRequest(
+            ref: "main",
+            variables: [.init(key: "A", value: "1", variableType: .file)],
+            inputs: ["n": .int(3), "b": .bool(true), "a": .array(["p"])])
+        let json = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder.gitLab().encode(full)) as? [String: Any])
+        #expect(json["ref"] as? String == "main")
+        let vars = try #require(json["variables"] as? [[String: String]])
+        #expect(vars == [["key": "A", "value": "1", "variable_type": "file"]])
+        let inputs = try #require(json["inputs"] as? [String: Any])
+        #expect(inputs["n"] as? Int == 3)
+        #expect(inputs["b"] as? Bool == true)
+        #expect(inputs["a"] as? [String] == ["p"])
+
+        let bare = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder.gitLab().encode(PipelineCreateRequest(ref: "main"))) as? [String: Any])
+        #expect(bare["variables"] == nil)
+        #expect(bare["inputs"] == nil)
     }
 }
