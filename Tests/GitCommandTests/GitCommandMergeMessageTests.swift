@@ -81,7 +81,8 @@ struct GitCommandMergeMessageTests {
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
         try systemGit(["init", "-q", "-b", "main"], in: repo)
         for (key, value) in [("user.name", "Test"), ("user.email", "test@example.com"),
-                             ("commit.gpgsign", "false"), ("tag.gpgsign", "false")] {
+                             ("commit.gpgsign", "false"), ("tag.gpgsign", "false"),
+                             ("maintenance.auto", "false")] {
             try systemGit(["config", key, value], in: repo)
         }
         try commit("base", text: "base\n", in: repo)
