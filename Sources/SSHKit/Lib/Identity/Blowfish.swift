@@ -7,25 +7,27 @@
 /// `piS`/`piP` are the S-box/P-box tables `Blowfish_initstate`'s `initstate` constant seeds with —
 /// the fractional digits of pi, copied verbatim (same literal order) from `blowfish.c`.
 struct BlowfishContext {
-    private var S: [[UInt32]]
+    private var S: [UInt32]
     private var P: [UInt32]
 
     init() {
-        self.S = Self.piS
+        self.S = Self.piSFlat
         self.P = Self.piP
     }
 
     /// `F(s, x)` from `blowfish.c`'s Feistel-round macro.
+    @inline(__always)
     private func f(_ x: UInt32) -> UInt32 {
-        let s0 = self.S[0][Int((x >> 24) & 0xff)]
-        let s1 = self.S[1][Int((x >> 16) & 0xff)]
-        let s2 = self.S[2][Int((x >> 8) & 0xff)]
-        let s3 = self.S[3][Int(x & 0xff)]
+        let s0 = self.S[Int((x >> 24) & 0xff)]
+        let s1 = self.S[256 + Int((x >> 16) & 0xff)]
+        let s2 = self.S[512 + Int((x >> 8) & 0xff)]
+        let s3 = self.S[768 + Int(x & 0xff)]
         return ((s0 &+ s1) ^ s2) &+ s3
     }
 
     /// `Blowfish_encipher` — 16 Feistel rounds unrolled in the same order as the `BLFRND` macro
     /// expansion, to keep a 1:1 line correspondence with the reference.
+    @inline(__always)
     mutating func encipher(_ xl: inout UInt32, _ xr: inout UInt32) {
         var Xl = xl
         var Xr = xr
@@ -66,6 +68,7 @@ struct BlowfishContext {
     /// `Blowfish_stream2word` — cycles through `data` 4 bytes at a time, wrapping back to the
     /// start, advancing the shared cursor `current` by reference exactly like the C `uint16_t *`
     /// out-parameter.
+    @inline(__always)
     static func streamToWord(_ data: [UInt8], current: inout Int) -> UInt32 {
         var temp: UInt32 = 0
         var j = current
@@ -100,8 +103,8 @@ struct BlowfishContext {
             var k = 0
             while k < 256 {
                 self.encipher(&datal, &datar)
-                self.S[box][k] = datal
-                self.S[box][k + 1] = datar
+                self.S[box * 256 + k] = datal
+                self.S[box * 256 + k + 1] = datar
                 k += 2
             }
         }
@@ -134,8 +137,8 @@ struct BlowfishContext {
                 datal ^= Self.streamToWord(data, current: &j)
                 datar ^= Self.streamToWord(data, current: &j)
                 self.encipher(&datal, &datar)
-                self.S[box][k] = datal
-                self.S[box][k + 1] = datar
+                self.S[box * 256 + k] = datal
+                self.S[box * 256 + k + 1] = datar
                 k += 2
             }
         }
@@ -143,7 +146,9 @@ struct BlowfishContext {
 
     // MARK: - Pi tables (`Blowfish_initstate`'s `initstate` constant, `blowfish.c`)
 
-    static let piS: [[UInt32]] = [
+    private static let piSFlat: [UInt32] = Self.piS.flatMap { $0 }
+
+    private static let piS: [[UInt32]] = [
         [
             0xd1310ba6, 0x98dfb5ac, 0x2ffd72db, 0xd01adfb7,
             0xb8e1afed, 0x6a267e96, 0xba7c9045, 0xf12c7f99,
