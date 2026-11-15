@@ -15,7 +15,9 @@ struct GitCommandMergeMessageTests {
         let description: String
     }
 
-    private func run(_ executable: String, _ args: [String], in dir: URL) throws -> (Data, Int32) {
+    private func run(
+        _ executable: String, _ args: [String], in dir: URL, allowFailure: Bool = false
+    ) throws -> (Data, Int32) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = [executable] + args
@@ -30,7 +32,7 @@ struct GitCommandMergeMessageTests {
         let data = out.fileHandleForReading.readDataToEndOfFile()
         let diagnostic = err.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        guard process.terminationStatus <= 1 else {
+        guard allowFailure || process.terminationStatus <= 1 else {
             throw Failure(description: "\(executable) \(args): \(String(decoding: diagnostic, as: UTF8.self))")
         }
         return (data, process.terminationStatus)
@@ -167,6 +169,27 @@ struct GitCommandMergeMessageTests {
             defer { try? FileManager.default.removeItem(at: dir) }
             let repo = try repository(in: dir)
             try await compare(["merge", "--no-ff"] + (text.map { ["-m", $0] } ?? []) + refs, in: repo)
+        }
+    }
+
+    @Test("octopus ref-update failure preserves pre-cleanup MERGE_MSG")
+    func octopusHeadNotUpdatedMessage() async throws {
+        for text in [String?.none, "  x  "] {
+            let dir = try root()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let repo = try repository(in: dir)
+            let oracle = try twin(of: repo)
+            for target in [repo, oracle] {
+                try Data().write(to: target.appendingPathComponent(".git/refs/heads/main.lock"))
+            }
+            let args = ["merge", "--no-ff"] + (text.map { ["-m", $0] } ?? []) + ["side", "other"]
+            let (_, expectedStatus) = try run("git", args, in: oracle, allowFailure: true)
+            let status = try await git(args, in: repo)
+            #expect(status == expectedStatus)
+            try #require(status == 128)
+            let actual = try Data(contentsOf: repo.appendingPathComponent(".git/MERGE_MSG"))
+            let expected = try Data(contentsOf: oracle.appendingPathComponent(".git/MERGE_MSG"))
+            #expect(actual == expected)
         }
     }
 

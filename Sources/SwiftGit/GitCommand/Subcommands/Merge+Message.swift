@@ -1,3 +1,4 @@
+import Foundation
 import SwiftGit
 
 extension Merge {
@@ -16,5 +17,12 @@ extension Merge {
             try await Pull.writeMergeMessage(message ?? "", conflicts: paths, client: client)
         }
         return outcome
+    }
+
+    /// Git leaves the uncleaned message staged when updating HEAD fails.
+    static func restoreMergeMessage(_ message: String, client: SwiftGit.GitClient) async throws {
+        guard let gitDir = try await client.gitDir() else { return }
+        let url = URL(fileURLWithPath: gitDir).appendingPathComponent("MERGE_MSG")
+        try Data(message.utf8).write(to: url)
     }
 }

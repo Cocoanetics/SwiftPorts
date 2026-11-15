@@ -172,8 +172,13 @@ struct Merge: AsyncParsableCommand {
         let result = try await client.octopusMerge(
             heads: heads.heads, noFastForward: mode == .never,
             message: SwiftGit.GitClient.stripspace(message), sign: sign)
-        if case .conflicts(let paths) = result.outcome {
+        switch result.outcome {
+        case .conflicts(let paths):
             try await Pull.writeMergeMessage(message, conflicts: paths, client: client)
+        case .headNotUpdated, .headMissing, .headMoved:
+            try await restoreMergeMessage(message, client: client)
+        default:
+            break
         }
         try printOctopus(result, quiet: quiet)
     }
