@@ -143,7 +143,10 @@ jobs:
     # Use the Swift 6.4 toolchain; the package's minimum tools-version
     # remains 6.2, but CI tracks the newer compiler.
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25, not 15: SSHKit's ssh-keygen port (#169) pushed the Linux
+    # build+test lane to ~13 min, and the job was being cancelled at
+    # the old limit while still compiling test bundles.
+    timeout-minutes: 25
     container:
       image: swift:6.4.2-jammy
     steps:

@@ -2,7 +2,7 @@
 /// case corresponds to one of `ssh(1)`'s `fatal()` calls: `load_identity_file` in `sshconnect2.c`
 /// just returns `NULL` for both and moves on — `IdentityLoader.loadAvailable` mirrors that by
 /// catching this error and skipping the identity rather than aborting.
-enum SSHIdentityDecryptionError: Error {
+public enum SSHIdentityDecryptionError: Error {
     /// The passphrase prompt returned nothing, matching `load_identity_file`'s own "no passphrase
     /// given, try next key" when the user enters an empty passphrase.
     case declined(path: String)

@@ -30,7 +30,8 @@ let androidDroppedTargets: Set<String> = [
     "ZipCommand", "UnzipCommand", "TarCommand", "GzipCommand",
     "Bzip2Command", "XzCommand", "ZstdCommand", "Lz4Command",
     "JqCommand", "GlamCommand", "GhCommand", "GlabCommand",
-    "GitCommand", "RgCommand", "FdCommand", "Sqlite3Command", "SSHCommand",
+    "GitCommand", "RgCommand", "FdCommand", "Sqlite3Command", "SSHCommand", "SSHKeygenCommand",
+    "ssh-keygen", "SSHKeygenTests",
     "SwiftPortsCommands",
     // executables
     "zip", "unzip", "tar", "gzip", "gunzip", "zcat", "bzip2", "bunzip2",
@@ -340,6 +341,8 @@ let package = Package(
         // non-interactive ssh(1) command on mainline apple/swift-nio-ssh.
         .library(name: "SSHKit", targets: ["SSHKit"]),
         .library(name: "SSHCommand", targets: ["SSHCommand"]),
+        .library(name: "SSHKeygenCommand", targets: ["SSHKeygenCommand"]),
+        .executable(name: "ssh-keygen", targets: ["ssh-keygen"]),
         .executable(name: "ssh", targets: ["ssh"]),
 
         // GitKitSSH — in-process SSH transport for GitKit over SSHKit
@@ -1147,7 +1150,7 @@ let package = Package(
             name: "GitCommandTests",
             dependencies: [
                 .target(name: "GitCommand", condition: .when(platforms: commandTestPlatforms)),
-                "SwiftGit", "ForgeKit",
+                "SwiftGit", "ForgeKit", "SwiftPortsCommands", "SSHKit",
                 // `Shell.parsableCommand`, to run git the way a host shell does.
                 .product(name: "ShellCommandKit", package: "ShellKit"),
             ]
@@ -1279,6 +1282,22 @@ let package = Package(
             ],
             path: "Sources/SSHKit/SSHCommand"
         ),
+        .target(
+            name: "SSHKeygenCommand",
+            dependencies: [
+                "SSHKit",
+                .product(name: "ShellKit", package: "ShellKit"),
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            path: "Sources/SSHKit/SSHKeygenCommand"
+        ),
+        .executableTarget(
+            name: "ssh-keygen", dependencies: ["SSHKeygenCommand"], path: "Sources/SSHKit/ssh-keygen"
+        ),
+        .testTarget(
+            name: "SSHKeygenTests",
+            dependencies: ["SSHKeygenCommand", "SSHKit", .product(name: "ShellKit", package: "ShellKit")]
+        ),
         .executableTarget(
             name: "ssh",
             dependencies: ["SSHCommand"],
@@ -1384,9 +1403,10 @@ let package = Package(
                 "GzipCommand", "Bzip2Command", "XzCommand",
                 "ZstdCommand", "Lz4Command",
                 "SSHCommand",
+                "SSHKeygenCommand",
             ],
             path: "Sources/SwiftPortsCommands"
-        ),
+        )
     // Host-gated system-library shims (issue #80) are passed via `plus:`
     // (not concatenated onto this literal — see `androidFiltered` above).
     // They're empty off-host, so they add nothing on macOS/iOS and are never

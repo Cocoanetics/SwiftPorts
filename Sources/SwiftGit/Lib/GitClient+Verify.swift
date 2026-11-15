@@ -226,7 +226,7 @@ extension GitClient {
     /// a merge message gets no `gpg verification failed.` line.
     private func runVerifier(_ program: String, payload: Data, signature: Data) async throws -> VerifierRun {
         let unlaunched = VerifierRun(failed: true, status: "", output: "")
-        guard let file = writeSignatureFile(signature) else {
+        guard let file = await writeSignatureFile(signature) else {
             return VerifierRun(failed: true, status: "", output: nil)
         }
         defer { try? FileManager.default.removeItem(at: file) }
@@ -239,10 +239,13 @@ extension GitClient {
     /// The detached signature in a temporary file, as git writes it for
     /// the program to read; `nil` (and said) when it can't be written,
     /// where git gives up before any program runs.
-    func writeSignatureFile(_ signature: Data) -> URL? {
-        let file = FileManager.default.temporaryDirectory
+    func writeSignatureFile(_ signature: Data) async -> URL? {
+        let file = Shell.temporaryDirectory
             .appendingPathComponent(".git_vtag_tmp" + UUID().uuidString.prefix(6))
         do {
+            try await Shell.authorize(file)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
             try signature.write(to: file)
             return file
         } catch {
@@ -265,6 +268,7 @@ extension GitClient {
     func launch(_ program: String, _ arguments: [String], input: Data) async -> ProgramRun? {
         let shell = Shell.current
         let executable: Executable
+        var registeredCommand = false
         #if os(Windows)
         let separators: Set<Character> = ["/", "\\"]
         let pathSeparator: Character = ";"
@@ -284,6 +288,9 @@ extension GitClient {
                 return nil
             }
             executable = .path(url.path)
+        } else if shell.commands[program] != nil {
+            executable = .name(program)
+            registeredCommand = true
         } else {
             var reason = "No such file or directory"
             var found: String?
@@ -324,7 +331,9 @@ extension GitClient {
                 executable,
                 arguments: Arguments(arguments),
                 environment: shell.environment,
-                workingDirectory: workingDirectory.path,
+                workingDirectory: registeredCommand
+                    ? shell.displayPath(for: workingDirectory)
+                    : workingDirectory.path,
                 input: .data(input),
                 output: out.sink, error: err.sink)
             // Hosts that stream (SwiftBash) fill the sinks, the default

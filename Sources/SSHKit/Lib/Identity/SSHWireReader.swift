@@ -13,6 +13,8 @@ struct SSHWireReader {
         self.bytes = bytes
     }
 
+    var isAtEnd: Bool { offset == bytes.count }
+
     mutating func readBytes(_ count: Int) throws -> [UInt8] {
         guard count >= 0, self.offset + count <= self.bytes.count else {
             throw SSHWireReaderError.truncated
@@ -45,6 +47,7 @@ struct SSHWireReader {
     /// non-negative EC private scalars, so a leading `0x00` is simply dropped.
     mutating func readMPIntMagnitude() throws -> [UInt8] {
         var value = try self.readString()
+        guard value.first.map({ $0 & 0x80 == 0 }) ?? true else { throw SSHKeygenError("invalid format") }
         if value.first == 0 {
             value.removeFirst()
         }

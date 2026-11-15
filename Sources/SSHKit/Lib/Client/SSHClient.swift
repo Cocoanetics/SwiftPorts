@@ -89,7 +89,7 @@ public final class SSHClient: @unchecked Sendable {
         port: Int,
         username: String,
         identityFiles: [String],
-        passphrasePrompt: @escaping IdentityLoader.PassphrasePrompt = SSHPassphrasePrompt.readFromTTY,
+        passphrasePrompt: @escaping IdentityLoader.PassphrasePrompt = SSHPassphrasePrompt.readFromTTY(path:),
         knownHosts: KnownHostsStore,
         userKnownHostsFilePath: String? = nil,
         strictHostKeyChecking: SSHStrictHostKeyChecking = .ask

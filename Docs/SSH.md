@@ -1,5 +1,62 @@
 # SSH
 
+## ssh-keygen (issue #167)
+
+`SSHKeygenCommand` and the `ssh-keygen` executable implement Ed25519 and
+ECDSA (P-256/384/521) key generation, `-y` public-key extraction, `-l`
+SHA256 fingerprints, and `-Y sign`, `verify`, `find-principals` and
+`check-novalidate`. `SwiftPortsCommands.argumentParserCommands` registers
+the command for embedded shells. Key and message paths, allowed signers,
+revocations and signature files pass through ShellKit resolution and
+authorization. SwiftGit recognizes registered verifier commands before
+probing host PATH, and passes virtual signature paths and working directories
+to the launcher's embedded command dispatcher.
+
+The fidelity reference remains **openssh-portable@73c1399**. Sources read
+for this implementation:
+
+- [`ssh-keygen.c`](https://github.com/openssh/openssh-portable/blob/73c1399/ssh-keygen.c):
+  `sign_one`, `sig_sign`, `sig_verify`, `sig_find_principals`,
+  `sig_process_opts`, `load_sign_key`, `confirm_overwrite` and key generation
+  in `main`. Signing chatter goes to stderr, key-generation chatter to
+  stdout, and overwrite prompts to stdout. Verification results, including
+  `Could not verify signature.`, go to stdout. Missing principals are
+  diagnosed on stderr. Missing required arguments exit 1; failed `-Y`
+  operations return -1 from main (255).
+- [`sshsig.c`](https://github.com/openssh/openssh-portable/blob/73c1399/sshsig.c)
+  and [`PROTOCOL.sshsig`](https://github.com/openssh/openssh-portable/blob/73c1399/PROTOCOL.sshsig):
+  SHA512 signing, SHA256/SHA512 verification, version <= 1, exact namespace
+  matching, ignored reserved bytes, SSH-encoded signatures and 70-column
+  armor (`sshbuf_dtob64`). The first eligible allowed-signers line wins;
+  `find-principals` splits that line's principal list into separate lines.
+  Namespace and principal patterns support `*`, `?` and negation. Validity
+  bounds are inclusive (`time < valid-after` and `time > valid-before`
+  reject). Times accept date, minute or second precision, local or `Z` UTC.
+- [`sshkey.c`](https://github.com/openssh/openssh-portable/blob/73c1399/sshkey.c)
+  and [`PROTOCOL.key`](https://github.com/openssh/openssh-portable/blob/73c1399/PROTOCOL.key):
+  `openssh-key-v1`, equal random checkints, public and private key material,
+  comment and sequential padding; bcrypt with 32 rounds and aes256-ctr for
+  encrypted output. Private files have mode 0600, public files 0644.
+  SHA256 fingerprints and the 17-by-9 randomart walk match the system tool.
+
+Scope is deliberately limited to the issue's key-file operations. RSA,
+certificates, FIDO, agent signing (`-U`), additional keygen modes and signing
+`-O` options are unsupported. Verification accepts `-O verify-time=…`.
+`cert-authority` lines are diagnosed and cannot authorize a signature.
+Plain public-key revocations are supported; binary KRLs fail closed with
+an unsupported diagnostic. On Apple platforms CryptoKit may randomize
+Ed25519 signatures, so tests assert cross-verification there and deterministic
+byte equality on the BoringSSL implementation elsewhere.
+
+Portable fixtures `id_*_test.sig` were produced from the existing fixture
+keys with system OpenSSH, namespace `git`, and payload
+`SwiftPorts SSHSIG fixture\n`. Tests cover all four curves, encrypted and
+unencrypted generated-key loading by OpenSSH and IdentityLoader, randomart,
+both signature directions, a system `git commit -S` signature, validity
+boundaries and revocations. The embedded Git regression uses an empty PATH,
+a mapped sandbox, registered commands, and an external-process deny launcher.
+It checks an allowed signer, unknown signer, modified tag and revoked key.
+
 In-process, OpenSSH-compatible SSH client on mainline
 [apple/swift-nio-ssh](https://github.com/apple/swift-nio-ssh). Issue
 [#111](https://github.com/Cocoanetics/SwiftPorts/issues/111)'s Phase 1:
