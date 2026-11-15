@@ -79,6 +79,9 @@ struct SSHSignatureTests {
         #expect(allowed.principals(for: key, principal: "mallory@example.com", at: start).isEmpty)
         #expect(allowed.principals(for: key, namespace: "other", at: start).isEmpty)
         #expect(allowed.principals(for: key, at: start) == ["*@example.com", "!mallory@example.com"])
+        let commented = AllowedSigners(
+            "alice " + key.openSSHLine(comment: #"Alice's "work key"#), path: "allowed")
+        #expect(commented.principals(for: key) == ["alice"])
         let ca = AllowedSigners("alice cert-authority " + key.openSSHLine(), path: "allowed")
         var diagnostics: [String] = []
         #expect(ca.principals(for: key, diagnostic: { diagnostics.append($0) }).isEmpty)

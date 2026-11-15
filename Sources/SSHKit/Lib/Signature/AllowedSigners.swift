@@ -67,9 +67,11 @@ public struct AllowedSigners: Sendable {
     }
 
     private static func parse(_ line: String, line number: Int) throws -> Entry {
-        let fields = try split(line, separator: { $0.isWhitespace })
-        guard fields.count >= 3 else { throw SSHKeygenError("invalid line") }
-        let hasOptions = !fields[1].hasPrefix("ssh-") && !fields[1].hasPrefix("ecdsa-")
+        let prefix = try split(line, separator: { $0.isWhitespace }, maximumFields: 2)
+        guard prefix.count == 2 else { throw SSHKeygenError("invalid line") }
+        let hasOptions = !prefix[1].hasPrefix("ssh-") && !prefix[1].hasPrefix("ecdsa-")
+        let fields = try split(
+            line, separator: { $0.isWhitespace }, maximumFields: hasOptions ? 4 : 3)
         let keyIndex = hasOptions ? 2 : 1
         guard fields.count > keyIndex + 1 else { throw SSHKeygenError("missing key") }
         let key = try SSHPublicKey(openSSHLine: fields[keyIndex] + " " + fields[keyIndex + 1])
@@ -104,14 +106,19 @@ public struct AllowedSigners: Sendable {
 
     /// Delimit outside quotes, preserving quotes for the options pass.
     private static func split(
-        _ text: String, separator: (Character) -> Bool, omitEmpty: Bool = true
+        _ text: String, separator: (Character) -> Bool, omitEmpty: Bool = true,
+        maximumFields: Int? = nil
     ) throws -> [String] {
         var quoted = false, escaped = false
         var result: [String] = [], field = ""
         for character in text {
             if character == "\"", !escaped { quoted.toggle() }
             if separator(character), !quoted {
-                if !omitEmpty || !field.isEmpty { result.append(field); field = "" }
+                if !omitEmpty || !field.isEmpty {
+                    result.append(field)
+                    field = ""
+                    if result.count == maximumFields { return result }
+                }
             } else { field.append(character) }
             escaped = character == "\\" && !escaped
         }
