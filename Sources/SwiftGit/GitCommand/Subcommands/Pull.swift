@@ -320,7 +320,7 @@ struct Pull: AsyncParsableCommand {
         let outcome: MergeOutcome
         do {
             outcome = try await client.merge(
-                ref: head.oid, fastForward: mode, message: mergeMessage, author: nil,
+                ref: head.oid, fastForward: mode, message: mergeMessage.map(GitClient.stripspace), author: nil,
                 sign: GPGSign.mode(gpgSign))
         } catch let err as Libgit2Error
             where err.message.contains("Not possible to fast-forward") {

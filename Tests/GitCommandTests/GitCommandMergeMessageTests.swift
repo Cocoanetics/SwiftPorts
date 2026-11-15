@@ -169,8 +169,8 @@ struct GitCommandMergeMessageTests {
         }
     }
 
-    @Test("conflicted single/reduced merges preserve pre-cleanup MERGE_MSG", arguments: [
-        "side", "side side"
+    @Test("conflicted single/reduced/octopus merges preserve pre-cleanup MERGE_MSG", arguments: [
+        "side", "side side", "other side"
     ])
     func conflictMessage(refs: String) async throws {
         for text in [String?.none, "x\n\n\n", "  x  "] {
