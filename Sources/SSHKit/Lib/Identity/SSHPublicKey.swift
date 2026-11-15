@@ -42,6 +42,20 @@ public struct SSHPublicKey: Sendable, Equatable {
         guard algorithm == fields[0] else { throw SSHKeygenError("invalid format") }
     }
 
+    /// `sshkey_parse_pubkey_from_private_fileblob_type`: the public half needs no passphrase.
+    public init(openSSHPrivateKeyFile text: String) throws {
+        let data = try SSHArmor.decode(text, label: "OPENSSH PRIVATE KEY")
+        var reader = SSHWireReader(Array(data))
+        guard try reader.readBytes(15) == Array("openssh-key-v1\0".utf8) else {
+            throw SSHKeygenError("invalid format")
+        }
+        _ = try reader.readString()
+        _ = try reader.readString()
+        _ = try reader.readString()
+        guard try reader.readUInt32() == 1 else { throw SSHKeygenError("invalid format") }
+        try self.init(blob: Data(reader.readString()))
+    }
+
     public func openSSHLine(comment: String = "") -> String {
         algorithm + " " + blob.base64EncodedString() + (comment.isEmpty ? "" : " " + comment)
     }

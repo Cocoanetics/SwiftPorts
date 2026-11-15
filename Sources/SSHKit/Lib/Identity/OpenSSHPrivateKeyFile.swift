@@ -32,7 +32,7 @@ enum OpenSSHPrivateKeyFile {
         guard try reader.readUInt32() == 1 else {
             throw SSHError.unsupportedKeyFormat(path: path, reason: "multi-key files are not supported")
         }
-        _ = try reader.readString()  // public key (redundant — recomputed from the private section)
+        let publicBlob = try reader.readString()
 
         // Read the "encrypted, padded list of private keys" field's length manually (rather than
         // as a wire string via `readString()`) so a trailing AEAD tag — appended after it, outside
@@ -75,6 +75,9 @@ enum OpenSSHPrivateKeyFile {
 
         let keyType = try privateReader.readUTF8String()
         var key = try Self.privateKey(ofType: keyType, from: &privateReader, path: path)
+        guard Array(key.publicKey.blob) == publicBlob else {
+            throw SSHError.unsupportedKeyFormat(path: path, reason: "public key does not match private key")
+        }
         key.comment = try privateReader.readUTF8String()
         var padding: UInt8 = 1
         while !privateReader.isAtEnd {
@@ -191,11 +194,14 @@ enum OpenSSHPrivateKeyFile {
 
             switch curveName {
             case "nistp256":
-                return SSHPrivateKey(.p256(try P256.Signing.PrivateKey(rawRepresentation: Self.leftPad(scalar, to: 32))))
+                return SSHPrivateKey(.p256(try P256.Signing.PrivateKey(
+                    rawRepresentation: Self.leftPad(scalar, to: 32))))
             case "nistp384":
-                return SSHPrivateKey(.p384(try P384.Signing.PrivateKey(rawRepresentation: Self.leftPad(scalar, to: 48))))
+                return SSHPrivateKey(.p384(try P384.Signing.PrivateKey(
+                    rawRepresentation: Self.leftPad(scalar, to: 48))))
             case "nistp521":
-                return SSHPrivateKey(.p521(try P521.Signing.PrivateKey(rawRepresentation: Self.leftPad(scalar, to: 66))))
+                return SSHPrivateKey(.p521(try P521.Signing.PrivateKey(
+                    rawRepresentation: Self.leftPad(scalar, to: 66))))
             default:
                 throw SSHError.unsupportedKeyFormat(path: path, reason: "unknown ECDSA curve \(curveName)")
             }
