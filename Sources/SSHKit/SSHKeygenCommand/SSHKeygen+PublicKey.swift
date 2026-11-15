@@ -14,15 +14,18 @@ extension SSHKeygenExecutable {
             if path.isEmpty { path = defaultPath }
         }
         let data = try await read(path)
+        if args.flags.contains("l") {
+            let lines = String(decoding: data, as: UTF8.self).split(whereSeparator: { $0.isNewline })
+            let fingerprints = lines.compactMap { fingerprint(for: String($0)) }
+            if !fingerprints.isEmpty {
+                fingerprints.forEach { stdout.write($0 + "\n") }
+                return 0
+            }
+        }
         let key: SSHPublicKey
         let comment: String
         if args.flags.contains("l"),
-           let publicKey = try? SSHPublicKey(openSSHLine: String(decoding: data, as: UTF8.self)) {
-            key = publicKey
-            let parts = String(decoding: data, as: UTF8.self).split(maxSplits: 2, whereSeparator: { $0.isWhitespace })
-            comment = parts.count > 2 ? String(parts[2]).trimmingCharacters(in: .newlines) : "no comment"
-        } else if args.flags.contains("l"),
-                  let publicKey = try? SSHPublicKey(openSSHPrivateKeyFile: String(decoding: data, as: UTF8.self)) {
+           let publicKey = try? SSHPublicKey(openSSHPrivateKeyFile: String(decoding: data, as: UTF8.self)) {
             key = publicKey
             let sibling = try? await read(path + ".pub")
             if let sibling, let parsed = try? SSHPublicKey(openSSHLine: String(decoding: sibling, as: UTF8.self)),
@@ -44,5 +47,22 @@ extension SSHKeygenExecutable {
                 + "\(comment.isEmpty ? "no comment" : comment) (\(key.shortTypeName))\n")
         } else { stdout.write(key.openSSHLine(comment: comment) + "\n") }
         return 0
+    }
+
+    private static func fingerprint(for line: String) -> String? {
+        let fields = line.split(whereSeparator: { $0.isWhitespace })
+        guard !fields.isEmpty, fields[0].first != "#" else { return nil }
+        for index in fields.indices.dropLast() {
+            guard let key = try? SSHPublicKey(openSSHLine: "\(fields[index]) \(fields[index + 1])") else {
+                continue
+            }
+            let commentIndex = fields.index(index, offsetBy: 2)
+            let comment = commentIndex < fields.endIndex
+                ? fields[commentIndex...].joined(separator: " ")
+                : "no comment"
+            return "\(key.bits) \(key.sha256Fingerprint) "
+                + "\(comment.isEmpty ? "no comment" : comment) (\(key.shortTypeName))"
+        }
+        return nil
     }
 }

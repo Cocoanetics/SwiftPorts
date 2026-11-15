@@ -95,6 +95,31 @@ struct SSHKeygenTests {
         #expect(declined.code == 0 && declined.out == "\(file).sig already exists.\nOverwrite (y/n)? ")
     }
 
+    @Test func fingerprintsEveryPublicKeyInFile() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = try SSHPrivateKey.generate(type: "ed25519")
+        let second = try SSHPrivateKey.generate(type: "ecdsa")
+        let path = root.appendingPathComponent("authorized_keys").path
+        let contents = """
+        # ignored
+        not-a-key
+        restrict \(first.publicKey.openSSHLine(comment: "first key"))
+        example.com \(second.publicKey.openSSHLine(comment: "second key"))
+
+        """
+        try contents.write(toFile: path, atomically: true, encoding: .utf8)
+
+        let result = await run(["-l", "-f", path])
+
+        #expect(result.code == 0 && result.err.isEmpty)
+        #expect(result.out == """
+        256 \(first.publicKey.sha256Fingerprint) first key (ED25519)
+        256 \(second.publicKey.sha256Fingerprint) second key (ECDSA)
+
+        """)
+    }
+
     @Test func confinedPathsAndDenials() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
