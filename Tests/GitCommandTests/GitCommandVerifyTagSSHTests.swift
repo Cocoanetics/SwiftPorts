@@ -293,7 +293,12 @@ struct GitCommandVerifyTagSSHTests {
             try systemGit(["update-ref", "refs/tags/" + tag, oid], in: root)
         }
         try systemGit(["config", "gpg.ssh.allowedSignersFile", "/workspace/allowed"], in: root)
-        let mapping = PathMapping(mounts: [.init(virtual: "/workspace", host: root.path)])
+        let elsewhere = root.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        let mapping = PathMapping(mounts: [
+            .init(virtual: "/workspace", host: root.path),
+            .init(virtual: "/elsewhere", host: elsewhere.path)
+        ])
         let commands = SwiftPortsCommands.argumentParserCommands
         let out = OutputSink(), err = OutputSink()
         let shell = Shell(
@@ -327,10 +332,11 @@ struct GitCommandVerifyTagSSHTests {
                 .write(to: allowed, atomically: true, encoding: .utf8)
             try key.publicKey.openSSHLine().write(to: root.appendingPathComponent("revoked"),
                                                  atomically: true, encoding: .utf8)
-            try await GitClient(workingDirectory: root).configSet("gpg.ssh.revocationFile", "/workspace/revoked")
-            let parsedRevoked = try GitCommand.parseAsRoot(["verify-tag", "v1"])
-            var revoked = try #require(parsedRevoked as? AsyncParsableCommand)
-            await #expect(throws: (any Error).self) { try await revoked.run() }
+            try await GitClient(workingDirectory: root).configSet("gpg.ssh.revocationFile", "revoked")
+            shell.environment.workingDirectory = "/elsewhere"
+            let revoked = try await GitClient(workingDirectory: root).verifyTag("v1")
+            #expect(!revoked.succeeded)
+            shell.environment.workingDirectory = "/workspace"
             try await GitClient(workingDirectory: root).configSet("gpg.ssh.revocationFile", "/outside/revoked")
             let parsedDenied = try GitCommand.parseAsRoot(["verify-tag", "v1"])
             var denied = try #require(parsedDenied as? AsyncParsableCommand)

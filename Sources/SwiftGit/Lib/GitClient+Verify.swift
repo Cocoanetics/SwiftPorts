@@ -268,6 +268,7 @@ extension GitClient {
     func launch(_ program: String, _ arguments: [String], input: Data) async -> ProgramRun? {
         let shell = Shell.current
         let executable: Executable
+        var registeredCommand = false
         #if os(Windows)
         let separators: Set<Character> = ["/", "\\"]
         let pathSeparator: Character = ";"
@@ -289,6 +290,7 @@ extension GitClient {
             executable = .path(url.path)
         } else if shell.commands[program] != nil {
             executable = .name(program)
+            registeredCommand = true
         } else {
             var reason = "No such file or directory"
             var found: String?
@@ -329,7 +331,9 @@ extension GitClient {
                 executable,
                 arguments: Arguments(arguments),
                 environment: shell.environment,
-                workingDirectory: shell.displayPath(for: workingDirectory),
+                workingDirectory: registeredCommand
+                    ? shell.displayPath(for: workingDirectory)
+                    : workingDirectory.path,
                 input: .data(input),
                 output: out.sink, error: err.sink)
             // Hosts that stream (SwiftBash) fill the sinks, the default

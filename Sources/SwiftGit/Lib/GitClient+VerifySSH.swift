@@ -69,7 +69,12 @@ extension GitClient {
                 var arguments = ["-Y", "verify", "-n", "git", "-f", allowedSigners, "-I", String(line),
                                  "-s", signaturePath, verifyTime]
                 if let revocationFile {
-                    let revocationURL = shell.resolve(revocationFile)
+                    let repositoryPath = shell.displayPath(for: workingDirectory)
+                    let revocationPath = URL(
+                        fileURLWithPath: revocationFile,
+                        relativeTo: URL(fileURLWithPath: repositoryPath, isDirectory: true)
+                    ).standardizedFileURL.path
+                    let revocationURL = shell.resolve(revocationPath)
                     do { try await Shell.authorize(revocationURL) }
                     catch {
                         shell.stderr.write("error: cannot read ssh signing revocation file: \(revocationFile)\n")

@@ -106,6 +106,25 @@ struct GitClientVerifyTagTests {
         #expect(String(decoding: check.payload, as: UTF8.self).hasSuffix("signed message\n"))
     }
 
+    @Test("an external verifier receives the host repository working directory")
+    func externalVerifierUsesHostWorkingDirectory() async throws {
+        let gpg = try fakeGPG(stderr: "gpg: Good signature", status: Self.good)
+        let repo = try makeRepo(program: gpg)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mapping = PathMapping(mounts: [.init(virtual: "/workspace", host: repo.path)])
+        let shell = Shell(environment: Environment(
+            variables: ["HOME": "/workspace", "GIT_CONFIG_NOSYSTEM": "1",
+                        "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"],
+            workingDirectory: "/workspace"))
+        shell.sandbox = .confined(to: mapping, home: "/workspace", temporaryDirectory: repo)
+
+        let result = try await shell.withCurrent {
+            try await SwiftGit.GitClient(workingDirectory: repo).verifyTag("signed")
+        }
+
+        #expect(result.succeeded)
+    }
+
     @Test("a bad signature, and one whose key is missing, fail with the program's words")
     func badAndUnavailable() async throws {
         let bad = try fakeGPG(stderr: "gpg: BAD signature", status: ["NEWSIG", "BADSIG ABCD1234 Tester <t@e>"], code: 1)
