@@ -118,6 +118,8 @@ struct SSHKeygenTests {
         256 \(second.publicKey.sha256Fingerprint) second key (ECDSA)
 
         """)
+        let piped = await run(["-l", "-f", "-"], input: contents)
+        #expect(piped == result)
     }
 
     @Test func confinedPathsAndDenials() async throws {
@@ -126,9 +128,11 @@ struct SSHKeygenTests {
         let mapping = PathMapping(mounts: [.init(virtual: "/workspace", host: root.path)])
         let shell = Shell(environment: Environment(workingDirectory: "/workspace"))
         shell.sandbox = .confined(to: mapping, home: "/workspace")
-        await shell.withCurrent {
+        try await shell.withCurrent {
             let generated = await run(["-qt", "ed25519", "-f/workspace/key", "-N", ""])
             #expect(generated.code == 0)
+            let key = try await IdentityLoader.loadKey(path: "/workspace/key")
+            #expect(key.comment == "user@sandbox")
             let signed = await run(["-Ysign", "-ngit", "-f/workspace/key"], input: "message")
             #expect(signed.code == 0)
             let denied = await run(["-y", "-f/outside/key"])

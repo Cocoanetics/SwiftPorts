@@ -13,7 +13,12 @@ extension SSHKeygenExecutable {
             path = await stdin.readLine() ?? ""
             if path.isEmpty { path = defaultPath }
         }
-        let data = try await read(path)
+        let data: Data
+        if path == "-" && args.flags.contains("l") {
+            data = await stdin.readAllData()
+        } else {
+            data = try await read(path)
+        }
         if args.flags.contains("l") {
             let lines = String(decoding: data, as: UTF8.self).split(whereSeparator: { $0.isNewline })
             let fingerprints = lines.compactMap { fingerprint(for: String($0)) }

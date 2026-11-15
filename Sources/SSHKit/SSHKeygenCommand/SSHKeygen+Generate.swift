@@ -44,7 +44,7 @@ extension SSHKeygenExecutable {
             guard let entered = await generationPassphrase(path, stdout: stdout, prompt: prompt) else { return 1 }
             passphrase = entered
         }
-        let comment = args["C"] ?? "\(shell.hostInfo.userName)@\(ProcessInfo.processInfo.hostName)"
+        let comment = args["C"] ?? "\(shell.hostInfo.userName)@\(shell.hostInfo.hostName)"
         let key = try SSHPrivateKey.generate(type: type, bits: bits, comment: comment)
         let privateFile = try key.openSSHFile(passphrase: passphrase)
         try await write(Data(privateFile.utf8), path: path, permissions: 0o600)
