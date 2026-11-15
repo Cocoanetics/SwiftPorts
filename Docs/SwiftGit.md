@@ -86,6 +86,8 @@ let client = GitClient(
 | `branchDelete(name:force:)` / `branchRename(...)` | `git branch -d/-D / -m/-M` |
 | `tagCreate(name:target:force:)` / `tagCreateAnnotated(...)` / `tagDelete(name:)` | `git tag` family |
 | `verifyTag(_:inTagNamespace:)` | `git verify-tag` / `git tag -v` — OpenPGP verification through `gpg.program` / `gpg.openpgp.program`, SSH verification through `gpg.ssh.program` (`ssh-keygen -Y find-principals` / `verify`) against `gpg.ssh.allowedSignersFile` and `gpg.ssh.revocationFile` (launched via the shell's `ProcessLauncher`; x509 is reported unsupported); signed tags in merge / pull messages carry the verification, commented |
+| `verifyCommit(_:)` / `commitSignatureCheck(_:)` | `git verify-commit`, `log --show-signature` and the `%G` placeholders — the commit's `gpgsig` and payload from GitKit's `commitSignatures`, checked by the verifier `verifyTag` uses |
+| `sign:` on `commitDetailed`, `merge`, `octopusMerge`, `cherryPick`, `rebase` (and their continue/skip), `tagCreateAnnotated`; `tagSignMode(sign:keyID:annotate:message:)` | `-S[<keyid>]` / `--no-gpg-sign` / `tag -s` / `-u`: `.config` is resolved here from `commit.gpgsign`, `tag.gpgsign` and `tag.forceSignAnnotated` (the same config stack: `-c`, `GIT_CONFIG_*`) into an explicit GitKit `SignMode`. Every `Repository` the client opens gets a `ShellSigner`, which does git's `sign_buffer` (`ssh-keygen -Y sign` for `gpg.format=ssh`, `<program> --status-fd=2 -bsau <key>` for openpgp / x509) through the shell's `ProcessLauncher` and sandbox; GitKit's `Process`-based fallback signer is switched off |
 | `move(from:to:)` / `remove(paths:keepWorktree:force:)` | `git mv` / `git rm` |
 | `stashSave(message:author:flags:)` / `stashApply / stashPop / stashDrop / stashList / stashClear / stashShow / stashBranch` | `git stash` family |
 | `worktreeAdd(path:branch:force:)` / `worktreeRemove(name:force:)` | `git worktree add/remove` |
@@ -136,14 +138,15 @@ git clone [--depth N] [--single-branch] [--branch <name>] / fetch [--depth N|--u
 git checkout {-b/-B/--/<ref> --}
 git switch [-c/-C] / restore [--staged] [--source]
 git add [-A] [-f] / commit [-m] [--allow-empty] [--author "Name <email>"]
+           [-S[<keyid>] / --gpg-sign[=<keyid>] / --no-gpg-sign]
 git reset {--soft, --mixed, --hard} [<commit>] [-- <paths>]
 git status {-s, --porcelain, -b}
 git diff [--cached] [--stat / --shortstat / --numstat / --raw /
           --name-only / --name-status] [-U<n>]
          [<a>..<b> / <a>...<b>] [-- <paths>]
-git log [--oneline] [--format <tmpl>] [--stat] [-p] [-<n>]
-        [<ref>] [<a>..<b>] [-- <paths>]
-git show [<commit-or-tag>]
+git log [--oneline] [--format <tmpl>] [--stat] [-p] [-<n>] [--[no-]show-signature]
+        [<ref>] [<a>..<b>] [-- <paths>]      (%G? %GS %GK %GF %GP %GT %GG)
+git show [--[no-]show-signature] [<commit-or-tag>]
 git rev-parse [--short / --abbrev-ref / --is-inside-work-tree /
                --git-dir / --show-toplevel] <specs>...
 git ls-files
@@ -155,13 +158,14 @@ git config [--global / --system / --local] [--show-origin]
            [--get <name> [<value-pattern>] / --unset <name> [<value-pattern>] /
             --list / -l / <name> [<value>]]
 git stash {push, list, apply, pop, drop, clear, show, branch}
-git tag {-a -m, -d, -l, -n, -f, -v}
+git tag {-a -m, -s, -u <keyid>, --no-sign, -d, -l, -n, -f, -v}
 git verify-tag {-v, --raw}
+git verify-commit {-v, --raw}
 git remote {-v, add, get-url, set-url, remove, rename}
 git branch {-d, -D, -m, -M, --show-current, --upstream}
-git merge {--ff, --no-ff, --ff-only}
-git rebase {<upstream>, --continue, --skip, --abort, --onto}
-git cherry-pick {<commit>, --continue, --skip, --abort}
+git merge {--ff, --no-ff, --ff-only, -S[<keyid>], --no-gpg-sign}
+git rebase {<upstream>, --continue, --skip, --abort, --onto, -S[<keyid>], --no-gpg-sign}
+git cherry-pick {<commit>, --continue, --skip, --abort, -S[<keyid>], --no-gpg-sign}
 git version
 ```
 
@@ -174,6 +178,9 @@ ShellKit command registry both call the same hook:
 - `-U<n>` → `-U <n>` (diff context lines)
 - `-<n>` → `-n <n>` (log count limit, `git log` only)
 - bare `--color` → `--color=always` (`git diff` / `git status`)
+- `-S[<keyid>]` / `--gpg-sign[=<keyid>]` / `--no-gpg-sign` → tagged
+  `--gpg-sign=+<keyid>` / `--gpg-sign=-` values, last one winning
+  (`commit`, `merge`, `cherry-pick`, `rebase`, `pull`)
 
 ArgumentParser's `customShort` doesn't natively support attached
 short-option-with-value forms for typed options.

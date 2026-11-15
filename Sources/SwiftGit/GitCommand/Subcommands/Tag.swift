@@ -86,12 +86,8 @@ struct Tag: AsyncParsableCommand {
         var i = 0
         while i < rest.count {
             let tok = rest[i]
-            if tok == "-a" || tok == "--annotate" {
-                pulledAnnotate = true; i += 1; continue
-            }
-            if tok == "-s" || tok == "--sign" || tok == "--no-sign" {
-                pulledSign = tok != "--no-sign"; i += 1; continue
-            }
+            if tok == "-a" || tok == "--annotate" { pulledAnnotate = true; i += 1; continue }
+            if ["-s", "--sign", "--no-sign"].contains(tok) { pulledSign = tok != "--no-sign"; i += 1; continue }
             if tok == "-u" || tok == "--local-user", i + 1 < rest.count {
                 pulledKey = rest[i + 1]
                 i += 2; continue
@@ -207,10 +203,11 @@ struct Tag: AsyncParsableCommand {
     /// Where git says it left the tag message, `TAG_EDITMSG` in the git
     /// directory, named from the top of the work tree as git names it.
     private static func editMessagePath(_ client: SwiftGit.GitClient) async throws -> String {
-        var directory = try await client.gitDir() ?? ".git"
-        while directory.count > 1, directory.hasSuffix("/") { directory.removeLast() }
-        let path = directory + "/TAG_EDITMSG"
-        guard let top = try await client.toplevel(), path.hasPrefix(top + "/") else { return path }
-        return String(path.dropFirst(top.count + 1))
+        func real(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().path }
+        let directory = real(try await client.gitDir() ?? ".git")
+        guard let top = try await client.toplevel().map(real), directory.hasPrefix(top + "/") else {
+            return directory + "/TAG_EDITMSG"
+        }
+        return directory.dropFirst(top.count + 1) + "/TAG_EDITMSG"
     }
 }

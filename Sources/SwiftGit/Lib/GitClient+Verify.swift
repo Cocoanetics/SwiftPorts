@@ -194,7 +194,8 @@ extension GitClient {
             }
             var check = SignatureCheck(payload: payload, status: output, output: output, succeeded: false)
             Self.parseSSHOutput(output, into: &check)
-            check.succeeded = !(run.failed || (check.result != "G" && check.result != "Y") || check.trust < minimumTrust)
+            let bad = check.result != "G" && check.result != "Y"
+            check.succeeded = !(run.failed || bad || check.trust < minimumTrust)
             return check
         }
         let run = try await runVerifier(program, payload: payload, signature: signed.signature)
@@ -221,12 +222,11 @@ extension GitClient {
     /// (`E`), with nothing else kept.
     private static func parseStatus(_ status: String, into check: inout SignatureCheck) {
         // The result each status gives, whether it is a signature's one
-        // result, and whether a key id (and then the uid) follows.
-        let statuses: [(result: Character?, prefix: String, exclusive: Bool, key: Bool, uid: Bool)] = [
-            ("G", "GOODSIG ", true, true, true), ("B", "BADSIG ", true, true, true),
-            ("E", "ERRSIG ", true, true, false), ("X", "EXPSIG ", true, true, true),
-            ("Y", "EXPKEYSIG ", true, true, true), ("R", "REVKEYSIG ", true, true, true),
-            (nil, "VALIDSIG ", false, false, false), (nil, "TRUST_", false, false, false)
+        // result (and so a key id, and, but for ERRSIG, the uid follows).
+        let statuses: [(result: Character?, prefix: String, exclusive: Bool)] = [
+            ("G", "GOODSIG ", true), ("B", "BADSIG ", true), ("E", "ERRSIG ", true),
+            ("X", "EXPSIG ", true), ("Y", "EXPKEYSIG ", true), ("R", "REVKEYSIG ", true),
+            (nil, "VALIDSIG ", false), (nil, "TRUST_", false)
         ]
         var exclusive = 0
         for raw in status.split(separator: "\n") where raw.hasPrefix("[GNUPG:] ") {
@@ -238,10 +238,10 @@ extension GitClient {
                 if exclusive > 1 { return check.failParsing() }
             }
             if let letter = match.result { check.result = letter }
-            if match.key {
+            if match.exclusive {
                 let fields = rest.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
                 check.key = String(fields[0])
-                if match.uid, fields.count > 1 { check.signer = String(fields[1]) }
+                if match.prefix != "ERRSIG ", fields.count > 1 { check.signer = String(fields[1]) }
             }
             if match.prefix == "TRUST_" {
                 guard let level = trustLevel(String(rest.prefix { $0 != " " })) else { return check.failParsing() }

@@ -27,7 +27,9 @@ extension Log {
     /// in from `check` (an unsigned commit's being git's empty one).
     /// The text around them is formatted as before, so a signer holding
     /// a `%` stays as written.
-    static func format(_ entry: LogEntry, _ template: String, signature check: SwiftGit.GitClient.SignatureCheck?) -> String {
+    static func format(
+        _ entry: LogEntry, _ template: String, signature check: SwiftGit.GitClient.SignatureCheck?
+    ) -> String {
         let check = check ?? .unsigned
         var out = "", segment = ""
         var index = template.startIndex
@@ -52,7 +54,9 @@ extension Log {
     }
 
     /// What `%G<placeholder>` expands to, `nil` for none git knows.
-    private static func signatureValue(_ placeholder: Character, _ check: SwiftGit.GitClient.SignatureCheck) -> String? {
+    private static func signatureValue(
+        _ placeholder: Character, _ check: SwiftGit.GitClient.SignatureCheck
+    ) -> String? {
         switch placeholder {
         case "G": return check.output ?? ""
         case "?": return String(check.verdict)
