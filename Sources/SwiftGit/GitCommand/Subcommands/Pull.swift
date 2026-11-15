@@ -40,12 +40,16 @@ struct Pull: AsyncParsableCommand {
     var ffOnly: Bool = false
 
     @Option(name: [.customShort("m"), .customLong("message")],
-            help: "Merge commit message (3-way merges only).")
+            parsing: .unconditional, help: "Merge commit message (3-way merges only).")
     var message: String?
 
     @Flag(name: [.customShort("q"), .customLong("quiet")],
           help: "Suppress progress and the merge summary; conflicts are still reported.")
     var quiet: Bool = false
+
+    @Option(name: .customLong("gpg-sign"),
+            help: "GPG-sign commits (-S[<keyid>], --gpg-sign[=<keyid>], --no-gpg-sign).")
+    var gpgSign: [String] = []
 
     @Argument(help: "The remote, then the refspecs to fetch and merge (e.g. `origin main`).")
     var arguments: [String] = []
@@ -265,10 +269,9 @@ struct Pull: AsyncParsableCommand {
                 throw CLIError.stderr(
                     "fatal: rebasing merge commits (pull.rebase=merges) is not supported", exitCode: 128)
             }
-            let outcome = try await client.rebase(
-                upstream: forkPoint ?? head.oid, onto: head.oid, author: nil) { current, total in
-                if !quiet { Rebase.emitProgress(current: current, total: total) }
-            }
+            let outcome = try await Rebase.replay(
+                upstream: forkPoint ?? head.oid, onto: head.oid, sign: GPGSign.mode(gpgSign),
+                quiet: quiet, client: client)
             if !quiet {
                 try Rebase.printOutcome(outcome)
             } else if case .conflict = outcome {
@@ -311,13 +314,14 @@ struct Pull: AsyncParsableCommand {
                 }
             }
             try await Merge.merge(heads: reduced, mode: octopusMode, message: mergeMessage ?? "",
-                                  client: client, quiet: quiet)
+                                  client: client, quiet: quiet, sign: GPGSign.mode(gpgSign))
             return
         }
         let outcome: MergeOutcome
         do {
             outcome = try await client.merge(
-                ref: head.oid, fastForward: mode, message: mergeMessage, author: nil)
+                ref: head.oid, fastForward: mode, message: mergeMessage, author: nil,
+                sign: GPGSign.mode(gpgSign))
         } catch let err as Libgit2Error
             where err.message.contains("Not possible to fast-forward") {
             throw try await Self.notPossibleToFastForward(client: client)

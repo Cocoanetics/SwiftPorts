@@ -21,6 +21,10 @@ struct CherryPick: AsyncParsableCommand {
           help: "Skip the current commit and clean up state.")
     var skip: Bool = false
 
+    @Option(name: .customLong("gpg-sign"),
+            help: "GPG-sign commits (-S[<keyid>], --gpg-sign[=<keyid>], --no-gpg-sign).")
+    var gpgSign: [String] = []
+
     @Argument(help: "Commit-ish to cherry-pick.")
     var commit: String?
 
@@ -63,10 +67,13 @@ struct CherryPick: AsyncParsableCommand {
         let outcome: CherryPickOutcome
         do {
             if continueCherry {
-                outcome = try await client.cherryPickContinue()
+                outcome = try await client.cherryPickContinue(sign: GPGSign.mode(gpgSign))
             } else {
-                outcome = try await client.cherryPick(commit!)
+                outcome = try await client.cherryPick(commit!, sign: GPGSign.mode(gpgSign))
             }
+        } catch let failure as SwiftGit.GitClient.SigningFailure {
+            throw CLIError.stderr(failure.fatal.map { ["fatal: \($0)"] }
+                ?? ["error: failed to write commit object", "fatal: cherry-pick failed"], exitCode: 128)
         } catch let err as Libgit2Error
             where err.message.contains("no cherry-pick in progress") {
             throw CLIError.stderr(

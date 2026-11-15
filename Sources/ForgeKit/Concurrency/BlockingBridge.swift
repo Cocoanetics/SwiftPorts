@@ -1,11 +1,11 @@
 import Foundation
 
-/// Bridges one of SSHKit's `async` calls to a synchronous return — the
-/// shape every ``GitSSHChannel``/``GitSSHTransportProvider`` method
-/// needs, since libgit2 calls them directly on whatever thread is
-/// driving the git operation, never on a Swift concurrency executor or
-/// the NIO event loop (GitKit's `SSHTransport.swift` documents this
-/// threading contract on `GitSSHChannel`).
+/// Bridges an `async` call to a synchronous return — the shape libgit2's
+/// callbacks need, since libgit2 calls them directly on whatever thread
+/// is driving the git operation, never on a Swift concurrency executor or
+/// the NIO event loop. GitKitSSH's `GitSSHChannel` (GitKit's
+/// `SSHTransport.swift` documents that threading contract) and SwiftGit's
+/// shell-backed `GitSigner` both cross it.
 ///
 /// On SE-0417 runtimes, runs `operation` as a task that prefers a
 /// dedicated, non-cooperative-pool thread, and blocks the *calling*
@@ -25,14 +25,14 @@ import Foundation
 /// watchOS 11. On those older Apple runtimes a global actor backed by the
 /// same dedicated thread provides the fallback. It keeps the bridge task's
 /// actor-isolated work off the pool, but a
-/// nonisolated async SSHKit call can require a cooperative-pool thread.
-enum GitKitSSHBridge {
-    static func runBlocking<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) throws -> T {
+/// nonisolated async call can require a cooperative-pool thread.
+package enum BlockingBridge {
+    package static func runBlocking<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) throws -> T {
         let semaphore = DispatchSemaphore(value: 0)
         let box = ResultBox<T>()
 
         if #available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, *) {
-            Task(executorPreference: gitKitSSHBridgeThread) {
+            Task(executorPreference: blockingBridgeThread) {
                 do {
                     box.value = .success(try await operation())
                 } catch {
@@ -41,7 +41,7 @@ enum GitKitSSHBridge {
                 semaphore.signal()
             }
         } else {
-            Task { @GitKitSSHBridgeExecutor in
+            Task { @BlockingBridgeExecutor in
                 do {
                     box.value = .success(try await operation())
                 } catch {
@@ -64,23 +64,23 @@ enum GitKitSSHBridge {
 /// same dedicated thread. Nonisolated operations can still leave this actor under SE-0338, which
 /// is why supported runtimes use the task-executor preference above.
 @globalActor
-actor GitKitSSHBridgeExecutor {
-    static let shared = GitKitSSHBridgeExecutor()
+actor BlockingBridgeExecutor {
+    static let shared = BlockingBridgeExecutor()
 
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        gitKitSSHBridgeThread.asUnownedSerialExecutor()
+        blockingBridgeThread.asUnownedSerialExecutor()
     }
 }
 
-/// `"GitKitSSHBridge"` is kept to 15 characters so it round-trips through Linux's
+/// `"BlockingBridge"` is kept under 16 characters so it round-trips through Linux's
 /// `pthread_setname_np`, which truncates/rejects anything past `TASK_COMM_LEN` (16 bytes
 /// including the null terminator).
-private let gitKitSSHBridgeThread = GitKitSSHDedicatedThreadExecutor(name: "GitKitSSHBridge")
+private let blockingBridgeThread = BlockingBridgeThreadExecutor(name: "BlockingBridge")
 
 /// A serial and task executor backed by one dedicated OS thread that Swift's cooperative thread
 /// pool never manages or schedules onto. Serial-executor and task-executor jobs retain their
 /// respective executor identity even though they share the same underlying thread.
-private final class GitKitSSHDedicatedThreadExecutor: @unchecked Sendable, SerialExecutor {
+private final class BlockingBridgeThreadExecutor: @unchecked Sendable, SerialExecutor {
     private struct QueuedJob {
         let job: UnownedJob
         let usesTaskExecutor: Bool
@@ -155,7 +155,7 @@ private final class GitKitSSHDedicatedThreadExecutor: @unchecked Sendable, Seria
 }
 
 @available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, *)
-extension GitKitSSHDedicatedThreadExecutor: TaskExecutor {
+extension BlockingBridgeThreadExecutor: TaskExecutor {
     func enqueue(_ job: consuming ExecutorJob) {
         enqueue(UnownedJob(job), usesTaskExecutor: true)
     }

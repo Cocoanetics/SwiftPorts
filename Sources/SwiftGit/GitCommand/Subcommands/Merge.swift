@@ -22,12 +22,16 @@ struct Merge: AsyncParsableCommand {
     var ffOnly: Bool = false
 
     @Option(name: [.customShort("m"), .customLong("message")],
-            help: "Override the auto-generated merge commit message.")
+            parsing: .unconditional, help: "Override the auto-generated merge commit message.")
     var message: String?
 
     @Flag(name: [.customShort("q"), .customLong("quiet")],
           help: "Suppress the merge summary; conflicts are still reported.")
     var quiet: Bool = false
+
+    @Option(name: .customLong("gpg-sign"),
+            help: "GPG-sign commits (-S[<keyid>], --gpg-sign[=<keyid>], --no-gpg-sign).")
+    var gpgSign: [String] = []
 
     @Argument(help: "Commits to merge into the current branch; more than one make an octopus merge.")
     var refs: [String] = []
@@ -89,7 +93,8 @@ struct Merge: AsyncParsableCommand {
             }
             var message = self.message
             if message == nil { message = try await client.mergeMessage(describing: names, objects: objects) }
-            try await Self.merge(heads: heads, mode: mode, message: message ?? "", client: client, quiet: quiet)
+            try await Self.merge(heads: heads, mode: mode, message: message ?? "", client: client, quiet: quiet,
+                                 sign: GPGSign.mode(gpgSign))
             return
         }
 
@@ -107,7 +112,7 @@ struct Merge: AsyncParsableCommand {
         let outcome: MergeOutcome
         do {
             outcome = try await client.merge(
-                ref: ref, fastForward: mode, message: message, author: nil)
+                ref: ref, fastForward: mode, message: message, author: nil, sign: GPGSign.mode(gpgSign))
         } catch let err as Libgit2Error
             where err.message.contains("not something we can merge") {
             throw CLIError.stderr(
@@ -141,7 +146,7 @@ struct Merge: AsyncParsableCommand {
     /// fast-forward.
     static func merge(
         heads: MergeHeads, mode: FastForwardMode, message: String,
-        client: SwiftGit.GitClient, quiet: Bool
+        client: SwiftGit.GitClient, quiet: Bool, sign: SignMode = .config
     ) async throws {
         if heads.heads.isEmpty {
             if !quiet { Shell.print("Already up to date.") }
@@ -152,7 +157,7 @@ struct Merge: AsyncParsableCommand {
             do {
                 // git ends a message with a newline.
                 outcome = try await client.merge(ref: heads.heads[0], fastForward: mode,
-                                                 message: message + "\n", author: nil)
+                                                 message: message + "\n", author: nil, sign: sign)
             } catch let err as Libgit2Error where err.message.contains("Not possible to fast-forward") {
                 throw try await Pull.notPossibleToFastForward(client: client)
             }
@@ -168,7 +173,7 @@ struct Merge: AsyncParsableCommand {
         }
         if mode == .onlyFastForward { throw try await Pull.notPossibleToFastForward(client: client) }
         let result = try await client.octopusMerge(
-            heads: heads.heads, noFastForward: mode == .never, message: message)
+            heads: heads.heads, noFastForward: mode == .never, message: message, sign: sign)
         try printOctopus(result, quiet: quiet)
     }
 

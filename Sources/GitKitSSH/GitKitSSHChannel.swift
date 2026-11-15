@@ -1,3 +1,4 @@
+import ForgeKit
 import GitKit
 @_spi(GitKitSSH) import SSHKit
 
@@ -28,8 +29,8 @@ final class GitKitSSHChannel: GitSSHChannel, @unchecked Sendable {
         // chunk; skip over it rather than treating it as EOF (`nil` is
         // the only true end-of-stream signal).
         while pendingStdout.isEmpty {
-            guard let chunk = try GitKitSSHBridge.runBlocking({ await self.stdoutIterator.next() }) else {
-                try GitKitSSHBridge.runBlocking { try await self.failIfRemoteCommandFailed() }
+            guard let chunk = try BlockingBridge.runBlocking({ await self.stdoutIterator.next() }) else {
+                try BlockingBridge.runBlocking { try await self.failIfRemoteCommandFailed() }
                 return 0
             }
             pendingStdout = chunk
@@ -46,7 +47,7 @@ final class GitKitSSHChannel: GitSSHChannel, @unchecked Sendable {
     func write(_ buffer: UnsafeRawBufferPointer) throws {
         guard let base = buffer.baseAddress, buffer.count > 0 else { return }
         let bytes = [UInt8](UnsafeRawBufferPointer(start: base, count: buffer.count))
-        try GitKitSSHBridge.runBlocking { try await self.exec.write(bytes) }
+        try BlockingBridge.runBlocking { try await self.exec.write(bytes) }
     }
 
     func close() {

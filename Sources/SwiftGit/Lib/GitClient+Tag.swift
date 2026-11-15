@@ -31,18 +31,23 @@ extension GitClient {
     }
 
     /// Create an annotated tag; `tagger` defaults to the committer-role
-    /// signature resolved through env vars + config.
+    /// signature resolved through env vars + config. `sign` is what
+    /// ``tagSignMode(sign:keyID:annotate:message:)`` decided; `.config`
+    /// follows `tag.gpgsign` alone.
     @discardableResult
     public func tagCreateAnnotated(
         name: String, target: String = "HEAD",
         message: String, tagger: GitSignature? = nil,
-        force: Bool = false
+        force: Bool = false,
+        sign: SignMode = .config
     ) async throws -> String {
         let env = shellEnvironment()
+        let sign = sign == .config
+            ? try await tagSignMode(sign: nil, keyID: nil, annotate: true, message: true) : sign
         return try await withRepository {
             try $0.tagCreateAnnotated(
                 name: name, target: target, message: message,
-                tagger: tagger.core, force: force, env: env)
+                tagger: tagger.core, force: force, env: env, sign: sign)
         }
     }
 

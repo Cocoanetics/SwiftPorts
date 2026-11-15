@@ -363,7 +363,7 @@ Sources/GitKitSSH/
   GitKitSSH.swift                     install() / uninstall() — opt-in registration
   GitKitSSHTransportProvider.swift    GitSSHTransportProvider over SSHKit
   GitKitSSHChannel.swift              GitSSHChannel bridging SSHExecChannel's async streams
-  GitKitSSHBridge.swift                TaskExecutor + semaphore blocking bridge
+  (ForgeKit) BlockingBridge.swift      TaskExecutor + semaphore blocking bridge
   GitKitSSHStderrCollector.swift       drains one channel's stderr concurrently with stdout
   GitKitSSHRemoteCommandError.swift    carries a failed remote command's stderr/exit status
 
@@ -403,9 +403,9 @@ thread until they can make progress; they must never `await` a Swift
 concurrency task directly, since that would hop off the calling thread,
 which libgit2 does not expect.
 
-`GitKitSSHBridge.runBlocking(_:)` is the bridge: on runtimes that support
+`BlockingBridge.runBlocking(_:)` is the bridge: on runtimes that support
 SE-0417 (`Task(executorPreference:)`), it starts a task with a preference
-for `GitKitSSHBridgeExecutor`'s dedicated, non-cooperative-pool OS thread,
+for `BlockingBridgeExecutor`'s dedicated, non-cooperative-pool OS thread,
 then blocks the *calling* thread on a `DispatchSemaphore` until that task's
 async work — an `SSHExecChannel` read/write, or `SSHClient.connect`/`exec`
 during `openChannel` — finishes. The task-executor preference matters

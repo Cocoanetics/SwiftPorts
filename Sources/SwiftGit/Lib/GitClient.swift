@@ -39,6 +39,7 @@ public struct GitClient: ForgeKit.GitClient {
         credentials: CredentialProvider? = nil
     ) {
         Libgit2.ensureInitialized()
+        _ = Self.shellSigningOnly
         self.workingDirectory = workingDirectory
         self.credentials = credentials
     }
@@ -235,10 +236,14 @@ public struct GitClient: ForgeKit.GitClient {
     /// `[branch sha]`-style details the CLI uses to mirror `git commit`'s
     /// summary line. Throws ``Libgit2Error`` with a `nothingToCommit`
     /// flavour when the index matches HEAD and `allowEmpty == false`.
+    ///
+    /// `sign` is `-S[<key>]` / `--no-gpg-sign`; `.config` follows
+    /// `commit.gpgsign`.
     public func commitDetailed(
         message: String,
         author: GitSignature?,
-        allowEmpty: Bool
+        allowEmpty: Bool,
+        sign: SignMode = .config
     ) async throws -> Libgit2CommitDetails {
         let env = shellEnvironment()
         return try await withRepository {
@@ -246,7 +251,8 @@ public struct GitClient: ForgeKit.GitClient {
                 message: message,
                 author: author.core,
                 allowEmpty: allowEmpty,
-                env: env)
+                env: env,
+                sign: try resolvedCommitSignMode(sign))
         }
     }
 
@@ -267,12 +273,19 @@ public struct GitClient: ForgeKit.GitClient {
         // goes onto the repository's live config before anything reads it.
         return try await isolatedGated {
             let repo = try Repository.open(at: workingDirectory)
+            // Whatever the operation signs, it signs through the shell.
+            repo.setSigner(ShellSigner(client: self, shell: Shell.current))
             try Self.installEnvironmentConfig(into: repo)
             // What git refuses of its config stops it before anything else.
             try self.checkConfigSyntax(of: repo)
             return try body(repo)
         }
     }
+
+    /// GitKit's own signer launches programs with `Foundation.Process`,
+    /// around the shell; with it off, a repository without our
+    /// ``ShellSigner`` can't sign at all.
+    private static let shellSigningOnly: Void = GitSigning.setExternalProgramFallbackEnabled(false)
 
     /// The shell's view of the environment, for the real-git identity
     /// precedence chain (`GIT_AUTHOR_*` / `GIT_COMMITTER_*`).

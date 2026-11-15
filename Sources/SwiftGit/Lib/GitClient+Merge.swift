@@ -16,14 +16,16 @@ extension GitClient {
         ref theirRef: String,
         fastForward: FastForwardMode = .auto,
         message: String? = nil,
-        author: GitSignature? = nil
+        author: GitSignature? = nil,
+        sign: SignMode = .config
     ) async throws -> MergeOutcome {
         try await withRepository {
             try $0.merge(
                 ref: theirRef,
                 fastForward: fastForward,
                 message: message,
-                author: author.core)
+                author: author.core,
+                sign: try resolvedCommitSignMode(sign))
         }
     }
 
@@ -31,14 +33,16 @@ extension GitClient {
     @discardableResult
     public func mergeContinue(
         message: String? = nil,
-        author: GitSignature? = nil
+        author: GitSignature? = nil,
+        sign: SignMode = .config
     ) async throws -> Libgit2CommitDetails {
         let env = shellEnvironment()
         return try await withRepository {
             try $0.mergeContinue(
                 message: message,
                 author: author.core,
-                env: env)
+                env: env,
+                sign: try resolvedCommitSignMode(sign))
         }
     }
 
@@ -59,13 +63,14 @@ extension GitClient {
         heads: [String],
         noFastForward: Bool = false,
         message: String,
-        author: GitSignature? = nil
+        author: GitSignature? = nil,
+        sign: SignMode = .config
     ) async throws -> OctopusMergeResult {
         let env = shellEnvironment()
         return try await withRepository {
             try $0.octopusMerge(
                 heads: heads, noFastForward: noFastForward, message: message,
-                author: author.core, env: env)
+                author: author.core, env: env, sign: try resolvedCommitSignMode(sign))
         }
     }
 

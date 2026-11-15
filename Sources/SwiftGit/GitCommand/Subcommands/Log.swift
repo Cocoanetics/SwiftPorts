@@ -18,6 +18,10 @@ struct Log: AsyncParsableCommand {
             Format flags:
               --oneline                     short form `<sha7> <subject>`
               --format=<fmt>                custom %H/%h/%s/... template
+                                            (%G? %GS %GK %GF %GP %GT %GG
+                                            from the commit's signature)
+              --show-signature              check each signed commit's
+                                            signature and show the result
               --stat                        append shortstat per commit
               -p / --patch                  append unified diff per commit
             """
@@ -43,6 +47,10 @@ struct Log: AsyncParsableCommand {
             help: "Limit output to N commits.")
     var maxCount: Int?
 
+    @Flag(name: .customLong("show-signature"), inversion: .prefixedNo,
+          help: "Check signed commits' signatures and show the result (log.showSignature).")
+    var showSignature: Bool?
+
     @Argument(parsing: .captureForPassthrough,
               help: "Optional <ref> / <a>..<b> / `-- <paths>`. Also accepts `-<n>`.")
     var rest: [String] = []
@@ -58,10 +66,12 @@ struct Log: AsyncParsableCommand {
         let useFormat = pulled.format
         let limit = pulled.maxCount
 
-        let (refTokens, paths) = Self.splitOnDoubleDash(pulled.positionals)
-        let (starts, excludes) = try Self.expandRefs(refTokens)
-
         let client = CommandContext.gitClient()
+        let (showSignatures, positionals) = try await Self.pullShowSignature(
+            pulled.positionals, flag: showSignature, client: client)
+        let (refTokens, paths) = Self.splitOnDoubleDash(positionals)
+        let (starts, excludes) = try Self.expandRefs(refTokens)
+        let checksSignatures = showSignatures || useFormat.map(Self.usesSignature) == true
         let entries = try await client.log(LogQuery(
             starts: starts, excludes: excludes,
             maxCount: limit, paths: paths))
@@ -69,13 +79,26 @@ struct Log: AsyncParsableCommand {
         let stdout = Shell.current.stdout
         var first = true
         for entry in entries {
+            let check = checksSignatures ? try await client.commitSignatureCheck(entry.sha) : nil
+            // git shows the signature after the `commit` line (with
+            // `--oneline`, the abbreviated name), before the commit itself
+            // with `--format`.
+            let signature = showSignatures ? Self.signatureLines(check) : ""
             if useOneline {
-                stdout.write(Data((entry.onelineFormat() + "\n").utf8))
+                var line = entry.onelineFormat()
+                if let space = line.firstIndex(of: " ") {
+                    line.insert(contentsOf: signature, at: line.index(after: space))
+                }
+                stdout.write(Data((line + "\n").utf8))
             } else if let useFormat {
-                stdout.write(Data((entry.format(useFormat) + "\n").utf8))
+                stdout.write(Data((signature + Self.format(entry, useFormat, signature: check) + "\n").utf8))
             } else {
                 if !first { stdout.write(Data("\n".utf8)) }
-                stdout.write(Data(entry.defaultFormat().utf8))
+                var block = entry.defaultFormat()
+                if let header = block.firstIndex(of: "\n") {
+                    block.insert(contentsOf: signature, at: block.index(after: header))
+                }
+                stdout.write(Data(block.utf8))
             }
             // `--stat` and `-p` are independent of the format toggle —
             // real git happily renders `log --oneline --stat -1` as a

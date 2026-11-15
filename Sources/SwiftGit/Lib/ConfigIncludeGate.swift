@@ -82,8 +82,12 @@ extension GitClient {
         let gate = ConfigIncludeGate(enforcing: Shell.current.sandbox != nil)
         while true {
             do {
-                return try Libgit2Sandboxing.shared.runIsolated(
-                    Shell.current.sandbox, environment: plan) { try gate.run(body) }
+                // Waiting for the run suspends rather than blocks (see
+                // `Libgit2Turnstile`).
+                return try await Libgit2Turnstile.shared.run {
+                    try Libgit2Sandboxing.shared.runIsolated(
+                        Shell.current.sandbox, environment: plan) { try gate.run(body) }
+                }
             } catch {
                 guard try await gate.authorizeRefused() else { throw error }
             }

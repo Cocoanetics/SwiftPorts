@@ -11,11 +11,11 @@ struct Commit: AsyncParsableCommand {
     )
 
     @Option(name: [.customShort("m"), .customLong("message")],
-            help: "Commit message.")
+            parsing: .unconditional, help: "Commit message.")
     var message: String
 
     @Option(name: .customLong("author"),
-            help: "Override the commit author. Format: \"Name <email>\".")
+            parsing: .unconditional, help: "Override the commit author. Format: \"Name <email>\".")
     var author: String?
 
     @Flag(name: [.customShort("a"), .customLong("all")],
@@ -29,6 +29,10 @@ struct Commit: AsyncParsableCommand {
     @Flag(name: [.customShort("q"), .customLong("quiet")],
           help: "Suppress the commit summary.")
     var quiet: Bool = false
+
+    @Option(name: .customLong("gpg-sign"),
+            help: "GPG-sign commits (-S[<keyid>], --gpg-sign[=<keyid>], --no-gpg-sign).")
+    var gpgSign: [String] = []
 
     func run() async throws {
         let parsedAuthor = try author.map { try Self.parseAuthor($0) }
@@ -45,10 +49,13 @@ struct Commit: AsyncParsableCommand {
 
         let details: Libgit2CommitDetails
         do {
+            // `-m` messages get git's `whitespace` cleanup, which ends
+            // the message with a newline.
             details = try await client.commitDetailed(
-                message: message,
+                message: SwiftGit.GitClient.stripspace(message),
                 author: parsedAuthor,
-                allowEmpty: allowEmpty)
+                allowEmpty: allowEmpty,
+                sign: GPGSign.mode(gpgSign))
         } catch let err as Libgit2Error
             where err.message.contains("nothing to commit") {
             // Mirror `git commit` on a clean tree.

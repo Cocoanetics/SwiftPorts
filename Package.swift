@@ -440,8 +440,12 @@ let package = Package(
         // `git merge <a> <b>…` and an octopus `git pull` run on. GitKit 2.9.0's
         // `ConfigIncludePolicy` lets the sandbox authorise each `[include]`
         // file libgit2 opens, and set/unset look at the file written only.
+        // GitKit 2.10.0 signs commits and tags through a per-repository
+        // `GitSigner` with an explicit `SignMode`, and reads signatures
+        // back (`commitSignatures`, `tagSignature`) for verify-commit and
+        // `log --show-signature`.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.9.0",
+                 from: "2.10.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
@@ -1316,7 +1320,7 @@ let package = Package(
         // 2.2.0) implemented over `SSHKit`'s exec channel. Bridges
         // SSHKit's async stdin/stdout to the synchronous, libgit2-driven
         // `GitSSHChannel` contract via a dedicated task executor + semaphore
-        // (see `GitKitSSHBridge`) — never by `await`ing from the calling
+        // (see ForgeKit's `BlockingBridge`) — never by `await`ing from the calling
         // thread itself, which the contract documents as the deadlock to
         // avoid. Not in `androidDroppedTargets`: depends only on SSHKit
         // and GitKit, both of which already build there.
@@ -1324,6 +1328,8 @@ let package = Package(
             name: "GitKitSSH",
             dependencies: [
                 "SSHKit",
+                // `BlockingBridge`, shared with SwiftGit's signer.
+                "ForgeKit",
                 .product(name: "ShellKit", package: "ShellKit"),
                 .product(name: "GitKit", package: "GitKit"),
             ],
@@ -1333,7 +1339,7 @@ let package = Package(
         // same as `SSHKitTests`/`GitHubTests` — dropped on Android there.
         .testTarget(
             name: "GitKitSSHTests",
-            dependencies: ["GitKitSSH", "SSHKit", .product(name: "GitKit", package: "GitKit")]
+            dependencies: ["GitKitSSH", "SSHKit", "ForgeKit", .product(name: "GitKit", package: "GitKit")]
         ),
 
         // MARK: SQLiteKit umbrella (issue #43)

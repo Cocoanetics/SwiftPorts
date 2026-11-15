@@ -174,7 +174,7 @@ struct GitKitSSHEndToEndTests {
     }
 
     /// Issue #122: the transport's connection goes through the sandbox of the shell the git
-    /// operation runs in — which also proves `GitKitSSHBridge`'s task carries that shell along.
+    /// operation runs in — which also proves `BlockingBridge`'s task carries that shell along.
     /// No sshd needed: a sandbox that allows no hosts must refuse before anything is dialled
     /// (nothing listens on port 9, so a dial would fail with a different error).
     @Test("an SSH fetch is refused by the bound shell's sandbox before dialling")
@@ -236,7 +236,7 @@ struct GitKitSSHEndToEndTests {
     /// Synchronous because `poolSaturationLock` (an `NSLock`) can't be taken from an async
     /// context. The clone runs on a plain OS thread while the pool is exhausted. It reaches the
     /// provider through libgit2 exactly as SwiftGit's clone does, so every byte goes through
-    /// `GitKitSSHBridge.runBlocking` and SSHKit's channel. Anything on that path that still
+    /// `BlockingBridge.runBlocking` and SSHKit's channel. Anything on that path that still
     /// needs a cooperative-pool thread deadlocks here, and the timeout turns that into a
     /// failure instead of a hung suite.
     private static func cloneWhileCooperativePoolIsSaturated(from url: URL, to destination: URL) throws {
