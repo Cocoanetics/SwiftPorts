@@ -1,3 +1,4 @@
+import ForgeKit
 import GitKit
 import ShellKit
 import SSHKit
@@ -23,7 +24,7 @@ public struct GitKitSSHTransportProvider: GitSSHTransportProvider {
         user: String?,
         command: GitSSHCommand
     ) throws -> GitSSHChannel {
-        try GitKitSSHBridge.runBlocking {
+        try BlockingBridge.runBlocking {
             try await Self.connect(
                 host: host, port: port, user: user, command: command, sshConfigPath: sshConfigPath)
         }

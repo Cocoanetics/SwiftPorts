@@ -16,7 +16,7 @@ struct TestTimeoutError: Error, CustomStringConvertible {
 let poolSaturationLock = NSLock()
 
 /// Races `operation` against a timer so a regression fails the test instead of hanging the
-/// suite forever, the way the old `GitKitSSHBridge.runBlocking` would have under a saturated
+/// suite forever, the way the old `BlockingBridge.runBlocking` would have under a saturated
 /// cooperative thread pool.
 func withTestTimeout<T: Sendable>(
     seconds: Double, _ operation: @escaping @Sendable () async throws -> T
@@ -35,7 +35,7 @@ func withTestTimeout<T: Sendable>(
 
 /// Blocks up to `count` cooperative-pool threads at once on a semaphore the test controls —
 /// reproducing the shape of `Libgit2Sandboxing.runIsolated` calling into
-/// `GitKitSSHBridge.runBlocking` with every pool thread already spoken for. Callers must invoke
+/// `BlockingBridge.runBlocking` with every pool thread already spoken for. Callers must invoke
 /// the returned closure exactly once to release them, even on the failure path.
 ///
 /// Waiting for all `count` saturating tasks to start is itself bounded: the cooperative pool's

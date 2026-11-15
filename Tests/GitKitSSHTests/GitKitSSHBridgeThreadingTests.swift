@@ -1,4 +1,4 @@
-// Regression coverage for the PR #117 review finding (HIGH): `GitKitSSHBridge.runBlocking`
+// Regression coverage for the PR #117 review finding (HIGH): `BlockingBridge.runBlocking`
 // used to spawn a plain, unisolated `Task`, which Swift schedules onto its cooperative thread
 // pool. `SwiftGit`'s `GitClient` drives libgit2 from `async` code (`Libgit2Sandboxing.runIsolated`,
 // deliberately synchronous and `NSLock`-based), so the thread calling into `runBlocking` can
@@ -8,19 +8,19 @@
 // process, per issue #113's stated MissionControl adoption).
 //
 // The fix gives every `runBlocking` task an SE-0417 task-executor preference backed by one
-// dedicated, non-pool thread (`GitKitSSHDedicatedThreadExecutor`), so nonisolated async calls and
+// dedicated, non-pool thread (`BlockingBridgeThreadExecutor`, in ForgeKit), so nonisolated async calls and
 // their later resumptions do not depend on the cooperative pool having a free thread.
 // See `GitKitSSHEndToEndTests.cloneCompletesUnderSaturatedCooperativePool` for the same guarantee
 // exercised through a real clone over a throwaway `sshd`.
 import Foundation
 import Testing
-@testable import GitKitSSH
+import ForgeKit
 
 // `.serialized`: `runBlockingCompletesUnderSaturatedPool` deliberately occupies every thread in
 // the real cooperative pool. Swift Testing runs a suite's tests concurrently by default, so
 // without this, that saturation would race against this suite's other tests' own pool usage
 // (and vice versa) rather than against production code — a false failure in the test harness,
-// not a regression in `GitKitSSHBridge`.
+// not a regression in `BlockingBridge`.
 @Suite("GitKitSSHBridge threading", .serialized)
 struct GitKitSSHBridgeThreadingTests {
 
@@ -33,17 +33,17 @@ struct GitKitSSHBridgeThreadingTests {
         // that the task-executor preference also survives a real async suspension.
         let caller = currentThreadIdentity()
         for _ in 0..<200 {
-            let (first, name, resumed) = try GitKitSSHBridge.runBlocking {
+            let (first, name, resumed) = try BlockingBridge.runBlocking {
                 let first = currentThreadIdentity()
                 let name = currentThreadName()
                 try await Task.sleep(nanoseconds: 1_000_000)
                 return (first, name, currentThreadIdentity())
             }
-            let second = try GitKitSSHBridge.runBlocking { currentThreadIdentity() }
+            let second = try BlockingBridge.runBlocking { currentThreadIdentity() }
             #expect(first != caller)
             #expect(first == resumed)
             #expect(first == second)
-            #expect(name == "GitKitSSHBridge")
+            #expect(name == "BlockingBridge")
         }
     }
 
@@ -61,7 +61,7 @@ struct GitKitSSHBridgeThreadingTests {
         // cooperative pool, so even the timeout race in `withTestTimeout` would have nowhere to
         // schedule its own racer task.
         let result = try runOnDetachedThread(timeoutSeconds: 5) {
-            try GitKitSSHBridge.runBlocking { 42 }
+            try BlockingBridge.runBlocking { 42 }
         }
         #expect(result == 42)
     }
@@ -70,13 +70,13 @@ struct GitKitSSHBridgeThreadingTests {
     func concurrentRunBlockingCallsBothComplete() async throws {
         let (first, second) = try await withTestTimeout(seconds: 5) {
             async let first = Task.detached {
-                try GitKitSSHBridge.runBlocking { () async throws -> Int in
+                try BlockingBridge.runBlocking { () async throws -> Int in
                     try await Task.sleep(nanoseconds: 100_000_000)
                     return 1
                 }
             }.value
             async let second = Task.detached {
-                try GitKitSSHBridge.runBlocking { () async throws -> Int in
+                try BlockingBridge.runBlocking { () async throws -> Int in
                     try await Task.sleep(nanoseconds: 100_000_000)
                     return 2
                 }
