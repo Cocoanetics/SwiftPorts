@@ -12,7 +12,7 @@ import NIOSSH
 enum OpenSSHPrivateKeyFile {
     private static let magic: [UInt8] = Array("openssh-key-v1\0".utf8)
 
-    static func parse(_ pemText: String, path: String, passphrase: String) throws -> NIOSSHPrivateKey {
+    static func parse(_ pemText: String, path: String, passphrase: String) throws -> SSHPrivateKey {
         guard let base64Body = Self.extractBase64Body(from: pemText) else {
             throw SSHError.unsupportedKeyFormat(path: path, reason: "not an OPENSSH PRIVATE KEY file")
         }
@@ -74,7 +74,16 @@ enum OpenSSHPrivateKeyFile {
         }
 
         let keyType = try privateReader.readUTF8String()
-        return try Self.privateKey(ofType: keyType, from: &privateReader, path: path)
+        var key = try Self.privateKey(ofType: keyType, from: &privateReader, path: path)
+        key.comment = try privateReader.readUTF8String()
+        var padding: UInt8 = 1
+        while !privateReader.isAtEnd {
+            guard try privateReader.readBytes(1) == [padding] else {
+                throw SSHError.unsupportedKeyFormat(path: path, reason: "invalid padding")
+            }
+            padding &+= 1
+        }
+        return key
     }
 
     /// Derives the cipher key + IV via `BCryptPBKDF` and decrypts the private-key ciphertext,
@@ -164,7 +173,7 @@ enum OpenSSHPrivateKeyFile {
         ofType keyType: String,
         from reader: inout SSHWireReader,
         path: String
-    ) throws -> NIOSSHPrivateKey {
+    ) throws -> SSHPrivateKey {
         switch keyType {
         case "ssh-ed25519":
             _ = try reader.readString()  // public key (32 bytes, redundant)
@@ -173,7 +182,7 @@ enum OpenSSHPrivateKeyFile {
                 throw SSHError.unsupportedKeyFormat(path: path, reason: "malformed ed25519 private key")
             }
             let seed = Array(secretAndPublic.prefix(32))
-            return NIOSSHPrivateKey(ed25519Key: try Curve25519.Signing.PrivateKey(rawRepresentation: seed))
+            return SSHPrivateKey(.ed25519(try Curve25519.Signing.PrivateKey(rawRepresentation: seed)))
 
         case "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521":
             let curveName = try reader.readUTF8String()
@@ -182,11 +191,11 @@ enum OpenSSHPrivateKeyFile {
 
             switch curveName {
             case "nistp256":
-                return NIOSSHPrivateKey(p256Key: try P256.Signing.PrivateKey(rawRepresentation: Self.leftPad(scalar, to: 32)))
+                return SSHPrivateKey(.p256(try P256.Signing.PrivateKey(rawRepresentation: Self.leftPad(scalar, to: 32))))
             case "nistp384":
-                return NIOSSHPrivateKey(p384Key: try P384.Signing.PrivateKey(rawRepresentation: Self.leftPad(scalar, to: 48)))
+                return SSHPrivateKey(.p384(try P384.Signing.PrivateKey(rawRepresentation: Self.leftPad(scalar, to: 48))))
             case "nistp521":
-                return NIOSSHPrivateKey(p521Key: try P521.Signing.PrivateKey(rawRepresentation: Self.leftPad(scalar, to: 66)))
+                return SSHPrivateKey(.p521(try P521.Signing.PrivateKey(rawRepresentation: Self.leftPad(scalar, to: 66))))
             default:
                 throw SSHError.unsupportedKeyFormat(path: path, reason: "unknown ECDSA curve \(curveName)")
             }

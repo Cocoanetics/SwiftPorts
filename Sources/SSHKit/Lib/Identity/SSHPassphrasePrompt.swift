@@ -20,12 +20,16 @@ import Android
 /// out of scope here (issue #115), so a missing `/dev/tty` is simply treated the same as the user
 /// declining — matching `read_passphrase`'s own behavior when no askpass is configured either.
 public enum SSHPassphrasePrompt {
-    #if os(Windows)
     public static func readFromTTY(path: String) async -> String? {
+        await readFromTTY(prompt: "Enter passphrase for key '\(path.prefix(100))': ")
+    }
+
+    #if os(Windows)
+    public static func readFromTTY(prompt: String) async -> String? {
         nil
     }
     #else
-    public static func readFromTTY(path: String) async -> String? {
+    public static func readFromTTY(prompt: String) async -> String? {
         guard let tty = fopen("/dev/tty", "r+") else {
             return nil
         }
@@ -41,7 +45,6 @@ public enum SSHPassphrasePrompt {
         tcsetattr(fd, TCSANOW, &silenced)
         defer { tcsetattr(fd, TCSANOW, &original) }
 
-        let prompt = "Enter passphrase for key '\(path.prefix(100))': "
         fputs(prompt, tty)
         fflush(tty)
 

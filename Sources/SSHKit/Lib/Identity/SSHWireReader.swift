@@ -13,6 +13,8 @@ struct SSHWireReader {
         self.bytes = bytes
     }
 
+    var isAtEnd: Bool { offset == bytes.count }
+
     mutating func readBytes(_ count: Int) throws -> [UInt8] {
         guard count >= 0, self.offset + count <= self.bytes.count else {
             throw SSHWireReaderError.truncated

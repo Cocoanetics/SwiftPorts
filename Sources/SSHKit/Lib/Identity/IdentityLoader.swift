@@ -18,8 +18,15 @@ public enum IdentityLoader {
 
     public static func load(
         path: String,
-        passphrasePrompt: @escaping PassphrasePrompt = SSHPassphrasePrompt.readFromTTY
+        passphrasePrompt: @escaping PassphrasePrompt = SSHPassphrasePrompt.readFromTTY(path:)
     ) async throws -> NIOSSHPrivateKey {
+        try await loadKey(path: path, passphrasePrompt: passphrasePrompt).nioKey
+    }
+
+    public static func loadKey(
+        path: String,
+        passphrasePrompt: @escaping PassphrasePrompt = SSHPassphrasePrompt.readFromTTY(path:)
+    ) async throws -> SSHPrivateKey {
         let url = Shell.resolve(SSHPath.expandingTilde(path))
         try await Shell.authorize(url)
 
@@ -60,7 +67,7 @@ public enum IdentityLoader {
     /// than aborting the whole connection attempt.
     public static func loadAvailable(
         paths: [String],
-        passphrasePrompt: @escaping PassphrasePrompt = SSHPassphrasePrompt.readFromTTY
+        passphrasePrompt: @escaping PassphrasePrompt = SSHPassphrasePrompt.readFromTTY(path:)
     ) async throws -> [NIOSSHPrivateKey] {
         let source = SSHLazyIdentitySource(paths: paths, passphrasePrompt: passphrasePrompt)
         var keys: [NIOSSHPrivateKey] = []
