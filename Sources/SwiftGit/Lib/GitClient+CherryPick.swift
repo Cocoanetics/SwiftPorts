@@ -12,22 +12,24 @@ extension GitClient {
     @discardableResult
     public func cherryPick(
         _ ref: String,
-        author: GitSignature? = nil
+        author: GitSignature? = nil,
+        sign: SignMode = .config
     ) async throws -> CherryPickOutcome {
         let env = shellEnvironment()
         return try await withRepository {
-            try $0.cherryPick(ref, author: author.core, env: env)
+            try $0.cherryPick(ref, author: author.core, env: env, sign: try resolvedCommitSignMode(sign))
         }
     }
 
     /// Resume a paused cherry-pick after conflicts were resolved and staged.
     @discardableResult
     public func cherryPickContinue(
-        author: GitSignature? = nil
+        author: GitSignature? = nil,
+        sign: SignMode = .config
     ) async throws -> CherryPickOutcome {
         let env = shellEnvironment()
         return try await withRepository {
-            try $0.cherryPickContinue(author: author.core, env: env)
+            try $0.cherryPickContinue(author: author.core, env: env, sign: try resolvedCommitSignMode(sign))
         }
     }
 

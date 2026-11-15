@@ -148,7 +148,7 @@ extension GitClient {
     /// the shell's HOME, `~user/` that user's home, `%(prefix)/` git's
     /// install prefix (`/usr`, there being no git install of our own).
     /// Anything else, or a user that doesn't exist, stays as written.
-    private static func expandedPath(_ path: String, shell: Shell) -> String {
+    static func expandedPath(_ path: String, shell: Shell) -> String {
         if path.hasPrefix("%(prefix)/") { return "/usr" + path.dropFirst("%(prefix)".count) }
         guard path.hasPrefix("~") else { return path }
         let slash = path.firstIndex(of: "/") ?? path.endIndex

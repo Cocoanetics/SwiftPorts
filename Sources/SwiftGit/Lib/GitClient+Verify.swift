@@ -240,13 +240,21 @@ extension GitClient {
     /// the program to read; `nil` (and said) when it can't be written,
     /// where git gives up before any program runs.
     func writeSignatureFile(_ signature: Data) async -> URL? {
+        await writeTemporaryFile(".git_vtag_tmp", signature)
+    }
+
+    /// `data` in a new temporary file named as git's `mks_tempfile_t`
+    /// names one (`prefix` and six random characters), in the shell's
+    /// temporary directory and through its sandbox; `nil` (and said)
+    /// when it can't be written.
+    func writeTemporaryFile(_ prefix: String, _ data: Data) async -> URL? {
         let file = Shell.temporaryDirectory
-            .appendingPathComponent(".git_vtag_tmp" + UUID().uuidString.prefix(6))
+            .appendingPathComponent(prefix + UUID().uuidString.prefix(6))
         do {
             try await Shell.authorize(file)
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)
-            try signature.write(to: file)
+            try data.write(to: file)
             return file
         } catch {
             Shell.current.stderr.write("error: could not create temporary file: \(error.localizedDescription)\n")
