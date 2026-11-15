@@ -13,6 +13,8 @@ struct Tag: AsyncParsableCommand {
               git tag <name> [<commit>]        create lightweight tag
               git tag -a <name> -m <msg> [<commit>]
                                                create annotated tag
+              git tag -s|-u <key> <name> -m <msg> [<commit>]
+                                               create signed annotated tag
               git tag -d <name>                delete tag
               git tag -l <pattern>             list with glob filter
               git tag -n[<num>]                list including annotation lines
@@ -24,6 +26,14 @@ struct Tag: AsyncParsableCommand {
     @Flag(name: [.customShort("a"), .customLong("annotate")],
           help: "Create an annotated tag (requires -m).")
     var annotate: Bool = false
+
+    @Flag(name: [.customShort("s"), .customLong("sign")], inversion: .prefixedNo,
+          help: "Create a signed annotated tag (tag.gpgsign when neither is given).")
+    var sign: Bool?
+
+    @Option(name: [.customShort("u"), .customLong("local-user")],
+            help: "Sign the annotated tag with this key.")
+    var localUser: String?
 
     @Flag(name: [.customShort("d"), .customLong("delete")],
           help: "Delete the named tag.")
@@ -70,9 +80,26 @@ struct Tag: AsyncParsableCommand {
         var pulledForce = force
         var pulledVerify = verify
         var pulledMessage = message
+        var pulledAnnotate = annotate
+        var pulledSign = sign
+        var pulledKey = localUser
         var i = 0
         while i < rest.count {
             let tok = rest[i]
+            if tok == "-a" || tok == "--annotate" {
+                pulledAnnotate = true; i += 1; continue
+            }
+            if tok == "-s" || tok == "--sign" || tok == "--no-sign" {
+                pulledSign = tok != "--no-sign"; i += 1; continue
+            }
+            if tok == "-u" || tok == "--local-user", i + 1 < rest.count {
+                pulledKey = rest[i + 1]
+                i += 2; continue
+            }
+            if tok.hasPrefix("--local-user=") {
+                pulledKey = String(tok.dropFirst("--local-user=".count))
+                i += 1; continue
+            }
             if tok == "-f" || tok == "--force" {
                 pulledForce = true; i += 1; continue
             }
@@ -152,17 +179,38 @@ struct Tag: AsyncParsableCommand {
                 "fatal: tag '\(name)' already exists", exitCode: 128)
         }
 
-        if annotate {
+        // As in git, signing (-s, -u, tag.gpgsign) or a message makes
+        // the tag an annotated one.
+        let signMode = try await client.tagSignMode(
+            sign: pulledSign, keyID: pulledKey, annotate: pulledAnnotate, message: useMessage != nil)
+        if pulledAnnotate || useMessage != nil || signMode != .noSign {
             guard let resolved = useMessage else {
                 throw CLIError.stderr(
                     "fatal: --annotate requires --message", exitCode: 128)
             }
-            _ = try await client.tagCreateAnnotated(
-                name: name, target: target, message: resolved,
-                tagger: nil, force: useForce)
+            do {
+                _ = try await client.tagCreateAnnotated(
+                    name: name, target: target, message: resolved,
+                    tagger: nil, force: useForce, sign: signMode)
+            } catch let failure as SwiftGit.GitClient.SigningFailure {
+                if let fatal = failure.fatal { throw CLIError.stderr("fatal: \(fatal)", exitCode: 128) }
+                let left = try await Self.editMessagePath(client)
+                throw CLIError.stderr(["error: unable to sign the tag", "The tag message has been left in \(left)"],
+                                      exitCode: 128)
+            }
         } else {
             _ = try await client.tagCreate(
                 name: name, target: target, force: useForce)
         }
+    }
+
+    /// Where git says it left the tag message, `TAG_EDITMSG` in the git
+    /// directory, named from the top of the work tree as git names it.
+    private static func editMessagePath(_ client: SwiftGit.GitClient) async throws -> String {
+        var directory = try await client.gitDir() ?? ".git"
+        while directory.count > 1, directory.hasSuffix("/") { directory.removeLast() }
+        let path = directory + "/TAG_EDITMSG"
+        guard let top = try await client.toplevel(), path.hasPrefix(top + "/") else { return path }
+        return String(path.dropFirst(top.count + 1))
     }
 }

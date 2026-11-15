@@ -36,6 +36,7 @@ public struct GitCommand: AsyncParsableCommand {
             Branch.self,
             Tag.self,
             VerifyTag.self,
+            VerifyCommit.self,
             RevParse.self,
             Show.self,
             Mv.self,
@@ -72,6 +73,9 @@ public struct GitCommand: AsyncParsableCommand {
     ///   which ArgumentParser reads as no value) become values of the one
     ///   `--force-with-lease` option, so that, as in git, they take
     ///   effect in the order given among its `=<ref>[:<expect>]` forms.
+    /// - `-S[<keyid>]`, `--gpg-sign[=<keyid>]` and `--no-gpg-sign` become
+    ///   tagged `--gpg-sign=` values for the commands that sign commits
+    ///   (see ``GPGSign``).
     ///
     /// Tokens after a standalone `--` are pathspecs and pass through
     /// untouched, so `git diff -- --color` still filters a file literally
@@ -122,6 +126,9 @@ public struct GitCommand: AsyncParsableCommand {
                 out.append("--force-with-lease==\(arg.dropFirst("--force-with-lease=".count))")
             } else if !afterDoubleDash, subcommand == "push", arg == "--no-force-with-lease" {
                 out.append("--force-with-lease=\(Push.leaseNone)")
+            } else if !afterDoubleDash, GPGSign.subcommands.contains(subcommand),
+                      let rewritten = GPGSign.rewrite(arg) {
+                out.append(rewritten)
             } else {
                 out.append(arg)
             }

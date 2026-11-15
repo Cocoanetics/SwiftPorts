@@ -31,6 +31,10 @@ struct Rebase: AsyncParsableCommand {
             help: "Replay commits onto NEWBASE instead of `<upstream>`.")
     var onto: String?
 
+    @Option(name: .customLong("gpg-sign"),
+            help: "GPG-sign commits (-S[<keyid>], --gpg-sign[=<keyid>], --no-gpg-sign).")
+    var gpgSign: [String] = []
+
     @Argument(help: "Upstream branch to rebase against. Required unless --continue / --abort.")
     var upstream: String?
 
@@ -65,21 +69,19 @@ struct Rebase: AsyncParsableCommand {
         let outcome: RebaseOutcome
         do {
             if continueRebase {
-                outcome = try await client.rebaseContinue(author: nil) { current, total in
+                outcome = try await client.rebaseContinue(author: nil, sign: GPGSign.mode(gpgSign)) { current, total in
                     Self.emitProgress(current: current, total: total)
                 }
             } else if skip {
-                outcome = try await client.rebaseSkip(author: nil) { current, total in
+                outcome = try await client.rebaseSkip(author: nil, sign: GPGSign.mode(gpgSign)) { current, total in
                     Self.emitProgress(current: current, total: total)
                 }
             } else {
-                outcome = try await client.rebase(
-                    upstream: upstream!,
-                    onto: onto,
-                    author: nil) { current, total in
-                    Self.emitProgress(current: current, total: total)
-                }
+                outcome = try await Self.replay(
+                    upstream: upstream!, onto: onto, sign: GPGSign.mode(gpgSign), quiet: false, client: client)
             }
+        } catch let failure as SwiftGit.GitClient.SigningFailure {
+            throw Self.signingFailure(failure)
         } catch let err as Libgit2Error
             where err.message.contains("no rebase in progress") {
             throw CLIError.stderr(
@@ -87,6 +89,30 @@ struct Rebase: AsyncParsableCommand {
         }
 
         try Self.printOutcome(outcome)
+    }
+
+    /// `git rebase <upstream> [--onto <onto>]` with its progress (none
+    /// when `quiet`), as `git rebase` and `git pull --rebase` run it; a
+    /// signature that fails stops it as ``signingFailure(_:)`` says.
+    static func replay(
+        upstream: String, onto: String?, sign: SignMode, quiet: Bool, client: SwiftGit.GitClient
+    ) async throws -> RebaseOutcome {
+        do {
+            return try await client.rebase(upstream: upstream, onto: onto, author: nil, sign: sign) { current, total in
+                if !quiet { emitProgress(current: current, total: total) }
+            }
+        } catch let failure as SwiftGit.GitClient.SigningFailure {
+            throw signingFailure(failure)
+        }
+    }
+
+    /// git's words when signing stopped a replayed commit being written;
+    /// the rebase stops there, as on a conflict.
+    static func signingFailure(_ failure: SwiftGit.GitClient.SigningFailure) -> CLIError {
+        guard let fatal = failure.fatal else {
+            return CLIError.stderr("error: failed to write commit object", exitCode: 1)
+        }
+        return CLIError.stderr("fatal: \(fatal)", exitCode: 128)
     }
 
     /// Emit the per-step `Rebasing (i/n)\r` overwrite line to stderr.

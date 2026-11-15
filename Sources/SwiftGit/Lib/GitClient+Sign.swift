@@ -13,12 +13,17 @@ extension GitClient {
     /// Signing failed, as git reports it. What git said on the way is
     /// already on the shell's stderr; `fatal` is set when git dies at
     /// that point (`fatal: <fatal>`), and `nil` when it goes on to fail
-    /// the write itself (`fatal: failed to write commit object`,
-    /// `error: unable to sign the tag`).
-    public struct SigningFailure: Error, Sendable, CustomStringConvertible {
+    /// the write itself. Uncaught, it ends the command as `git commit`
+    /// and `git merge` end, `fatal: failed to write commit object`;
+    /// `cherry-pick`, `rebase` and `tag` say their own words.
+    public struct SigningFailure: Error, Sendable, CustomStringConvertible, CommandFailure {
         public let fatal: String?
 
-        public var description: String { fatal ?? "gpg failed to sign the data" }
+        public var description: String { fatal ?? "failed to write commit object" }
+
+        public var diagnostic: String { "fatal: \(description)\n" }
+
+        public var exitStatus: ExitStatus { ExitStatus(128) }
     }
 
     /// The signing config git's `git_gpg_config` reads, from the same

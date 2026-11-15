@@ -23,6 +23,32 @@ extension GitClient {
         /// was tried (no tagger, another format), as git leaves it.
         public var output: String?
         public var succeeded: Bool
+        /// git's result letter for the signature (`G`, `B`, `E`, `X`,
+        /// `Y`, `R`), `N` when there is none to tell.
+        public var result: Character = "N"
+        /// Who signed: the uid gpg names, the principal ssh-keygen found.
+        public var signer: String?
+        /// The key: gpg's long key id, an SSH key's fingerprint.
+        public var key: String?
+        public var fingerprint: String?
+        /// The primary key's fingerprint, which only OpenPGP gives.
+        public var primaryKeyFingerprint: String?
+        /// The trust level as an index into ``trustLevels``.
+        var trust = 0
+
+        /// `undefined`, `never`, `marginal`, `fully` or `ultimate`, as
+        /// git's `%GT` names the trust in the key.
+        public var trustLevel: String { trustLevels[trust].lowercased() }
+
+        /// No signature: what git's `%G` placeholders show for an
+        /// unsigned commit.
+        public static let unsigned = SignatureCheck(payload: Data(), status: "", output: nil, succeeded: false)
+
+        /// What `%G?` shows: the result letter, with a good signature of
+        /// a key trusted `undefined` or `never` as `U`.
+        public var verdict: Character {
+            result == "G" && trust < 2 ? "U" : result
+        }
     }
 
     /// One tag object, split as git's `parse_signature` splits it.
@@ -56,7 +82,17 @@ extension GitClient {
     /// with `inTagNamespace`, as `git tag -v` (only `refs/tags/<name>`).
     public func verifyTag(_ name: String, inTagNamespace: Bool = false) async throws -> TagVerification {
         let spec = inTagNamespace ? "refs/tags/" + name : name
-        let found: (oid: String, type: String)? = try await withRepository { _ in
+        guard let found = try await lookUpObject(spec) else { return .notFound }
+        guard found.type == "tag" else { return .notATag(type: found.type) }
+        guard let signed = try await signedObject(found.oid) else { return .notFound }
+        guard !signed.signature.isEmpty else { return .unsigned(object: signed.object) }
+        return .checked(object: signed.object, try await checkSignature(signed))
+    }
+
+    /// The object `spec` names and its type (`commit`, `tag`, …); `nil`
+    /// when it names none.
+    func lookUpObject(_ spec: String) async throws -> (oid: String, type: String)? {
+        try await withRepository { _ in
             var repo: OpaquePointer?
             var object: OpaquePointer?
             defer {
@@ -68,11 +104,6 @@ extension GitClient {
             let oid = git_object_id(object).map { String(cString: git_oid_tostr_s($0)) } ?? ""
             return (oid, String(cString: git_object_type2string(git_object_type(object))))
         }
-        guard let found else { return .notFound }
-        guard found.type == "tag" else { return .notATag(type: found.type) }
-        guard let signed = try await signedObject(found.oid) else { return .notFound }
-        guard !signed.signature.isEmpty else { return .unsigned(object: signed.object) }
-        return .checked(object: signed.object, try await checkSignature(signed))
     }
 
     /// Tag object `oid` split into payload and signature; `nil` when
@@ -114,13 +145,13 @@ extension GitClient {
         "-----BEGIN SIGNED MESSAGE-----", "-----BEGIN SSH SIGNATURE-----"
     ].map { Array($0.utf8) }
 
-    /// git's `check_signature` for a tag: the signature through the
-    /// OpenPGP program, then its status lines and the trust the config
-    /// asks for.
-    func checkSignature(_ signed: SignedObject) async throws -> SignatureCheck {
+    /// git's `check_signature` for a tag (or, with `identity`
+    /// `committer`, a commit): the signature through the OpenPGP program,
+    /// then its status lines and the trust the config asks for.
+    func checkSignature(_ signed: SignedObject, identity: String = "tagger") async throws -> SignatureCheck {
         let payload = signed.payload
         let failed = SignatureCheck(payload: payload, status: "", output: nil, succeeded: false)
-        // The signer comes from the tagger header.
+        // The signer comes from the tagger (committer) header.
         let headers = String(decoding: payload, as: UTF8.self).components(separatedBy: "\n\n")[0]
         let signature = String(decoding: signed.signature, as: UTF8.self)
         let isSSH = signature.hasPrefix("-----BEGIN SSH SIGNATURE-----")
@@ -131,7 +162,7 @@ extension GitClient {
             Shell.current.stderr.write("error: x509 signature verification is not supported\n")
             return failed
         }
-        guard let tagger = headers.split(separator: "\n").first(where: { $0.hasPrefix("tagger ") }),
+        guard let tagger = headers.split(separator: "\n").first(where: { $0.hasPrefix(identity + " ") }),
               let open = tagger.firstIndex(of: "<"), tagger[open...].contains(">")
         else { return failed }
 
@@ -161,9 +192,10 @@ extension GitClient {
             guard let output = run.output else {
                 return SignatureCheck(payload: payload, status: "", output: nil, succeeded: false)
             }
-            let (result, trust) = Self.parseSSHOutput(output)
-            let failure = run.failed || (result != "G" && result != "Y") || trust < minimumTrust
-            return SignatureCheck(payload: payload, status: output, output: output, succeeded: !failure)
+            var check = SignatureCheck(payload: payload, status: output, output: output, succeeded: false)
+            Self.parseSSHOutput(output, into: &check)
+            check.succeeded = !(run.failed || (check.result != "G" && check.result != "Y") || check.trust < minimumTrust)
+            return check
         }
         let run = try await runVerifier(program, payload: payload, signature: signed.signature)
         // git needs a status line to start with a newline, and a good
@@ -171,44 +203,58 @@ extension GitClient {
         var failure = run.failed
         let status = run.status
         failure = failure || (!status.contains("\n[GNUPG:] GOODSIG ") && !status.contains("\n[GNUPG:] EXPKEYSIG "))
-        let (result, trust) = Self.parseStatus(status)
-        failure = failure || (result != "G" && result != "Y") || trust < minimumTrust
-        return SignatureCheck(payload: payload, status: status, output: run.output, succeeded: !failure)
+        var check = SignatureCheck(payload: payload, status: status, output: run.output, succeeded: false)
+        Self.parseStatus(status, into: &check)
+        check.succeeded = !(failure || (check.result != "G" && check.result != "Y") || check.trust < minimumTrust)
+        return check
     }
 
     /// The trust levels `gpg.minTrustLevel` and gpg's `TRUST_` lines
     /// name, in git's order.
     private static func trustLevel(_ name: String) -> Int? {
-        ["UNDEFINED", "NEVER", "MARGINAL", "FULLY", "ULTIMATE"].firstIndex(of: name)
+        trustLevels.firstIndex(of: name)
     }
 
-    /// git's `parse_gpg_output`: the result letter and trust level the
-    /// status lines give. More than one signature's result, or a trust
-    /// level it doesn't know, is an error (`E`).
-    private static func parseStatus(_ status: String) -> (result: Character, trust: Int) {
-        let checks: [(result: Character?, prefix: String, exclusive: Bool)] = [
-            ("G", "GOODSIG ", true), ("B", "BADSIG ", true), ("E", "ERRSIG ", true),
-            ("X", "EXPSIG ", true), ("Y", "EXPKEYSIG ", true), ("R", "REVKEYSIG ", true),
-            (nil, "VALIDSIG ", false), (nil, "TRUST_", false)
+    /// git's `parse_gpg_output`: the result letter, key, signer,
+    /// fingerprints and trust level the status lines give. More than one
+    /// signature's result, or a trust level it doesn't know, is an error
+    /// (`E`), with nothing else kept.
+    private static func parseStatus(_ status: String, into check: inout SignatureCheck) {
+        // The result each status gives, whether it is a signature's one
+        // result, and whether a key id (and then the uid) follows.
+        let statuses: [(result: Character?, prefix: String, exclusive: Bool, key: Bool, uid: Bool)] = [
+            ("G", "GOODSIG ", true, true, true), ("B", "BADSIG ", true, true, true),
+            ("E", "ERRSIG ", true, true, false), ("X", "EXPSIG ", true, true, true),
+            ("Y", "EXPKEYSIG ", true, true, true), ("R", "REVKEYSIG ", true, true, true),
+            (nil, "VALIDSIG ", false, false, false), (nil, "TRUST_", false, false, false)
         ]
-        var result: Character = "N"
-        var trust = 0
         var exclusive = 0
         for raw in status.split(separator: "\n") where raw.hasPrefix("[GNUPG:] ") {
             let line = raw.dropFirst("[GNUPG:] ".count)
-            guard let check = checks.first(where: { line.hasPrefix($0.prefix) }) else { continue }
-            if check.exclusive {
+            guard let match = statuses.first(where: { line.hasPrefix($0.prefix) }) else { continue }
+            let rest = line.dropFirst(match.prefix.count)
+            if match.exclusive {
                 exclusive += 1
-                if exclusive > 1 { return ("E", trust) }
+                if exclusive > 1 { return check.failParsing() }
             }
-            if let letter = check.result { result = letter }
-            if check.prefix == "TRUST_" {
-                let name = line.dropFirst(check.prefix.count).prefix { $0 != " " }
-                guard let level = trustLevel(String(name)) else { return ("E", trust) }
-                trust = level
+            if let letter = match.result { check.result = letter }
+            if match.key {
+                let fields = rest.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
+                check.key = String(fields[0])
+                if match.uid, fields.count > 1 { check.signer = String(fields[1]) }
+            }
+            if match.prefix == "TRUST_" {
+                guard let level = trustLevel(String(rest.prefix { $0 != " " })) else { return check.failParsing() }
+                check.trust = level
+            }
+            if match.prefix == "VALIDSIG " {
+                // The primary key's fingerprint is the tenth field, when
+                // there is one.
+                let fields = rest.split(separator: " ", omittingEmptySubsequences: false)
+                check.fingerprint = String(fields[0])
+                check.primaryKeyFingerprint = fields.count > 9 ? fields[9...].joined(separator: " ") : nil
             }
         }
-        return (result, trust)
     }
 
     /// What running the verifier came to.
@@ -357,6 +403,21 @@ extension GitClient {
             shell.stderr.write("error: cannot run \(program): \(error.localizedDescription)\n")
         }
         return nil
+    }
+}
+
+/// gpg's trust levels (its `TRUST_` lines), in git's order.
+let trustLevels = ["UNDEFINED", "NEVER", "MARGINAL", "FULLY", "ULTIMATE"]
+
+extension GitClient.SignatureCheck {
+    /// What git's `parse_gpg_output` keeps of status lines it refuses:
+    /// an error, and nothing about who or which key.
+    fileprivate mutating func failParsing() {
+        result = "E"
+        signer = nil
+        key = nil
+        fingerprint = nil
+        primaryKeyFingerprint = nil
     }
 }
 

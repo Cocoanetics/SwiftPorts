@@ -14,8 +14,8 @@ extension GitClient {
         upstream upstreamSpec: String,
         onto ontoSpec: String? = nil,
         author: GitSignature? = nil,
-        progress: (@Sendable (Int, Int) -> Void)? = nil,
-        sign: SignMode = .config
+        sign: SignMode = .config,
+        progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> RebaseOutcome {
         try await withRepository {
             try $0.rebase(
@@ -30,8 +30,8 @@ extension GitClient {
     /// does), else `commit.gpgsign`.
     public func rebaseContinue(
         author: GitSignature? = nil,
-        progress: (@Sendable (Int, Int) -> Void)? = nil,
-        sign: SignMode = .config
+        sign: SignMode = .config,
+        progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> RebaseOutcome {
         try await withRepository {
             try $0.rebaseContinue(author: author.core, progress: progress, sign: sign)
@@ -39,11 +39,11 @@ extension GitClient {
     }
 
     /// Skip the conflicting commit and resume the rebase, signing as
-    /// ``rebaseContinue(author:progress:sign:)`` does.
+    /// ``rebaseContinue(author:sign:progress:)`` does.
     public func rebaseSkip(
         author: GitSignature? = nil,
-        progress: (@Sendable (Int, Int) -> Void)? = nil,
-        sign: SignMode = .config
+        sign: SignMode = .config,
+        progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> RebaseOutcome {
         try await withRepository {
             try $0.rebaseSkip(author: author.core, progress: progress, sign: sign)

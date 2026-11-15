@@ -103,31 +103,40 @@ extension GitClient {
     }
 
     /// git's `parse_ssh_output`: `ssh-keygen`'s first line as a result
-    /// letter and trust level. A known principal is fully trusted, a good
-    /// signature of an unknown key undefined, anything else bad.
-    static func parseSSHOutput(_ output: String) -> (result: Character, trust: Int) {
+    /// letter, trust level, principal and key fingerprint. A known
+    /// principal is fully trusted, a good signature of an unknown key
+    /// undefined, anything else bad (and never trusted).
+    static func parseSSHOutput(_ output: String, into check: inout SignatureCheck) {
         var line = Substring(output.prefix { $0 != "\n" })
-        let bad: (Character, Int) = ("B", 1)
-        var trust: Int
+        check.result = "B"
+        check.trust = 1
         if line.hasPrefix("Good \"git\" signature for ") {
             line = line.dropFirst("Good \"git\" signature for ".count)
             // The last " with " ends the principal, which may hold spaces.
-            guard let with = line.ranges(of: " with ").last else { return bad }
+            guard let with = line.ranges(of: " with ").last else { return }
+            check.signer = String(line[..<with.lowerBound])
             line = line[line.index(after: with.lowerBound)...]
-            trust = 3
+            check.result = "G"
+            check.trust = 3
         } else if line.hasPrefix("Good \"git\" signature with ") {
             line = line.dropFirst("Good \"git\" signature with ".count)
-            trust = 0
+            check.result = "G"
+            check.trust = 0
         } else {
-            return bad
+            return
         }
-        return line.contains("key ") ? ("G", trust) : bad
+        guard let key = line.range(of: "key ") else {
+            check.result = "B"
+            return
+        }
+        check.fingerprint = String(line[key.upperBound...])
+        check.key = check.fingerprint
     }
 
     /// git's `strbuf_stripspace` without comments: trailing whitespace
     /// off each line, blank runs collapsed to one line, none leading or
     /// trailing, and a non-empty result ends with a newline.
-    static func stripspace(_ text: String) -> String {
+    public static func stripspace(_ text: String) -> String {
         var lines: [Substring] = []
         var blank = false
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {

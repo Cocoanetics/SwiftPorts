@@ -9,12 +9,17 @@ struct Show: AsyncParsableCommand {
         abstract: "Show various types of objects (commits and tags today)."
     )
 
+    @Flag(name: .customLong("show-signature"), inversion: .prefixedNo,
+          help: "Check a signed commit's signature and show the result (log.showSignature).")
+    var showSignature: Bool?
+
     @Argument(help: "Object to show. Defaults to HEAD.")
     var spec: String?
 
     func run() async throws {
         let client = CommandContext.gitClient()
         let target = spec ?? "HEAD"
+        let showSignatures = try await Log.pullShowSignature([], flag: showSignature, client: client).show
 
         // Resolve the object first. We support commits + annotated
         // tags (real git also supports trees, blobs — those need
@@ -40,20 +45,26 @@ struct Show: AsyncParsableCommand {
             // Print message body.
             stdout.write(Data("\n\(tag.summary)\n".utf8))
             // Then the target commit.
-            try await showCommit(sha: tag.targetSHA, client: client, stdout: stdout)
+            try await showCommit(sha: tag.targetSHA, client: client, stdout: stdout, signature: showSignatures)
             return
         }
 
-        try await showCommit(sha: sha, client: client, stdout: stdout)
+        try await showCommit(sha: sha, client: client, stdout: stdout, signature: showSignatures)
     }
 
     /// One-commit `defaultFormat` block + unified diff against parent.
     private func showCommit(
-        sha: String, client: SwiftGit.GitClient, stdout: OutputSink
+        sha: String, client: SwiftGit.GitClient, stdout: OutputSink, signature: Bool
     ) async throws {
         let entries = try await client.log(LogQuery(starts: [sha], maxCount: 1))
         guard let entry = entries.first else { return }
-        stdout.write(Data(entry.defaultFormat().utf8))
+        var block = entry.defaultFormat()
+        // `--show-signature`: the signature's lines after `commit <sha>`.
+        if signature, let header = block.firstIndex(of: "\n") {
+            let lines = Log.signatureLines(try await client.commitSignatureCheck(entry.sha))
+            block.insert(contentsOf: lines, at: block.index(after: header))
+        }
+        stdout.write(Data(block.utf8))
 
         // Diff: against first parent, or against the empty tree for
         // the root commit (every file appears as an addition, matching
