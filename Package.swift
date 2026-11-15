@@ -1406,7 +1406,7 @@ let package = Package(
                 "SSHKeygenCommand",
             ],
             path: "Sources/SwiftPortsCommands"
-        ),
+        )
     // Host-gated system-library shims (issue #80) are passed via `plus:`
     // (not concatenated onto this literal — see `androidFiltered` above).
     // They're empty off-host, so they add nothing on macOS/iOS and are never
