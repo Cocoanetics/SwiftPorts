@@ -34,10 +34,11 @@ extension GitClient {
                 "error: gpg.ssh.allowedSignersFile needs to be configured and exist for ssh signature verification\n")
             return VerifierRun(failed: true, status: "", output: nil)
         }
-        guard let file = writeSignatureFile(signature) else {
+        guard let file = await writeSignatureFile(signature) else {
             return VerifierRun(failed: true, status: "", output: nil)
         }
         defer { try? FileManager.default.removeItem(at: file) }
+        let signaturePath = shell.displayPath(for: file)
 
         // The time the signature is checked at: when it was made, in the
         // local timezone, as ssh-keygen's key validity has none.
@@ -51,7 +52,7 @@ extension GitClient {
         }
 
         let principals = await launch(
-            program, ["-Y", "find-principals", "-f", allowedSigners, "-s", file.path, verifyTime], input: Data())
+            program, ["-Y", "find-principals", "-f", allowedSigners, "-s", signaturePath, verifyTime], input: Data())
         if let principals, !principals.succeeded, principals.stderr.contains("usage:") {
             shell.stderr.write("error: ssh-keygen -Y find-principals/verify is needed for ssh signature "
                 + "verification (available in openssh version 8.2p1+)\n")
@@ -66,10 +67,15 @@ extension GitClient {
                 if line.hasSuffix("\r") { line = line.dropLast() }
                 guard !line.isEmpty else { continue }
                 var arguments = ["-Y", "verify", "-n", "git", "-f", allowedSigners, "-I", String(line),
-                                 "-s", file.path, verifyTime]
+                                 "-s", signaturePath, verifyTime]
                 if let revocationFile {
-                    if FileManager.default.fileExists(atPath: URL(fileURLWithPath: revocationFile,
-                                                                  relativeTo: workingDirectory).path) {
+                    let revocationURL = shell.resolve(revocationFile)
+                    do { try await Shell.authorize(revocationURL) }
+                    catch {
+                        shell.stderr.write("error: cannot read ssh signing revocation file: \(revocationFile)\n")
+                        return VerifierRun(failed: true, status: "", output: nil)
+                    }
+                    if FileManager.default.fileExists(atPath: revocationURL.path) {
                         arguments += ["-r", revocationFile]
                     } else {
                         shell.stderr.write(
@@ -85,7 +91,7 @@ extension GitClient {
         } else {
             // No principal vouches for it: shown anyway, then failed.
             verified = await launch(
-                program, ["-Y", "check-novalidate", "-n", "git", "-s", file.path, verifyTime], input: payload)
+                program, ["-Y", "check-novalidate", "-n", "git", "-s", signaturePath, verifyTime], input: payload)
         }
         let output = Self.stripspace(verified?.stdout ?? "") + principalsError + Self.stripspace(verified?.stderr ?? "")
         return VerifierRun(failed: !succeeded, status: output, output: output)

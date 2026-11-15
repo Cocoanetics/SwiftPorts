@@ -7,6 +7,8 @@ import Foundation
 import Testing
 import ArgumentParser
 import ShellKit
+import SSHKit
+import SwiftPortsCommands
 @testable import SwiftGit
 @testable import GitCommand
 
@@ -268,6 +270,79 @@ struct GitCommandVerifyTagSSHTests {
         let bare = try await git(["verify-tag", "v1"], in: root, launcher: SandboxedDenyLauncher())
         #expect(bare.stderr == Self.noAllowedSigners)
         #expect(bare.status == 1)
+    }
+
+    @Test("registered ssh-keygen verifies a signed tag with empty PATH and mapped sandbox paths")
+    func registeredKeygenWithoutSystemProcess() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("EmbeddedSSH-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try systemGit(["init", "-q", "-b", "main"], in: root)
+        try systemGit(["config", "user.name", "Test"], in: root)
+        try systemGit(["config", "user.email", "test@example.com"], in: root)
+        try systemGit(["commit", "--allow-empty", "-q", "-m", "init"], in: root)
+        let commit = try systemGit(["rev-parse", "HEAD"], in: root)
+        let key = try SSHPrivateKey.generate(type: "ed25519")
+        let payload = "object \(commit)\ntype commit\ntag v1\ntagger Test <test@example.com> 1700000000 +0000\n\nrelease\n"
+        let signature = try SSHSignature(signing: Data(payload.utf8), namespace: "git", key: key)
+        let tags = [("v1", payload), ("tampered", payload.replacingOccurrences(of: "release", with: "tampered"))]
+        for (tag, body) in tags {
+            let file = root.appendingPathComponent("tagobject")
+            try (body + signature.armored).write(to: file, atomically: true, encoding: .utf8)
+            let oid = try systemGit(["hash-object", "-t", "tag", "-w", file.path], in: root)
+            try systemGit(["update-ref", "refs/tags/" + tag, oid], in: root)
+        }
+        try systemGit(["config", "gpg.ssh.allowedSignersFile", "/workspace/allowed"], in: root)
+        let mapping = PathMapping(mounts: [.init(virtual: "/workspace", host: root.path)])
+        let commands = SwiftPortsCommands.argumentParserCommands
+        let out = OutputSink(), err = OutputSink()
+        let shell = Shell(
+            stdout: out, stderr: err,
+            environment: Environment(variables: ["PATH": "", "HOME": root.path,
+                                                 "XDG_CONFIG_HOME": root.appendingPathComponent(".config").path,
+                                                 "GIT_CONFIG_GLOBAL": root.appendingPathComponent(".gitconfig").path,
+                                                 "GIT_CONFIG_NOSYSTEM": "1"], workingDirectory: "/workspace"),
+            commands: Dictionary(uniqueKeysWithValues: commands.map { ($0.name, $0) }),
+            processLauncher: ChainLauncher(primary: RegisteredCommandLauncher(),
+                                           fallback: SandboxedDenyLauncher(reason: "no processes")))
+        shell.sandbox = .confined(to: mapping, home: "/workspace", temporaryDirectory: root)
+        let allowed = root.appendingPathComponent("allowed")
+        try ("alice@example.com " + key.publicKey.openSSHLine() + "\n")
+            .write(to: allowed, atomically: true, encoding: .utf8)
+        try await shell.withCurrent {
+            let parsed = try GitCommand.parseAsRoot(["verify-tag", "v1"])
+            var command = try #require(parsed as? AsyncParsableCommand)
+            try await command.run()
+            for tag in ["tampered", "v1"] {
+                if tag == "v1" {
+                    let unknown = try SSHPrivateKey.generate(type: "ed25519")
+                    try ("mallory " + unknown.publicKey.openSSHLine() + "\n")
+                        .write(to: allowed, atomically: true, encoding: .utf8)
+                }
+                let parsed = try GitCommand.parseAsRoot(["verify-tag", tag])
+                var bad = try #require(parsed as? AsyncParsableCommand)
+                await #expect(throws: (any Error).self) { try await bad.run() }
+            }
+            try ("alice@example.com " + key.publicKey.openSSHLine() + "\n")
+                .write(to: allowed, atomically: true, encoding: .utf8)
+            try key.publicKey.openSSHLine().write(to: root.appendingPathComponent("revoked"),
+                                                 atomically: true, encoding: .utf8)
+            try await GitClient(workingDirectory: root).configSet("gpg.ssh.revocationFile", "/workspace/revoked")
+            let parsedRevoked = try GitCommand.parseAsRoot(["verify-tag", "v1"])
+            var revoked = try #require(parsedRevoked as? AsyncParsableCommand)
+            await #expect(throws: (any Error).self) { try await revoked.run() }
+            try await GitClient(workingDirectory: root).configSet("gpg.ssh.revocationFile", "/outside/revoked")
+            let parsedDenied = try GitCommand.parseAsRoot(["verify-tag", "v1"])
+            var denied = try #require(parsedDenied as? AsyncParsableCommand)
+            await #expect(throws: (any Error).self) { try await denied.run() }
+        }
+        out.finish()
+        err.finish()
+        let printed = await err.readAllString()
+        #expect(printed.hasPrefix("Good \"git\" signature for alice@example.com with ED25519 key SHA256:"))
+        #expect(printed.contains("No principal matched."))
+        #expect(!printed.contains("no processes"))
+        #expect(!printed.contains(root.path))
     }
 
     @Test("merge and octopus templates carry SSH verification, as git's do", .enabled(if: hasSSHKeygen))
