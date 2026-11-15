@@ -7,21 +7,21 @@
 /// `piS`/`piP` are the S-box/P-box tables `Blowfish_initstate`'s `initstate` constant seeds with —
 /// the fractional digits of pi, copied verbatim (same literal order) from `blowfish.c`.
 struct BlowfishContext {
-    private var S: [UInt32]
-    private var P: [UInt32]
+    private var sBoxes: [UInt32]
+    private var pArray: [UInt32]
 
     init() {
-        self.S = Self.piSFlat
-        self.P = Self.piP
+        self.sBoxes = Self.piSFlat
+        self.pArray = Self.piP
     }
 
     /// `F(s, x)` from `blowfish.c`'s Feistel-round macro.
     @inline(__always)
     private func f(_ x: UInt32) -> UInt32 {
-        let s0 = self.S[Int((x >> 24) & 0xff)]
-        let s1 = self.S[256 + Int((x >> 16) & 0xff)]
-        let s2 = self.S[512 + Int((x >> 8) & 0xff)]
-        let s3 = self.S[768 + Int(x & 0xff)]
+        let s0 = self.sBoxes[Int((x >> 24) & 0xff)]
+        let s1 = self.sBoxes[256 + Int((x >> 16) & 0xff)]
+        let s2 = self.sBoxes[512 + Int((x >> 8) & 0xff)]
+        let s3 = self.sBoxes[768 + Int(x & 0xff)]
         return ((s0 &+ s1) ^ s2) &+ s3
     }
 
@@ -29,27 +29,27 @@ struct BlowfishContext {
     /// expansion, to keep a 1:1 line correspondence with the reference.
     @inline(__always)
     mutating func encipher(_ xl: inout UInt32, _ xr: inout UInt32) {
-        var Xl = xl
-        var Xr = xr
-        Xl ^= self.P[0]
-        Xr ^= self.f(Xl) ^ self.P[1]
-        Xl ^= self.f(Xr) ^ self.P[2]
-        Xr ^= self.f(Xl) ^ self.P[3]
-        Xl ^= self.f(Xr) ^ self.P[4]
-        Xr ^= self.f(Xl) ^ self.P[5]
-        Xl ^= self.f(Xr) ^ self.P[6]
-        Xr ^= self.f(Xl) ^ self.P[7]
-        Xl ^= self.f(Xr) ^ self.P[8]
-        Xr ^= self.f(Xl) ^ self.P[9]
-        Xl ^= self.f(Xr) ^ self.P[10]
-        Xr ^= self.f(Xl) ^ self.P[11]
-        Xl ^= self.f(Xr) ^ self.P[12]
-        Xr ^= self.f(Xl) ^ self.P[13]
-        Xl ^= self.f(Xr) ^ self.P[14]
-        Xr ^= self.f(Xl) ^ self.P[15]
-        Xl ^= self.f(Xr) ^ self.P[16]
-        xl = Xr ^ self.P[17]
-        xr = Xl
+        var left = xl
+        var right = xr
+        left ^= self.pArray[0]
+        right ^= self.f(left) ^ self.pArray[1]
+        left ^= self.f(right) ^ self.pArray[2]
+        right ^= self.f(left) ^ self.pArray[3]
+        left ^= self.f(right) ^ self.pArray[4]
+        right ^= self.f(left) ^ self.pArray[5]
+        left ^= self.f(right) ^ self.pArray[6]
+        right ^= self.f(left) ^ self.pArray[7]
+        left ^= self.f(right) ^ self.pArray[8]
+        right ^= self.f(left) ^ self.pArray[9]
+        left ^= self.f(right) ^ self.pArray[10]
+        right ^= self.f(left) ^ self.pArray[11]
+        left ^= self.f(right) ^ self.pArray[12]
+        right ^= self.f(left) ^ self.pArray[13]
+        left ^= self.f(right) ^ self.pArray[14]
+        right ^= self.f(left) ^ self.pArray[15]
+        left ^= self.f(right) ^ self.pArray[16]
+        xl = right ^ self.pArray[17]
+        xr = left
     }
 
     /// `blf_enc` — encrypts `data` in place as consecutive two-word (8-byte) blocks.
@@ -85,17 +85,17 @@ struct BlowfishContext {
     /// the running state (key schedule only, no additional `data` stream).
     mutating func expand0State(key: [UInt8]) {
         var j = 0
-        for i in 0..<self.P.count {
-            self.P[i] ^= Self.streamToWord(key, current: &j)
+        for i in 0..<self.pArray.count {
+            self.pArray[i] ^= Self.streamToWord(key, current: &j)
         }
 
         var datal: UInt32 = 0
         var datar: UInt32 = 0
         var i = 0
-        while i < self.P.count {
+        while i < self.pArray.count {
             self.encipher(&datal, &datar)
-            self.P[i] = datal
-            self.P[i + 1] = datar
+            self.pArray[i] = datal
+            self.pArray[i + 1] = datar
             i += 2
         }
 
@@ -103,8 +103,8 @@ struct BlowfishContext {
             var k = 0
             while k < 256 {
                 self.encipher(&datal, &datar)
-                self.S[box * 256 + k] = datal
-                self.S[box * 256 + k + 1] = datar
+                self.sBoxes[box * 256 + k] = datal
+                self.sBoxes[box * 256 + k + 1] = datar
                 k += 2
             }
         }
@@ -114,20 +114,20 @@ struct BlowfishContext {
     /// every enciphered block before re-deriving `P`/`S`.
     mutating func expandState(data: [UInt8], key: [UInt8]) {
         var j = 0
-        for i in 0..<self.P.count {
-            self.P[i] ^= Self.streamToWord(key, current: &j)
+        for i in 0..<self.pArray.count {
+            self.pArray[i] ^= Self.streamToWord(key, current: &j)
         }
 
         j = 0
         var datal: UInt32 = 0
         var datar: UInt32 = 0
         var i = 0
-        while i < self.P.count {
+        while i < self.pArray.count {
             datal ^= Self.streamToWord(data, current: &j)
             datar ^= Self.streamToWord(data, current: &j)
             self.encipher(&datal, &datar)
-            self.P[i] = datal
-            self.P[i + 1] = datar
+            self.pArray[i] = datal
+            self.pArray[i + 1] = datar
             i += 2
         }
 
@@ -137,8 +137,8 @@ struct BlowfishContext {
                 datal ^= Self.streamToWord(data, current: &j)
                 datar ^= Self.streamToWord(data, current: &j)
                 self.encipher(&datal, &datar)
-                self.S[box * 256 + k] = datal
-                self.S[box * 256 + k + 1] = datar
+                self.sBoxes[box * 256 + k] = datal
+                self.sBoxes[box * 256 + k + 1] = datar
                 k += 2
             }
         }
