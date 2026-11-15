@@ -136,7 +136,8 @@ struct GitCommandMergeMessageTests {
     }
 
     @Test("-m space cleanup preserves indentation and comments", arguments: [
-        "x", "x\n\n\n", "  x  ", "\n\n  x  \n\n\n# retained  \n\n  body\t\n\n"
+        "x", "x\n\n\n", "  x  ", "x\u{00a0}", "x\u{2003}", "x\u{00a0} \t",
+        "x\u{000b}\u{000c}\r", "\n\n  x  \n\n\n# retained  \n\n  body\t\n\n"
     ])
     func explicitMessage(text: String) async throws {
         let dir = try root()
