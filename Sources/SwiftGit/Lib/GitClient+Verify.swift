@@ -397,6 +397,14 @@ extension GitClient {
             return ProgramRun(succeeded: record.terminationStatus.isSuccess, stdout: stdout, stderr: stderr)
         } catch let denied as ProcessLaunchDenied {
             shell.stderr.write("error: cannot run \(program): Operation not permitted (\(denied.reason))\n")
+        } catch is ProcessLaunchUnresolved {
+            // Nothing in the shell runs it, and the host never does: git's
+            // missing program.
+            if program.contains(where: separators.contains) {
+                shell.stderr.write("fatal: cannot exec '\(program)': No such file or directory\n")
+            } else {
+                shell.stderr.write("error: cannot run \(program): No such file or directory\n")
+            }
         } catch is ProcessLaunchUnsupportedOnThisPlatform {
             shell.stderr.write("error: cannot fork() for \(program): Function not implemented\n")
         } catch {

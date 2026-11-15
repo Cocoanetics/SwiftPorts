@@ -244,6 +244,44 @@ struct GitCommandSigningTests {
         #expect(nokey.status == 128)
     }
 
+    @Test("a launcher that can't resolve the signing program is git's missing program, never the host's",
+          arguments: [("ssh", "ssh-keygen", "error: \n"),
+                      ("openpgp", "gpg", "error: gpg failed to sign the data:\n(no gpg output)\n")])
+    func unresolvedSigningProgram(format: String, program: String, signError: String) async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Host programs of that name on the shell's PATH, which must not run.
+        let bin = root.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let ran = root.appendingPathComponent("ran")
+        for name in ["ssh-keygen", "gpg"] {
+            let script = bin.appendingPathComponent(name)
+            try "#!/bin/sh\ntouch '\(ran.path)'\nexit 1\n".write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        }
+        let unborn = root.appendingPathComponent("unborn")
+        try FileManager.default.createDirectory(at: unborn, withIntermediateDirectories: true)
+        try systemGit(["init", "-q", "-b", "main"], in: unborn)
+        let existing = try makeRepository("existing", in: root, key: nil)
+        let head = try systemGit(["rev-parse", "HEAD"], in: existing)
+        for repo in [unborn, existing] {
+            try systemGit(["config", "user.name", "Test"], in: repo)
+            try systemGit(["config", "user.email", "test@example.com"], in: repo)
+            try systemGit(["config", "gpg.format", format], in: repo)
+            try systemGit(["config", "user.signingkey", "/nonexistent/key"], in: repo)
+            let launcher = UnresolvedLauncher()
+            let result = try await git(["commit", "-S", "--allow-empty", "-m", "unsigned"], in: repo,
+                                       environment: ["PATH": bin.path], launcher: launcher)
+            #expect(result.stderr == "error: cannot run \(program): No such file or directory\n"
+                + signError + "fatal: failed to write commit object\n")
+            #expect(result.status == 128)
+            #expect(await launcher.launches == [.name(program)])
+        }
+        #expect(try run("git", ["rev-parse", "--verify", "-q", "HEAD"], in: unborn).status != 0)
+        #expect(try systemGit(["rev-parse", "HEAD"], in: existing) == head)
+        #expect(!FileManager.default.fileExists(atPath: ran.path))
+    }
+
     @Test("commit.gpgsign, GIT_CONFIG_COUNT, -S and --no-gpg-sign: git's precedence")
     func signingPrecedence() async throws {
         let root = try makeRoot()
@@ -432,5 +470,19 @@ private actor Calls {
     private(set) var all: [[String]] = []
 
     func append(_ argv: [String]) { all.append(argv) }
+}
+
+/// A launcher with nothing to run: it records each executable and throws
+/// ``ProcessLaunchUnresolved``, as a chain with no fallback does.
+private actor UnresolvedLauncher: ProcessLauncher {
+    private(set) var launches: [Executable] = []
+
+    func launch(
+        _ executable: Executable, arguments: Arguments, environment: Environment,
+        workingDirectory: String?, input: InputSource, output: OutputSink, error: OutputSink
+    ) async throws -> ExecutionRecord {
+        launches.append(executable)
+        throw ProcessLaunchUnresolved(executable: executable)
+    }
 }
 #endif
