@@ -14,29 +14,30 @@ extension SSHKeygenExecutable {
             do { time = try SSHKeygenTime.parse(String(option.dropFirst(12))) }
             catch { throw SSHKeygenError("Invalid \"verify-time\" option") }
         }
-        let signature = try SSHSignature(armored: String(decoding: await read(args["s"] ?? ""), as: UTF8.self))
-        if mode != "find-principals" {
-            try signature.verify(message: await stdin.readAllData(), namespace: args["n"] ?? "")
-            if let revoked = args["r"], mode == "verify" {
-                try await SSHRevocationList.check(signature.publicKey, data: read(revoked))
-            }
+        let text = String(decoding: try await read(args["s"] ?? ""), as: UTF8.self)
+        if mode == "find-principals" {
+            let key = try SSHSignature.signingKey(in: text)
+            let path = args["f"] ?? ""
+            let allowed = try await AllowedSigners(String(decoding: read(path), as: UTF8.self), path: path)
+            let principals = allowed.principals(for: key, at: time, diagnostic: { stderr.write($0 + "\n") })
+            if principals.isEmpty { stderr.write("No principal matched.\n"); return 255 }
+            stdout.write(principals.joined(separator: "\n") + "\n")
+            return 0
+        }
+        let signature = try SSHSignature(armored: text)
+        try signature.verify(message: await stdin.readAllData(), namespace: args["n"] ?? "")
+        if let revoked = args["r"], mode == "verify" {
+            try await SSHRevocationList.check(signature.publicKey, data: read(revoked))
         }
         if mode != "check-novalidate" {
             let path = args["f"] ?? ""
             let allowed = try await AllowedSigners(String(decoding: read(path), as: UTF8.self), path: path)
-            for diagnostic in allowed.diagnostics { stderr.write(diagnostic + "\n") }
             let principals = allowed.principals(
-                for: signature.publicKey, principal: mode == "verify" ? args["I"] : nil,
-                namespace: mode == "verify" ? args["n"] : nil, at: time,
+                for: signature.publicKey, principal: args["I"], namespace: args["n"], at: time,
                 diagnostic: { stderr.write($0 + "\n") })
             if principals.isEmpty {
-                if mode == "find-principals" { stderr.write("No principal matched.\n") }
-                else if !args.flags.contains("q") { stdout.write("Could not verify signature.\n") }
+                if !args.flags.contains("q") { stdout.write("Could not verify signature.\n") }
                 return 255
-            }
-            if mode == "find-principals" {
-                stdout.write(principals.joined(separator: "\n") + "\n")
-                return 0
             }
         }
         if !args.flags.contains("q") {

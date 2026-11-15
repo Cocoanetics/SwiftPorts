@@ -47,6 +47,7 @@ struct SSHWireReader {
     /// non-negative EC private scalars, so a leading `0x00` is simply dropped.
     mutating func readMPIntMagnitude() throws -> [UInt8] {
         var value = try self.readString()
+        guard value.first.map({ $0 & 0x80 == 0 }) ?? true else { throw SSHKeygenError("invalid format") }
         if value.first == 0 {
             value.removeFirst()
         }

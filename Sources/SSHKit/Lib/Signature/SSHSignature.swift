@@ -10,6 +10,23 @@ public struct SSHSignature: Sendable {
 
     public init(armored: String) throws {
         var reader = SSHWireReader(Array(try SSHArmor.decode(armored, label: "SSH SIGNATURE")))
+        try Self.readPreamble(&reader)
+        publicKey = try SSHPublicKey(blob: Data(reader.readString()))
+        namespace = try reader.readUTF8String()
+        _ = try reader.readString() // OpenSSH ignores reserved bytes.
+        hashAlgorithm = try reader.readUTF8String()
+        signature = try reader.readString()
+        guard reader.isAtEnd else { throw SSHKeygenError("Signature contains trailing data") }
+    }
+
+    /// `sshsig_get_pubkey` deliberately does not validate the message or the rest of the signature.
+    public static func signingKey(in armored: String) throws -> SSHPublicKey {
+        var reader = SSHWireReader(Array(try SSHArmor.decode(armored, label: "SSH SIGNATURE")))
+        try readPreamble(&reader)
+        return try SSHPublicKey(blob: Data(reader.readString()))
+    }
+
+    private static func readPreamble(_ reader: inout SSHWireReader) throws {
         guard try reader.readBytes(6) == Array("SSHSIG".utf8) else {
             throw SSHKeygenError("invalid format")
         }
@@ -17,12 +34,6 @@ public struct SSHSignature: Sendable {
         guard version <= 1 else {
             throw SSHKeygenError("Signature version \(version) is larger than supported version 1")
         }
-        publicKey = try SSHPublicKey(blob: Data(reader.readString()))
-        namespace = try reader.readUTF8String()
-        _ = try reader.readString() // OpenSSH ignores reserved bytes.
-        hashAlgorithm = try reader.readUTF8String()
-        signature = try reader.readString()
-        guard reader.isAtEnd else { throw SSHKeygenError("Signature contains trailing data") }
     }
 
     public init(signing message: Data, namespace: String, key: SSHPrivateKey) throws {

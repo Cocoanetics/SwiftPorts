@@ -19,6 +19,10 @@ public struct SSHPrivateKey: Sendable {
         self.comment = comment
     }
 
+    public init(openSSHFile text: String, passphrase: String = "") throws {
+        self = try OpenSSHPrivateKeyFile.parse(text, path: "", passphrase: passphrase)
+    }
+
     public static func generate(type: String, bits: Int = 256, comment: String = "") throws -> Self {
         switch (type, bits) {
         case ("ed25519", _): return Self(.ed25519(.init()), comment: comment)

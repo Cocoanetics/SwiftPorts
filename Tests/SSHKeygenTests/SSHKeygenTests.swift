@@ -56,6 +56,8 @@ struct SSHKeygenTests {
         #expect(printed.code == 0 && printed.out == key.publicKey.openSSHLine(comment: key.comment) + "\n")
         let fingerprint = await run(["-l", "-f", path + ".pub"])
         #expect(fingerprint.out == "256 \(key.publicKey.sha256Fingerprint) test comment (ED25519)\n")
+        let privateFingerprint = await run(["-l", "-f", path])
+        #expect(privateFingerprint.out == fingerprint.out)
         let refused = await run(["-q", "-t", "ed25519", "-f", path, "-N", ""], input: "n\n")
         #expect(refused.code == 1 && refused.out == "\(path) already exists.\nOverwrite (y/n)? ")
         let replaced = await run(["-q", "-t", "ed25519", "-f", path, "-N", ""], input: "y\n")
@@ -108,6 +110,25 @@ struct SSHKeygenTests {
             #expect(denied.code != 0)
             #expect(!denied.err.contains(root.path))
         }
+    }
+
+    @Test func wrongPassphrasePromptsOnce() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("key").path
+        #expect(await run(["-qt", "ed25519", "-f", path, "-N", "pw"]).code == 0)
+        let out = OutputSink(), err = OutputSink()
+        let code = await SSHKeygenExecutable.run(
+            argv: ["-y", "-f", path], stdin: .empty, stdout: out, stderr: err,
+            passphrasePrompt: { prompt in
+                #expect(prompt == "Enter passphrase for \"\(path)\": ")
+                return "incorrect"
+            })
+        out.finish()
+        err.finish()
+        #expect(code == 255)
+        #expect(await err.readAllString()
+            == "Load key \"\(path)\": incorrect passphrase supplied to decrypt private key\n")
     }
 }
 #endif

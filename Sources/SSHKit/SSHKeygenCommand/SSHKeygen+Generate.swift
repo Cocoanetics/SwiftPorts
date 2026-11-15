@@ -7,7 +7,8 @@ extension SSHKeygenExecutable {
         _ args: SSHKeygenArguments, stdin: InputSource, stdout: OutputSink, stderr: OutputSink,
         prompt: @escaping PassphrasePrompt
     ) async throws -> Int32 {
-        guard args.files.isEmpty, args.options.isEmpty else { stderr.write(usage); return 1 }
+        guard args.files.isEmpty, args.options.isEmpty, args.flags.isSubset(of: ["q"]),
+              args.values.keys.allSatisfy({ "tbfNC".contains($0) }) else { stderr.write(usage); return 1 }
         let type = args["t"] ?? "ed25519"
         guard ["ed25519", "ecdsa"].contains(type) else {
             throw SSHKeygenError("unknown key type \(type)")

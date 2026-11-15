@@ -11,21 +11,12 @@ public struct AllowedSigners: Sendable {
         let line: Int
     }
 
-    private var entries: [Entry] = []
-    public private(set) var diagnostics: [String] = []
+    private let lines: [String]
     private let path: String
 
     public init(_ text: String, path: String) {
         self.path = path
-        for (index, line) in text.components(separatedBy: .newlines).enumerated() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
-            do {
-                entries.append(try Self.parse(trimmed, line: index + 1))
-            } catch {
-                diagnostics.append("\(path):\(index + 1): \(error)")
-            }
-        }
+        self.lines = text.components(separatedBy: .newlines)
     }
 
     /// Returns the first eligible line, the same stopping point as sshsig_find_principals.
@@ -33,8 +24,15 @@ public struct AllowedSigners: Sendable {
         for key: SSHPublicKey, principal: String? = nil, namespace: String? = nil,
         at time: Date = Date(), diagnostic: (String) -> Void = { _ in }
     ) -> [String] {
-        for entry in entries where entry.key == key {
-            if let principal, !Self.matches(principal, entry.principals) { continue }
+        for (index, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            if let principal, let patterns = trimmed.split(whereSeparator: { $0.isWhitespace }).first,
+               !Self.matches(principal, String(patterns)) { continue }
+            let entry: Entry
+            do { entry = try Self.parse(trimmed, line: index + 1) }
+            catch { diagnostic("\(path):\(index + 1): \(error)"); continue }
+            if entry.key != key { continue }
             if let namespace, let patterns = entry.namespaces, !Self.matches(namespace, patterns) {
                 diagnostic("\(path):\(entry.line): key is not permitted for use in signature "
                     + "namespace \"\(namespace)\"")
@@ -78,14 +76,20 @@ public struct AllowedSigners: Sendable {
         var entry = Entry(principals: fields[0], key: key, line: number)
         if !hasOptions { return entry }
         var seen: Set<String> = []
-        for option in try split(fields[1], separator: { $0 == "," }) {
-            if option == "cert-authority" { throw SSHKeygenError("cert-authority is unsupported") }
+        for option in try split(fields[1], separator: { $0 == "," }, omitEmpty: false) {
+            if option.lowercased() == "cert-authority" { throw SSHKeygenError("cert-authority is unsupported") }
             let parts = option.split(separator: "=", maxSplits: 1).map(String.init)
-            guard parts.count == 2, seen.insert(parts[0]).inserted else {
+            guard parts.count == 2 else {
                 throw SSHKeygenError("bad options: unknown key option")
             }
-            let value = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-            switch parts[0] {
+            let name = parts[0].lowercased()
+            guard seen.insert(name).inserted else {
+                throw SSHKeygenError("bad options: multiple \"\(name)\" clauses")
+            }
+            guard parts[1].hasPrefix("\"") else { throw SSHKeygenError("bad options: missing start quote") }
+            guard parts[1].hasSuffix("\"") else { throw SSHKeygenError("bad options: unknown key option") }
+            let value = String(parts[1].dropFirst().dropLast()).replacingOccurrences(of: "\\\"", with: "\"")
+            switch name {
             case "namespaces": entry.namespaces = value
             case "valid-after": entry.after = try SSHKeygenTime.parse(value)
             case "valid-before": entry.before = try SSHKeygenTime.parse(value)
@@ -99,18 +103,20 @@ public struct AllowedSigners: Sendable {
     }
 
     /// Delimit outside quotes, preserving quotes for the options pass.
-    private static func split(_ text: String, separator: (Character) -> Bool) throws -> [String] {
+    private static func split(
+        _ text: String, separator: (Character) -> Bool, omitEmpty: Bool = true
+    ) throws -> [String] {
         var quoted = false, escaped = false
         var result: [String] = [], field = ""
         for character in text {
             if character == "\"", !escaped { quoted.toggle() }
             if separator(character), !quoted {
-                if !field.isEmpty { result.append(field); field = "" }
+                if !omitEmpty || !field.isEmpty { result.append(field); field = "" }
             } else { field.append(character) }
             escaped = character == "\\" && !escaped
         }
         guard !quoted else { throw SSHKeygenError("invalid options") }
-        if !field.isEmpty { result.append(field) }
+        if !omitEmpty || !field.isEmpty { result.append(field) }
         return result
     }
 }

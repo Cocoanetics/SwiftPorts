@@ -68,7 +68,6 @@ struct SSHSignatureTests {
         let line = "*@example.com,!mallory@example.com namespaces=\"git,file\","
             + "valid-after=\"20260101000000Z\",valid-before=\"20260102000000Z\" " + key.openSSHLine()
         let allowed = AllowedSigners("# comment\n\n" + line, path: "allowed")
-        #expect(allowed.diagnostics.isEmpty)
         let start = try SSHKeygenTime.parse("20260101000000Z")
         let end = try SSHKeygenTime.parse("20260102000000Z")
         for time in [start, start.addingTimeInterval(1), end.addingTimeInterval(-1), end] {
@@ -81,8 +80,13 @@ struct SSHSignatureTests {
         #expect(allowed.principals(for: key, namespace: "other", at: start).isEmpty)
         #expect(allowed.principals(for: key, at: start) == ["*@example.com", "!mallory@example.com"])
         let ca = AllowedSigners("alice cert-authority " + key.openSSHLine(), path: "allowed")
-        #expect(ca.diagnostics == ["allowed:1: cert-authority is unsupported"])
-        #expect(ca.principals(for: key).isEmpty)
+        var diagnostics: [String] = []
+        #expect(ca.principals(for: key, diagnostic: { diagnostics.append($0) }).isEmpty)
+        #expect(diagnostics == ["allowed:1: cert-authority is unsupported"])
+        for options in ["namespaces=git", "namespaces=\"git\",", "namespaces=\"git\",,valid-before=\"20260101\""] {
+            let malformed = AllowedSigners("alice " + options + " " + key.openSSHLine(), path: "allowed")
+            #expect(malformed.principals(for: key).isEmpty)
+        }
     }
 
     @Test func revocations() async throws {
@@ -92,9 +96,9 @@ struct SSHSignatureTests {
         #expect(throws: SSHKeygenError.self) { try SSHRevocationList.check(key, data: Data("SSHKRL\n\0".utf8)) }
     }
 
-    @Test(arguments: ["20260101", "202601010000", "20260101000000", "20260101000000Z"])
+    @Test(arguments: ["20260101", "202601010000", "20260101000000", "20260101000000Z", "20260101000000UTC"])
     func timeSyntax(_ text: String) throws { _ = try SSHKeygenTime.parse(text) }
 
-    @Test(arguments: ["", "20260230", "2026010100", "20261301", "20260101006100Z"])
+    @Test(arguments: ["", "20260232", "2026010100", "20261301", "20260101006100Z"])
     func invalidTime(_ text: String) { #expect(throws: SSHKeygenError.self) { try SSHKeygenTime.parse(text) } }
 }

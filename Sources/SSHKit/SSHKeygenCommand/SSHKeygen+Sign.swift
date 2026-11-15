@@ -37,14 +37,27 @@ extension SSHKeygenExecutable {
         if (try? SSHPublicKey(openSSHLine: String(decoding: data, as: UTF8.self))) != nil {
             if path.hasSuffix(".pub") { privatePath = String(path.dropLast(4)) }
         }
-        let resolvedPath = privatePath
-        let key = try await IdentityLoader.loadKey(path: resolvedPath, passphrasePrompt: { _ in
-            await prompt("Enter passphrase for \"\(resolvedPath)\": ")
-        })
+        let key = try await loadPrivateKey(privatePath, prompt: prompt)
         if let publicKey = try? SSHPublicKey(openSSHLine: String(decoding: data, as: UTF8.self)),
            publicKey != key.publicKey {
             throw SSHKeygenError("Public key \(path) doesn't match private \(privatePath)")
         }
         return key
+    }
+
+    /// ssh-keygen's load_identity prompts once, unlike ssh's three authentication retries.
+    static func loadPrivateKey(_ path: String, prompt: @escaping PassphrasePrompt) async throws -> SSHPrivateKey {
+        let text = String(decoding: try await read(path), as: UTF8.self)
+        do {
+            return try SSHPrivateKey(openSSHFile: text)
+        } catch is SSHIdentityDecryptionError {
+            let passphrase = await prompt("Enter passphrase for \"\(path)\": ") ?? ""
+            do { return try SSHPrivateKey(openSSHFile: text, passphrase: passphrase) }
+            catch {
+                throw SSHKeygenError("Load key \"\(path)\": incorrect passphrase supplied to decrypt private key")
+            }
+        } catch {
+            throw SSHKeygenError("Load key \"\(path)\": invalid format")
+        }
     }
 }

@@ -3,7 +3,7 @@ import Crypto
 import Foundation
 
 extension SSHPrivateKey {
-    /// `sshkey_private_to_blob2`: bcrypt (16 rounds) and aes256-ctr when protected.
+    /// `sshkey_private_to_blob2`: bcrypt (32 rounds at the pinned revision) and aes256-ctr when protected.
     public func openSSHFile(passphrase: String = "") throws -> String {
         var privatePart = SSHWireWriter()
         let check = UInt32.random(in: .min ... .max)
@@ -43,9 +43,9 @@ extension SSHPrivateKey {
         if !passphrase.isEmpty {
             let salt = (0..<16).map { _ in UInt8.random(in: .min ... .max) }
             options.string(salt)
-            options.uint32(16)
+            options.uint32(32)
             let derived = try BCryptPBKDF.derive(
-                passphrase: Array(passphrase.utf8), salt: salt, rounds: 16, keyLength: 48)
+                passphrase: Array(passphrase.utf8), salt: salt, rounds: 32, keyLength: 48)
             encrypted = try AES._CTR.encrypt(
                 encrypted, using: SymmetricKey(data: derived.prefix(32)),
                 nonce: AES._CTR.Nonce(nonceBytes: derived.suffix(16)))

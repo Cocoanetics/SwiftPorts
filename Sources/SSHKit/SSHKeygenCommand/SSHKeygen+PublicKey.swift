@@ -4,9 +4,15 @@ import SSHKit
 
 extension SSHKeygenExecutable {
     static func publicKey(
-        _ args: SSHKeygenArguments, stdout: OutputSink, prompt: @escaping PassphrasePrompt
+        _ args: SSHKeygenArguments, stdin: InputSource, stdout: OutputSink, prompt: @escaping PassphrasePrompt
     ) async throws -> Int32 {
-        let path = args["f"] ?? ""
+        var path = args["f"] ?? ""
+        if args["f"] == nil {
+            let defaultPath = (Shell.current.environment["HOME"] ?? "") + "/.ssh/id_ed25519"
+            stdout.write("Enter file in which the key is (\(defaultPath)): ")
+            path = await stdin.readLine() ?? ""
+            if path.isEmpty { path = defaultPath }
+        }
         let data = try await read(path)
         let key: SSHPublicKey
         let comment: String
@@ -29,9 +35,7 @@ extension SSHKeygenExecutable {
                 comment = loaded?.comment ?? "no comment"
             }
         } else {
-            let privateKey = try await IdentityLoader.loadKey(path: path, passphrasePrompt: { _ in
-                await prompt("Enter passphrase for \"\(path)\": ")
-            })
+            let privateKey = try await loadPrivateKey(path, prompt: prompt)
             key = privateKey.publicKey
             comment = privateKey.comment
         }

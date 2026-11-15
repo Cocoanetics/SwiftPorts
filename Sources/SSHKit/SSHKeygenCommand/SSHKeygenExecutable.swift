@@ -40,12 +40,12 @@ public enum SSHKeygenExecutable {
         }
         do {
             if args.flags.contains("y") || args.flags.contains("l") {
-                return try await publicKey(args, stdout: stdout, prompt: passphrasePrompt)
+                return try await publicKey(args, stdin: stdin, stdout: stdout, prompt: passphrasePrompt)
             }
             return try await generate(args, stdin: stdin, stdout: stdout, stderr: stderr, prompt: passphrasePrompt)
         } catch {
             stderr.write("\(error)\n")
-            return 1
+            return args.flags.contains("y") ? 255 : 1
         }
     }
 
@@ -75,9 +75,13 @@ public enum SSHKeygenExecutable {
         let url = Shell.resolve(path)
         try await Shell.authorize(url)
         do {
-            // Atomic replacement avoids following a pre-existing symlink when setting key permissions.
-            try data.write(to: url, options: .atomic)
+            // Create with the final mode before writing any secret material.
+            guard FileManager.default.createFile(
+                atPath: url.path, contents: nil, attributes: [.posixPermissions: permissions]) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
             try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
+            try data.write(to: url)
         } catch { throw SSHKeygenError("\(path): \(fileReason(error))") }
     }
 
