@@ -13,6 +13,22 @@ import SwiftGit
 enum GPGSign {
     static let subcommands: Set<String> = ["commit", "merge", "cherry-pick", "rebase", "pull"]
 
+    /// The options of each command that take the next argument as their
+    /// value, whatever it looks like: `git commit -m -S` is a commit
+    /// whose message is `-S`.
+    static let valueOptions: [String: Set<String>] = [
+        "commit": ["-m", "--message", "--author"],
+        "merge": ["-m", "--message"],
+        "pull": ["-m", "--message"],
+        "rebase": ["--onto"]
+    ]
+
+    /// Whether the argument after `previous` is `previous`'s value.
+    static func isValue(after previous: String?, in subcommand: String) -> Bool {
+        guard let previous else { return false }
+        return valueOptions[subcommand]?.contains(previous) == true
+    }
+
     /// `argument` as the tagged `--gpg-sign=` value, `nil` when it isn't
     /// one of the forms.
     static func rewrite(_ argument: String) -> String? {

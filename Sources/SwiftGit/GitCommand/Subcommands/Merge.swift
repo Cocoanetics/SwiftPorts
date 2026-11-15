@@ -22,7 +22,7 @@ struct Merge: AsyncParsableCommand {
     var ffOnly: Bool = false
 
     @Option(name: [.customShort("m"), .customLong("message")],
-            help: "Override the auto-generated merge commit message.")
+            parsing: .unconditional, help: "Override the auto-generated merge commit message.")
     var message: String?
 
     @Flag(name: [.customShort("q"), .customLong("quiet")],

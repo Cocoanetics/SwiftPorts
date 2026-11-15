@@ -141,6 +141,13 @@ struct GitCommandSigningTests {
         // Other commands' -S (log's pickaxe) and pathspecs are left alone.
         #expect(GitCommand.preprocess(["log", "-Sfoo"]) == ["log", "-Sfoo"])
         #expect(GitCommand.preprocess(["commit", "--", "-S"]) == ["commit", "--", "-S"])
+        // Another option's value stays as typed.
+        #expect(GitCommand.preprocess(["commit", "-m", "-S", "-S"]) == ["commit", "-m", "-S", "--gpg-sign=+"])
+        #expect(GitCommand.preprocess(["commit", "--author", "-SKEY"]) == ["commit", "--author", "-SKEY"])
+        #expect(GitCommand.preprocess(["merge", "--message", "--no-gpg-sign"])
+            == ["merge", "--message", "--no-gpg-sign"])
+        #expect(GitCommand.preprocess(["pull", "-m", "--gpg-sign"]) == ["pull", "-m", "--gpg-sign"])
+        #expect(GitCommand.preprocess(["rebase", "--onto", "-S", "main"]) == ["rebase", "--onto", "-S", "main"])
         for command in ["merge", "cherry-pick", "rebase", "pull"] {
             #expect(GitCommand.preprocess([command, "-S"]) == [command, "--gpg-sign=+"])
         }
@@ -190,6 +197,14 @@ struct GitCommandSigningTests {
         let leftovers = try FileManager.default.contentsOfDirectory(
             atPath: host.sandbox.temporaryDirectory.path).filter { $0.hasPrefix(".git_signing") }
         #expect(leftovers.isEmpty)
+
+        // `-m -S` is a message, as in git: an unsigned commit named `-S`.
+        let message = try await git(["commit", "--allow-empty", "-q", "-m", "-S"], in: repo,
+                                    launcher: launcher, commands: [stub])
+        #expect(message.status == 0, "\(message.stderr)")
+        #expect(try systemGit(["log", "-1", "--format=%s"], in: repo) == "-S")
+        #expect(try !isSigned("HEAD", in: repo))
+        #expect(await calls.all.count == 1)
 
         // A literal key goes into a file of its own, with -U.
         try systemGit(["config", "user.signingkey", "key::ssh-ed25519 AAAAliteral"], in: repo)

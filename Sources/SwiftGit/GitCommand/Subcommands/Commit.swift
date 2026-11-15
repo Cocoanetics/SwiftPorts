@@ -11,11 +11,11 @@ struct Commit: AsyncParsableCommand {
     )
 
     @Option(name: [.customShort("m"), .customLong("message")],
-            help: "Commit message.")
+            parsing: .unconditional, help: "Commit message.")
     var message: String
 
     @Option(name: .customLong("author"),
-            help: "Override the commit author. Format: \"Name <email>\".")
+            parsing: .unconditional, help: "Override the commit author. Format: \"Name <email>\".")
     var author: String?
 
     @Flag(name: [.customShort("a"), .customLong("all")],

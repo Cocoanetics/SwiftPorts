@@ -75,7 +75,8 @@ public struct GitCommand: AsyncParsableCommand {
     ///   effect in the order given among its `=<ref>[:<expect>]` forms.
     /// - `-S[<keyid>]`, `--gpg-sign[=<keyid>]` and `--no-gpg-sign` become
     ///   tagged `--gpg-sign=` values for the commands that sign commits
-    ///   (see ``GPGSign``).
+    ///   (see ``GPGSign``), unless another option takes them as its value
+    ///   (`commit -m -S`).
     ///
     /// Tokens after a standalone `--` are pathspecs and pass through
     /// untouched, so `git diff -- --color` still filters a file literally
@@ -93,7 +94,9 @@ public struct GitCommand: AsyncParsableCommand {
         var out: [String] = []
         out.reserveCapacity(args.count)
         var afterDoubleDash = false
+        var previous: String?
         for arg in args {
+            defer { previous = arg }
             if arg == "--" { afterDoubleDash = true }
             if !afterDoubleDash, (subcommand == "diff" || subcommand == "status"),
                arg == "--color" {
@@ -127,6 +130,7 @@ public struct GitCommand: AsyncParsableCommand {
             } else if !afterDoubleDash, subcommand == "push", arg == "--no-force-with-lease" {
                 out.append("--force-with-lease=\(Push.leaseNone)")
             } else if !afterDoubleDash, GPGSign.subcommands.contains(subcommand),
+                      !GPGSign.isValue(after: previous, in: subcommand),
                       let rewritten = GPGSign.rewrite(arg) {
                 out.append(rewritten)
             } else {

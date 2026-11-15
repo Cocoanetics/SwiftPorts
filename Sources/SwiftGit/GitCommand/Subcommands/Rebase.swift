@@ -28,7 +28,7 @@ struct Rebase: AsyncParsableCommand {
     var abort: Bool = false
 
     @Option(name: .customLong("onto"),
-            help: "Replay commits onto NEWBASE instead of `<upstream>`.")
+            parsing: .unconditional, help: "Replay commits onto NEWBASE instead of `<upstream>`.")
     var onto: String?
 
     @Option(name: .customLong("gpg-sign"),

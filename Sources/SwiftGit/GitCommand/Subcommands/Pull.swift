@@ -40,7 +40,7 @@ struct Pull: AsyncParsableCommand {
     var ffOnly: Bool = false
 
     @Option(name: [.customShort("m"), .customLong("message")],
-            help: "Merge commit message (3-way merges only).")
+            parsing: .unconditional, help: "Merge commit message (3-way merges only).")
     var message: String?
 
     @Flag(name: [.customShort("q"), .customLong("quiet")],
