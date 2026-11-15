@@ -133,24 +133,37 @@ extension GitClient {
         check.key = check.fingerprint
     }
 
-    /// git's `strbuf_stripspace` without comments: trailing whitespace
-    /// off each line, blank runs collapsed to one line, none leading or
-    /// trailing, and a non-empty result ends with a newline.
+    /// git's `strbuf_stripspace` without comments: trailing Git whitespace
+    /// (space, tab and CR here; LF separates lines) off each line, blank
+    /// runs collapsed to one line, none leading or trailing, and a
+    /// non-empty result ends with a newline. Git classifies bytes rather
+    /// than Unicode whitespace, so non-ASCII spaces stay verbatim.
     public static func stripspace(_ text: String) -> String {
-        var lines: [Substring] = []
+        let bytes = Array(text.utf8)
+        var lines: [[UInt8]] = []
         var blank = false
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            var line = raw
-            while let last = line.last, last.isWhitespace { line = line.dropLast() }
+        var start = 0
+        for end in 0...bytes.count where end == bytes.count || bytes[end] == 0x0a {
+            var line = Array(bytes[start..<end])
+            while let last = line.last, last == 0x09 || last == 0x0d || last == 0x20 {
+                line.removeLast()
+            }
             if line.isEmpty {
                 blank = !lines.isEmpty
             } else {
-                if blank { lines.append("") }
+                if blank { lines.append([]) }
                 blank = false
                 lines.append(line)
             }
+            start = end + 1
         }
-        return lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n"
+        guard !lines.isEmpty else { return "" }
+        var result: [UInt8] = []
+        for line in lines {
+            result += line
+            result.append(0x0a)
+        }
+        return String(decoding: result, as: UTF8.self)
     }
 
     /// git's `git_config_pathname` (`interpolate_path`): a leading `~/` is

@@ -98,12 +98,13 @@ struct Merge: AsyncParsableCommand {
             return
         }
 
+        // Use fmt-merge-msg's names and destination for every ref.
         // A tag's message, and a signed tag's verification, follow the
         // title git writes. git prepares that message before it knows
         // whether the merge fast-forwards, so the verifier runs then too;
         // only a tag HEAD already contains ("Already up to date.") skips it.
         var message = self.message
-        if message == nil, let name = try? await client.mergeName(ref), name.hasPrefix("tag '"),
+        if message == nil, let name = try? await client.mergeName(ref),
            let oid = try? await client.resolveOID(ref),
            try await Self.bringsNewCommits(ref, client: client) {
             message = try await client.mergeMessage(describing: [name], objects: [oid])
@@ -111,8 +112,8 @@ struct Merge: AsyncParsableCommand {
 
         let outcome: MergeOutcome
         do {
-            outcome = try await client.merge(
-                ref: ref, fastForward: mode, message: message, author: nil, sign: GPGSign.mode(gpgSign))
+            outcome = try await Self.merge(
+                ref: ref, fastForward: mode, message: message, client: client, sign: GPGSign.mode(gpgSign))
         } catch let err as Libgit2Error
             where err.message.contains("not something we can merge") {
             throw CLIError.stderr(
@@ -155,14 +156,10 @@ struct Merge: AsyncParsableCommand {
         if heads.heads.count == 1 {
             let outcome: MergeOutcome
             do {
-                // git ends a message with a newline.
-                outcome = try await client.merge(ref: heads.heads[0], fastForward: mode,
-                                                 message: message + "\n", author: nil, sign: sign)
+                outcome = try await Self.merge(ref: heads.heads[0], fastForward: mode,
+                                               message: message, client: client, sign: sign)
             } catch let err as Libgit2Error where err.message.contains("Not possible to fast-forward") {
                 throw try await Pull.notPossibleToFastForward(client: client)
-            }
-            if case .conflicts(let paths) = outcome {
-                try await Pull.writeMergeMessage(message, conflicts: paths, client: client)
             }
             if !quiet {
                 try printOutcome(outcome)
@@ -173,7 +170,16 @@ struct Merge: AsyncParsableCommand {
         }
         if mode == .onlyFastForward { throw try await Pull.notPossibleToFastForward(client: client) }
         let result = try await client.octopusMerge(
-            heads: heads.heads, noFastForward: mode == .never, message: message, sign: sign)
+            heads: heads.heads, noFastForward: mode == .never,
+            message: SwiftGit.GitClient.stripspace(message), sign: sign)
+        switch result.outcome {
+        case .conflicts(let paths):
+            try await Pull.writeMergeMessage(message, conflicts: paths, client: client)
+        case .headNotUpdated, .headMissing, .headMoved:
+            try await restoreMergeMessage(message, client: client)
+        default:
+            break
+        }
         try printOctopus(result, quiet: quiet)
     }
 
