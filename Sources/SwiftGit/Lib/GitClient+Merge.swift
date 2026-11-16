@@ -19,12 +19,14 @@ extension GitClient {
         author: GitSignature? = nil,
         sign: SignMode = .config
     ) async throws -> MergeOutcome {
-        try await withRepository {
+        let env = shellEnvironment()
+        return try await withRepository {
             try $0.merge(
                 ref: theirRef,
                 fastForward: fastForward,
                 message: message,
                 author: author.core,
+                env: env,
                 sign: try resolvedCommitSignMode(sign))
         }
     }

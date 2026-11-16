@@ -17,10 +17,11 @@ extension GitClient {
         sign: SignMode = .config,
         progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> RebaseOutcome {
-        try await withRepository {
+        let env = shellEnvironment()
+        return try await withRepository {
             try $0.rebase(
                 upstream: upstreamSpec, onto: ontoSpec,
-                author: author.core, progress: progress, sign: try resolvedCommitSignMode(sign))
+                author: author.core, progress: progress, env: env, sign: try resolvedCommitSignMode(sign))
         }
     }
 
@@ -33,8 +34,9 @@ extension GitClient {
         sign: SignMode = .config,
         progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> RebaseOutcome {
-        try await withRepository {
-            try $0.rebaseContinue(author: author.core, progress: progress, sign: sign)
+        let env = shellEnvironment()
+        return try await withRepository {
+            try $0.rebaseContinue(author: author.core, progress: progress, env: env, sign: sign)
         }
     }
 
@@ -45,8 +47,9 @@ extension GitClient {
         sign: SignMode = .config,
         progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> RebaseOutcome {
-        try await withRepository {
-            try $0.rebaseSkip(author: author.core, progress: progress, sign: sign)
+        let env = shellEnvironment()
+        return try await withRepository {
+            try $0.rebaseSkip(author: author.core, progress: progress, env: env, sign: sign)
         }
     }
 

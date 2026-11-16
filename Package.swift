@@ -444,8 +444,10 @@ let package = Package(
         // `GitSigner` with an explicit `SignMode`, and reads signatures
         // back (`commitSignatures`, `tagSignature`) for verify-commit and
         // `log --show-signature`.
+        // GitKit 2.10.1 honours merge/rebase signature environments and
+        // writes mergetag headers when merging annotated tags.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.10.0",
+                 from: "2.10.1",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
