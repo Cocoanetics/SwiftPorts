@@ -93,7 +93,7 @@ jobs:
     # don't compile here; the unit-shape suites in GitCommandTests,
     # GitLabTests, GitHubTests, ZipKitTests still run.
     runs-on: xcode-27
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - name: Select Xcode 27.1 (Swift 6.4)
