@@ -43,12 +43,27 @@ struct GitCommandMergetagTests: SigningOracle {
         let good = try systemGit(["rev-parse", "good"], in: repo)
         let parent = try systemGit(["rev-parse", "main~1"], in: repo)
         let unrelated = try systemGit(["rev-parse", "unrelated"], in: repo)
+        let ownTree = try systemGit(["rev-parse", "\(commits["merged"] ?? "")^{tree}"], in: repo)
+        let parentTree = try systemGit(["rev-parse", "main~1^{tree}"], in: repo)
+        /// `merged`'s mergetag naming `object` as a `type`.
+        func retarget(_ object: String, as type: String) -> (String) -> String {
+            { $0.replacingOccurrences(of: "mergetag object \(good)\n type commit\n",
+                                      with: "mergetag object \(object)\n type \(type)\n") }
+        }
         let crafted: [(String, (String) -> String)] = [
             ("firstParent", { $0.replacingOccurrences(of: "mergetag object \(good)",
                                                       with: "mergetag object \(parent)") }),
             ("nonParent", { $0.replacingOccurrences(of: "mergetag object \(good)",
                                                     with: "mergetag object \(unrelated)") }),
             ("malformed", { $0.replacingOccurrences(of: "mergetag object \(good)", with: "mergetag garbage") }),
+            // A type git already knows the object not to be: the second
+            // parent, the commit's tree, a parent's tree (known to `log`'s
+            // walk, not to `show`); one it doesn't know yet is no error.
+            ("secondParentAsTree", retarget(good, as: "tree")),
+            ("secondParentAsTag", retarget(good, as: "tag")),
+            ("ownTreeAsCommit", retarget(ownTree, as: "commit")),
+            ("parentTreeAsCommit", retarget(parentTree, as: "commit")),
+            ("unrelatedAsTree", retarget(unrelated, as: "tree")),
             ("unknownType", { $0.replacingOccurrences(of: "\n type commit\n", with: "\n type bogus\n") }),
             ("noName", { $0.replacingOccurrences(of: "\n tag v1\n", with: "\n tagx v1\n") }),
             ("tampered", { $0.replacingOccurrences(of: "\n release 1\n", with: "\n release 2\n") }),

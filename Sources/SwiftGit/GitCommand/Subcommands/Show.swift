@@ -62,7 +62,7 @@ struct Show: AsyncParsableCommand {
         // `--show-signature`: the signature's lines after `commit <sha>`.
         if signature, let header = block.firstIndex(of: "\n") {
             let lines = try await Log.showSignatureLines(
-                try await client.commitSignatureCheck(entry.sha), commit: entry.sha, client: client)
+                try await client.commitSignatureCheck(entry.sha), commit: entry.sha, walked: false, client: client)
             block.insert(contentsOf: lines, at: block.index(after: header))
         }
         stdout.write(Data(block.utf8))

@@ -84,7 +84,7 @@ struct Log: AsyncParsableCommand {
             // `--oneline`, the abbreviated name), before the commit itself
             // with `--format`.
             let signature = showSignatures
-                ? try await Self.showSignatureLines(check, commit: entry.sha, client: client) : ""
+                ? try await Self.showSignatureLines(check, commit: entry.sha, walked: true, client: client) : ""
             if useOneline {
                 var line = entry.onelineFormat()
                 if let space = line.firstIndex(of: " ") {

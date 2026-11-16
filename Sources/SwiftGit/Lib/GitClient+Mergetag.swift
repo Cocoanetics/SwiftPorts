@@ -21,12 +21,34 @@ extension GitClient {
 
     /// The `mergetag` headers of commit `oid`, in order, each described
     /// and its signature checked as git's `show_one_mergetag` does.
-    public func mergeTags(_ oid: String) async throws -> [MergeTag] {
+    ///
+    /// git's `parse_tag_buffer` refuses a tag whose type differs from the
+    /// one git already knows the tagged object as (`object_as_type`): the
+    /// objects it has parsed by then, not the object database. Those are
+    /// the commit, its tree and its parents, and, when the revision walk
+    /// has parsed the parents too (`log`, not `show`), their trees and
+    /// parents.
+    public func mergeTags(_ oid: String, parentsParsed: Bool) async throws -> [MergeTag] {
         guard let commit = try await rawObject(oid) else { return [] }
-        let (parents, values) = Self.mergetagHeaders([UInt8](commit))
+        let (tree, parents, values) = Self.mergetagHeaders([UInt8](commit))
+        guard !values.isEmpty else { return [] }
+        var known: [String: String] = [oid: "commit"]
+        func register(_ object: String?, as type: String) {
+            if let object, known[object] == nil { known[object] = type }
+        }
+        register(tree, as: "tree")
+        for parent in parents { register(parent, as: "commit") }
+        if parentsParsed {
+            for parent in parents {
+                guard let bytes = try await rawObject(parent) else { continue }
+                let headers = Self.mergetagHeaders([UInt8](bytes))
+                register(headers.tree, as: "tree")
+                for grandparent in headers.parents { register(grandparent, as: "commit") }
+            }
+        }
         var tags: [MergeTag] = []
         for value in values {
-            let description = Self.describeMergetag(value, parents: parents)
+            let description = Self.describeMergetag(value, parents: parents, known: known)
             let signed = Self.split(Data(value))
             let signature = signed.signature.isEmpty ? nil : try await checkSignature(signed)
             tags.append(MergeTag(description: description, signature: signature))
@@ -34,11 +56,12 @@ extension GitClient {
         return tags
     }
 
-    /// A commit's parents and its `mergetag` values, as git's
+    /// A commit's tree, its parents and its `mergetag` values, as git's
     /// `read_commit_extra_header_lines` gives them: the header's first
     /// line and its continuation lines, each without its one leading
     /// space and ending in a newline.
-    static func mergetagHeaders(_ bytes: [UInt8]) -> (parents: [String], values: [[UInt8]]) {
+    static func mergetagHeaders(_ bytes: [UInt8]) -> (tree: String?, parents: [String], values: [[UInt8]]) {
+        var tree: String?
         var parents: [String] = []
         var values: [[UInt8]] = []
         var inMergetag = false
@@ -55,19 +78,22 @@ extension GitClient {
             inMergetag = line.starts(with: Array("mergetag ".utf8))
             if inMergetag {
                 values.append(Array(line.dropFirst("mergetag ".utf8.count)) + [0x0A])
+            } else if line.starts(with: Array("tree ".utf8)) {
+                tree = String(decoding: line.dropFirst("tree ".utf8.count), as: UTF8.self)
             } else if line.starts(with: Array("parent ".utf8)) {
                 parents.append(String(decoding: line.dropFirst("parent ".utf8.count), as: UTF8.self))
             }
         }
-        return (parents, values)
+        return (tree, parents, values)
     }
 
     /// The first line git shows for one mergetag `value` of a commit with
     /// `parents`: `malformed mergetag` when `parse_tag_buffer` refuses it
-    /// (an unknown type said on stderr, as git does), else what the tag
-    /// names among the parents.
-    private static func describeMergetag(_ value: [UInt8], parents: [String]) -> String {
-        guard let tag = parseTag(value) else { return "malformed mergetag\n" }
+    /// (an unknown type, or one the tagged object is `known` not to be,
+    /// said on stderr, as git does), else what the tag names among the
+    /// parents.
+    private static func describeMergetag(_ value: [UInt8], parents: [String], known: [String: String]) -> String {
+        guard let tag = parseTag(value, known: known) else { return "malformed mergetag\n" }
         if parents.count == 2, tag.object == parents[1] { return "merged tag '\(tag.name)'\n" }
         guard let nth = parents.firstIndex(of: tag.object) else {
             return "tag \(tag.name) names a non-parent \(tag.object)\n"
@@ -77,7 +103,7 @@ extension GitClient {
 
     /// git's `parse_tag_buffer` of a tag's bytes: the object it names
     /// and its name; `nil` when it can't be parsed.
-    private static func parseTag(_ value: [UInt8]) -> (object: String, name: String)? {
+    private static func parseTag(_ value: [UInt8], known: [String: String]) -> (object: String, name: String)? {
         let hexSize = Int(GIT_OID_SHA1_HEXSIZE)
         guard value.count >= hexSize + 24, value.starts(with: Array("object ".utf8)) else { return nil }
         var cursor = 7
@@ -92,11 +118,19 @@ extension GitClient {
         guard let typeEnd = value[cursor...].firstIndex(of: 0x0A), typeEnd - cursor < 20 else { return nil }
         let type = String(decoding: value[cursor..<typeEnd], as: UTF8.self)
         cursor = typeEnd + 1
-        guard ["blob", "tree", "commit", "tag"].contains(type) else {
+        // The tag's own name, as git hashes it, for its errors.
+        func tagID() -> String {
             var id = git_oid()
             _ = value.withUnsafeBytes { git_odb_hash(&id, $0.baseAddress, $0.count, GIT_OBJECT_TAG) }
-            let oid = String(cString: git_oid_tostr_s(&id))
-            Shell.current.stderr.write("error: unknown tag type '\(type)' in \(oid)\n")
+            return String(cString: git_oid_tostr_s(&id))
+        }
+        guard ["blob", "tree", "commit", "tag"].contains(type) else {
+            Shell.current.stderr.write("error: unknown tag type '\(type)' in \(tagID())\n")
+            return nil
+        }
+        if let actual = known[object], actual != type {
+            Shell.current.stderr.write("error: object \(object) is a \(actual), not a \(type)\n"
+                + "error: bad tag pointer to \(object) in \(tagID())\n")
             return nil
         }
 
