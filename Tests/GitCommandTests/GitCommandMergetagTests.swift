@@ -44,7 +44,8 @@ struct GitCommandMergetagTests: SigningOracle {
         let parent = try systemGit(["rev-parse", "main~1"], in: repo)
         let unrelated = try systemGit(["rev-parse", "unrelated"], in: repo)
         let crafted: [(String, (String) -> String)] = [
-            ("firstParent", { $0.replacingOccurrences(of: "mergetag object \(good)", with: "mergetag object \(parent)") }),
+            ("firstParent", { $0.replacingOccurrences(of: "mergetag object \(good)",
+                                                      with: "mergetag object \(parent)") }),
             ("nonParent", { $0.replacingOccurrences(of: "mergetag object \(good)",
                                                     with: "mergetag object \(unrelated)") }),
             ("malformed", { $0.replacingOccurrences(of: "mergetag object \(good)", with: "mergetag garbage") }),
