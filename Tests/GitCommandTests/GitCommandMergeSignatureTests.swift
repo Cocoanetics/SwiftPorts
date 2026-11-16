@@ -37,8 +37,9 @@ struct GitCommandMergeSignatureTests: SigningOracle {
     /// A repository under `root` whose `main` is one commit, with branches
     /// `good` (signed by a trusted key), `mal` (signed by an unknown key),
     /// `unsigned`, `bad` (a signed commit changed under its signature),
-    /// `goodtop` (a trusted signed commit on `unsigned`) and tag `stag`, a
-    /// trusted signed tag of `unsigned`.
+    /// `goodtop` (a trusted signed commit on `unsigned`), `unrelated` and
+    /// `unrelatedmal` (root commits of their own, unsigned and signed by the
+    /// unknown key) and tag `stag`, a trusted signed tag of `unsigned`.
     private func makeFixture(in root: URL) throws -> URL {
         let (alice, allowed) = try makeKey("alice", in: root)
         let (mallory, _) = try makeKey("mallory", in: root)
@@ -56,7 +57,16 @@ struct GitCommandMergeSignatureTests: SigningOracle {
         let bad = try writeCommit(signed.replacingOccurrences(of: "\n\ngood", with: "\n\ntampered") + "\n", in: repo)
         try systemGit(["branch", "bad", bad], in: repo)
         try systemGit(["tag", "-s", "-m", "signed tag", "stag", "unsigned"], in: repo)
-        try systemGit(["checkout", "-q", "main"], in: repo)
+        // Histories with nothing in common with `main`: unsigned, and
+        // signed by the unknown key.
+        for (branch, sign) in [("unrelated", []), ("unrelatedmal", ["--gpg-sign=\(mallory)"])] {
+            try systemGit(["checkout", "-q", "--orphan", branch], in: repo)
+            try systemGit(["rm", "-rqf", "."], in: repo)
+            try Data("\(branch)\n".utf8).write(to: repo.appendingPathComponent(branch))
+            try systemGit(["add", branch], in: repo)
+            try systemGit(["commit", "-q", "-m", branch] + sign, in: repo)
+        }
+        try systemGit(["checkout", "-q", "-f", "main"], in: repo)
         return repo
     }
 
@@ -150,6 +160,10 @@ struct GitCommandMergeSignatureTests: SigningOracle {
             // `unsigned` is reduced away by `goodtop`, which is verified.
             Case(args: ["merge", "--verify-signatures", "unsigned", "goodtop"], refused: false),
             Case(args: ["merge", "--verify-signatures", "good", "unsigned"], refused: true),
+            // No merge base: verified all the same, before anything else.
+            Case(args: ["merge", "--verify-signatures", "unrelated"], refused: true),
+            Case(args: ["merge", "--verify-signatures", "unrelatedmal"], refused: true),
+            Case(setup: [["config", "merge.verifySignatures", "true"]], args: ["merge", "unrelated"], refused: true),
             Case(args: ["merge", "--verify-signatures", "unsigned", "good"], refused: true),
             Case(args: ["merge", "--verify-signatures", "-m", "octopus", "good", "goodtop"], refused: false),
             Case(setup: orphan, args: ["merge", "--verify-signatures", "unsigned"], refused: true),

@@ -117,14 +117,11 @@ struct Merge: AsyncParsableCommand {
            try await Self.bringsNewCommits(ref, client: client) {
             message = try await client.mergeMessage(describing: [name], objects: [oid])
         }
-        // The commit is verified unless HEAD already has it; an unborn
-        // branch verifies the one it takes.
-        if verify, let commit = try? await client.resolveOID(ref + "^{commit}") {
-            let unborn = (try? await client.resolveOID("HEAD")) == nil
-            let bringsNewCommits = try await Self.bringsNewCommits(ref, client: client)
-            if unborn || bringsNewCommits {
-                try await Self.verifyMergeSignatures(of: [commit], quiet: quiet, client: client)
-            }
+        // The commit is verified unless HEAD already has it (reduced away,
+        // as git's collect_parents reduces it): an unborn branch, or a
+        // history with nothing in common, verifies it too.
+        if verify, let reduced = try? await client.mergeHeads(reducing: [ref]) {
+            try await Self.verifyMergeSignatures(of: reduced.heads, quiet: quiet, client: client)
         }
 
         let outcome: MergeOutcome
