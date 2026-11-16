@@ -45,11 +45,20 @@ extension GitCommandSigningTests {
         }
     }
 
-    private func compareOperation(_ args: [String], in repo: URL, oracle: URL) async throws {
-        let result = try await git(args, in: repo, environment: Self.mergeRebaseEnvironment)
+    private func compareOperation(
+        _ args: [String], in repo: URL, oracle: URL,
+        environment: [String: String] = Self.mergeRebaseEnvironment
+    ) async throws {
+        let result = try await git(args, in: repo, environment: environment)
         try #require(result.status == 0, "\(args): \(result.stderr)")
-        try systemGit(args, in: oracle, environment: Self.mergeRebaseEnvironment)
+        try systemGit(args, in: oracle, environment: environment)
         try expectObjectParity(repo, oracle)
+    }
+
+    private func environmentParityRepository(rebase: Bool, in root: URL) throws -> (URL, URL) {
+        let repo = try parityRepository(in: root)
+        if rebase { try systemGit(["checkout", "-q", "side"], in: repo) }
+        return (repo, try parityTwin(of: repo))
     }
 
     @Test("merge --no-ff and merge -m write git's objects with separate environment signatures", arguments: [
@@ -77,6 +86,44 @@ extension GitCommandSigningTests {
         try await compareOperation(["rebase", "main"], in: repo, oracle: oracle)
         try expectObjectParity(repo, oracle, revisions: ["HEAD^"])
         #expect(try systemGit(["log", "-2", "--format=%an <%ae> %at %ai"], in: repo) == authors)
+    }
+
+    @Test("partial identity overrides keep configured email ahead of EMAIL", arguments: [false, true])
+    func partialIdentityEnvironmentParity(rebase: Bool) async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (repo, oracle) = try environmentParityRepository(rebase: rebase, in: root)
+        for directory in [repo, oracle] {
+            try systemGit(["config", "user.email", "work@example.com"], in: directory)
+        }
+        var environment = Self.mergeRebaseEnvironment
+        environment["GIT_AUTHOR_NAME"] = "Author Bot"
+        environment["GIT_COMMITTER_NAME"] = "Commit Bot"
+        environment["EMAIL"] = "personal@example.com"
+        environment.removeValue(forKey: "GIT_AUTHOR_EMAIL")
+        environment.removeValue(forKey: "GIT_COMMITTER_EMAIL")
+        try await compareOperation(
+            rebase ? ["rebase", "main"] : ["merge", "--no-ff", "side"],
+            in: repo, oracle: oracle, environment: environment)
+        let object = try systemGit(["cat-file", "commit", "HEAD"], in: repo)
+        if !rebase { #expect(object.contains("\nauthor Author Bot <work@example.com> ")) }
+        #expect(object.contains("\ncommitter Commit Bot <work@example.com> "))
+    }
+
+    @Test("RFC 2822 signature dates write git's objects", arguments: [false, true])
+    func rfc2822DateEnvironmentParity(rebase: Bool) async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (repo, oracle) = try environmentParityRepository(rebase: rebase, in: root)
+        var environment = Self.mergeRebaseEnvironment
+        environment["GIT_AUTHOR_DATE"] = "Thu, 07 Apr 2005 22:13:13 +0200"
+        environment["GIT_COMMITTER_DATE"] = "Fri, 08 Apr 2005 09:00:00 -0330"
+        try await compareOperation(
+            rebase ? ["rebase", "main"] : ["merge", "--no-ff", "side"],
+            in: repo, oracle: oracle, environment: environment)
+        let object = try systemGit(["cat-file", "commit", "HEAD"], in: repo)
+        if !rebase { #expect(object.contains(" 1112904793 +0200\ncommitter ")) }
+        #expect(object.contains(" 1112963400 -0330\n"))
     }
 
     @Test("merge -S and rebase -S write git's signed objects at fixed dates",

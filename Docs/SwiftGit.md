@@ -87,6 +87,8 @@ let client = GitClient(
 | `tagCreate(name:target:force:)` / `tagCreateAnnotated(...)` / `tagDelete(name:)` | `git tag` family |
 | `verifyTag(_:inTagNamespace:)` | `git verify-tag` / `git tag -v` — OpenPGP verification through `gpg.program` / `gpg.openpgp.program`, SSH verification through `gpg.ssh.program` (`ssh-keygen -Y find-principals` / `verify`) against `gpg.ssh.allowedSignersFile` and `gpg.ssh.revocationFile` (launched via the shell's `ProcessLauncher`; x509 is reported unsupported); signed tags in merge / pull messages carry the verification, commented |
 | `verifyCommit(_:)` / `commitSignatureCheck(_:)` | `git verify-commit`, `log --show-signature` and the `%G` placeholders — the commit's `gpgsig` and payload from GitKit's `commitSignatures`, checked by the verifier `verifyTag` uses |
+| `mergeSignatureVerdict(_:checkTrust:)` | `git merge` / `git pull --verify-signatures` (and `merge.verifySignatures`) — git's `verify_merge_signature`: good / untrusted / bad / no signature, with the commit's unique abbreviation and the signer; `check_trust` is off once `gpg.minTrustLevel` is set |
+| `mergeTags(_:)` | the `mergetag` lines of `log` / `show --show-signature` — git's `show_mergetag`: each tag read from the commit itself (no tag object needed), described as `merged tag` / `parent #n, tagged` / `names a non-parent` / `malformed mergetag`, its signature checked by the verifier `verifyTag` uses |
 | `sign:` on `commitDetailed`, `merge`, `octopusMerge`, `cherryPick`, `rebase` (and their continue/skip), `tagCreateAnnotated`; `tagSignMode(sign:keyID:annotate:message:)` | `-S[<keyid>]` / `--no-gpg-sign` / `tag -s` / `-u`: `.config` is resolved here from `commit.gpgsign`, `tag.gpgsign` and `tag.forceSignAnnotated` (the same config stack: `-c`, `GIT_CONFIG_*`) into an explicit GitKit `SignMode`. Every `Repository` the client opens gets a `ShellSigner`, which does git's `sign_buffer` (`ssh-keygen -Y sign` for `gpg.format=ssh`, `<program> --status-fd=2 -bsau <key>` for openpgp / x509) through the shell's `ProcessLauncher` and sandbox; GitKit's `Process`-based fallback signer is switched off |
 | `move(from:to:)` / `remove(paths:keepWorktree:force:)` | `git mv` / `git rm` |
 | `stashSave(message:author:flags:)` / `stashApply / stashPop / stashDrop / stashList / stashClear / stashShow / stashBranch` | `git stash` family |
@@ -134,7 +136,7 @@ semantics mirror real git for every supported case (verified via
 side-by-side `diff` against `/usr/bin/git`).
 
 ```
-git clone [--depth N] [--single-branch] [--branch <name>] / fetch [--depth N|--unshallow] / pull [--rebase] / push
+git clone [--depth N] [--single-branch] [--branch <name>] / fetch [--depth N|--unshallow] / pull [--rebase] [--[no-]verify-signatures] / push
 git checkout {-b/-B/--/<ref> --}
 git switch [-c/-C] / restore [--staged] [--source]
 git add [-A] [-f] / commit [-m] [--allow-empty] [--author "Name <email>"]
@@ -146,6 +148,7 @@ git diff [--cached] [--stat / --shortstat / --numstat / --raw /
          [<a>..<b> / <a>...<b>] [-- <paths>]
 git log [--oneline] [--format <tmpl>] [--stat] [-p] [-<n>] [--[no-]show-signature]
         [<ref>] [<a>..<b>] [-- <paths>]      (%G? %GS %GK %GF %GP %GT %GG)
+        (--show-signature also shows each mergetag and its signature)
 git show [--[no-]show-signature] [<commit-or-tag>]
 git rev-parse [--short / --abbrev-ref / --is-inside-work-tree /
                --git-dir / --show-toplevel] <specs>...
@@ -163,7 +166,7 @@ git verify-tag {-v, --raw}
 git verify-commit {-v, --raw}
 git remote {-v, add, get-url, set-url, remove, rename}
 git branch {-d, -D, -m, -M, --show-current, --upstream}
-git merge {--ff, --no-ff, --ff-only, -S[<keyid>], --no-gpg-sign}
+git merge {--ff, --no-ff, --ff-only, -S[<keyid>], --no-gpg-sign, --[no-]verify-signatures}
 git rebase {<upstream>, --continue, --skip, --abort, --onto, -S[<keyid>], --no-gpg-sign}
 git cherry-pick {<commit>, --continue, --skip, --abort, -S[<keyid>], --no-gpg-sign}
 git version

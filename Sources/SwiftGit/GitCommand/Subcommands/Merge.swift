@@ -33,6 +33,10 @@ struct Merge: AsyncParsableCommand {
             help: "GPG-sign commits (-S[<keyid>], --gpg-sign[=<keyid>], --no-gpg-sign).")
     var gpgSign: [String] = []
 
+    @Flag(name: .customLong("verify-signatures"), inversion: .prefixedNo,
+          help: "Refuse to merge a commit without a good, trusted signature (merge.verifySignatures).")
+    var verifySignatures: Bool?
+
     @Argument(help: "Commits to merge into the current branch; more than one make an octopus merge.")
     var refs: [String] = []
 
@@ -73,6 +77,8 @@ struct Merge: AsyncParsableCommand {
             }
         }
 
+        let verify = try await Self.verifiesSignatures(verifySignatures, client: client)
+
         guard refs.count == 1, let ref = refs.first else {
             let heads: MergeHeads
             do {
@@ -93,6 +99,8 @@ struct Merge: AsyncParsableCommand {
             }
             var message = self.message
             if message == nil { message = try await client.mergeMessage(describing: names, objects: objects) }
+            // What's left once reduced is verified, before anything changes.
+            if verify { try await Self.verifyMergeSignatures(of: heads.heads, quiet: quiet, client: client) }
             try await Self.merge(heads: heads, mode: mode, message: message ?? "", client: client, quiet: quiet,
                                  sign: GPGSign.mode(gpgSign))
             return
@@ -109,6 +117,12 @@ struct Merge: AsyncParsableCommand {
            try await Self.bringsNewCommits(ref, client: client) {
             message = try await client.mergeMessage(describing: [name], objects: [oid])
         }
+        // The commit is verified unless HEAD already has it (reduced away,
+        // as git's collect_parents reduces it): an unborn branch, or a
+        // history with nothing in common, verifies it too.
+        if verify, let reduced = try? await client.mergeHeads(reducing: [ref]) {
+            try await Self.verifyMergeSignatures(of: reduced.heads, quiet: quiet, client: client)
+        }
 
         let outcome: MergeOutcome
         do {
@@ -120,8 +134,7 @@ struct Merge: AsyncParsableCommand {
                 "merge: \(ref) - not something we can merge", exitCode: 1)
         } catch let err as Libgit2Error
             where err.message.contains("Not possible to fast-forward") {
-            throw CLIError.stderr(
-                "fatal: Not possible to fast-forward, aborting.", exitCode: 128)
+            throw try await Pull.notPossibleToFastForward(client: client)
         }
 
         if !quiet {
