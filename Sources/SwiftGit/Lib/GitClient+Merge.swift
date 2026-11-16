@@ -19,12 +19,13 @@ extension GitClient {
         author: GitSignature? = nil,
         sign: SignMode = .config
     ) async throws -> MergeOutcome {
-        try await withRepository {
-            try $0.merge(
+        try await withRepository { repository in
+            try repository.merge(
                 ref: theirRef,
                 fastForward: fastForward,
                 message: message,
                 author: author.core,
+                env: try signatureEnvironment(for: repository),
                 sign: try resolvedCommitSignMode(sign))
         }
     }
@@ -36,12 +37,11 @@ extension GitClient {
         author: GitSignature? = nil,
         sign: SignMode = .config
     ) async throws -> Libgit2CommitDetails {
-        let env = shellEnvironment()
-        return try await withRepository {
-            try $0.mergeContinue(
+        try await withRepository { repository in
+            try repository.mergeContinue(
                 message: message,
                 author: author.core,
-                env: env,
+                env: try signatureEnvironment(for: repository),
                 sign: try resolvedCommitSignMode(sign))
         }
     }
@@ -66,11 +66,11 @@ extension GitClient {
         author: GitSignature? = nil,
         sign: SignMode = .config
     ) async throws -> OctopusMergeResult {
-        let env = shellEnvironment()
-        return try await withRepository {
-            try $0.octopusMerge(
+        try await withRepository { repository in
+            try repository.octopusMerge(
                 heads: heads, noFastForward: noFastForward, message: message,
-                author: author.core, env: env, sign: try resolvedCommitSignMode(sign))
+                author: author.core, env: try signatureEnvironment(for: repository),
+                sign: try resolvedCommitSignMode(sign))
         }
     }
 

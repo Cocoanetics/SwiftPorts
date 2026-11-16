@@ -69,8 +69,8 @@ extension SigningOracle {
     }
 
     @discardableResult
-    func systemGit(_ args: [String], in dir: URL) throws -> String {
-        let result = try run("git", args, in: dir)
+    func systemGit(_ args: [String], in dir: URL, environment: [String: String] = [:]) throws -> String {
+        let result = try run("git", args, in: dir, environment: environment)
         guard result.status == 0 else {
             throw SigningOracleFailure(description: "git \(args.joined(separator: " ")): \(result.err)")
         }
