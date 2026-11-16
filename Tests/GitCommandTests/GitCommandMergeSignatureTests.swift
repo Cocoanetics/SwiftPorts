@@ -27,6 +27,8 @@ struct GitCommandMergeSignatureTests: SigningOracle {
         /// HEAD there, where git keeps the branch — a gap of its own, not
         /// the signature check's — so the branch isn't compared after.
         var intoUnborn = false
+        /// Output only git 2.40 and newer gives (see ``systemGitIsModern``).
+        var modernGitOnly = false
 
         var description: String { (setup.map { $0.joined(separator: " ") } + [args.joined(separator: " ")])
             .joined(separator: "; ") }
@@ -83,6 +85,7 @@ struct GitCommandMergeSignatureTests: SigningOracle {
 
     /// Run `test` in two copies of `repo`, ours and git's, and compare.
     private func compare(_ test: Case, in repo: URL, index: Int) async throws {
+        if test.modernGitOnly && !systemGitIsModern { return }
         let theirs = try copy(repo, as: "theirs-\(index)")
         let ours = try copy(repo, as: "ours-\(index)")
         for copy in [theirs, ours] {
@@ -126,7 +129,8 @@ struct GitCommandMergeSignatureTests: SigningOracle {
             Case(args: ["merge", "-q", "--verify-signatures", "unsigned"], refused: true),
             // The signature is checked before the fast-forward is refused.
             Case(setup: [local], args: ["merge", "--ff-only", "--verify-signatures", "unsigned"], refused: true),
-            Case(setup: [local], args: ["merge", "--ff-only", "--verify-signatures", "good"], refused: true)
+            Case(setup: [local], args: ["merge", "--ff-only", "--verify-signatures", "good"], refused: true,
+                 modernGitOnly: true)
         ]
         for (index, test) in cases.enumerated() { try await compare(test, in: repo, index: index) }
     }
@@ -229,9 +233,11 @@ struct GitCommandMergeSignatureTests: SigningOracle {
             Case(args: pull + ["--verify-signatures", "good", "unsigned"], refused: true),
             Case(args: pull + ["--verify-signatures", "unsigned", "goodtop"], refused: false),
             // A rebase ignores the option, and says so when told it.
-            Case(setup: [local], args: rebase + ["--verify-signatures", "unsigned"], refused: false),
-            Case(setup: [local, on], args: rebase + ["unsigned"], refused: false),
-            Case(setup: [local], args: rebase + ["--no-verify-signatures", "unsigned"], refused: false),
+            Case(setup: [local], args: rebase + ["--verify-signatures", "unsigned"], refused: false,
+                 modernGitOnly: true),
+            Case(setup: [local, on], args: rebase + ["unsigned"], refused: false, modernGitOnly: true),
+            Case(setup: [local], args: rebase + ["--no-verify-signatures", "unsigned"], refused: false,
+                 modernGitOnly: true),
             // A rebase that fast-forwards merges, and verifies.
             Case(args: rebase + ["--verify-signatures", "unsigned"], refused: true),
             Case(args: rebase + ["--verify-signatures", "good"], refused: false)

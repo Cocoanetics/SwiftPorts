@@ -97,7 +97,8 @@ struct GitCommandMergetagTests: SigningOracle {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let (repo, commits) = try makeFixture(in: root)
-        for name in commits.keys.sorted() {
+        // git before 2.40 runs the verifier for a tag without a tagger.
+        for name in commits.keys.sorted() where systemGitIsModern || name != "noTagger" {
             let commit = try #require(commits[name])
             for args in [["log", "-1", "--show-signature", commit],
                          ["log", "-1", "--show-signature", "--oneline", commit],

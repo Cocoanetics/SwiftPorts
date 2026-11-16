@@ -10,6 +10,26 @@ import ShellKit
 
 let canSignWithSSHKeygen = FileManager.default.isExecutableFile(atPath: "/usr/bin/ssh-keygen")
 
+/// Whether the system `git` the oracle runs is one this port follows
+/// (2.40 or newer). Older ones differ in ways the port doesn't copy:
+/// 2.34 (Ubuntu 22.04's) gives `merge --ff-only` no diverging hint, writes
+/// rebase progress differently and runs the verifier for a tag without a
+/// tagger; cases that turn on those skip the comparison there.
+let systemGitIsModern: Bool = {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["git", "version"]
+    let out = Pipe()
+    process.standardOutput = out
+    guard (try? process.run()) != nil else { return false }
+    let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    process.waitUntilExit()
+    // `git version 2.54.0 (Apple Git-157)`
+    let numbers = text.split(separator: " ").dropFirst(2).first?.split(separator: ".").compactMap { Int($0) } ?? []
+    guard numbers.count >= 2 else { return false }
+    return (numbers[0], numbers[1]) >= (2, 40)
+}()
+
 /// A suite comparing ours with the system `git` over signed objects.
 protocol SigningOracle {
     var host: IsolatedGitHost { get }
