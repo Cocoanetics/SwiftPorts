@@ -29,8 +29,8 @@ struct GitCommandSigningTests {
     }
 
     @discardableResult
-    private func run(
-        _ executable: String, _ args: [String], in dir: URL
+    func run(
+        _ executable: String, _ args: [String], in dir: URL, environment: [String: String] = [:]
     ) throws -> (out: String, err: String, status: Int32) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -39,6 +39,7 @@ struct GitCommandSigningTests {
         host.isolate(process)
         process.environment?["SSH_AUTH_SOCK"] = nil
         process.environment?.merge(Self.dates) { _, new in new }
+        process.environment?.merge(environment) { _, new in new }
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
@@ -50,8 +51,8 @@ struct GitCommandSigningTests {
     }
 
     @discardableResult
-    private func systemGit(_ args: [String], in dir: URL) throws -> String {
-        let result = try run("git", args, in: dir)
+    func systemGit(_ args: [String], in dir: URL, environment: [String: String] = [:]) throws -> String {
+        let result = try run("git", args, in: dir, environment: environment)
         guard result.status == 0 else {
             throw Failure(description: "git \(args.joined(separator: " ")): \(result.err)")
         }
@@ -61,7 +62,7 @@ struct GitCommandSigningTests {
     /// Ours, in a shell over `dir` with the isolated host's config and
     /// `environment` on top, its stdout, its stderr and git's last words,
     /// and the status it exits with.
-    private func git(
+    func git(
         _ args: [String], in dir: URL, environment: [String: String] = [:],
         launcher: (any ProcessLauncher)? = nil, commands: [any Command] = []
     ) async throws -> (stdout: String, stderr: String, status: Int32) {
@@ -91,7 +92,7 @@ struct GitCommandSigningTests {
 
     /// A repository `name` under `root` with one commit, set up to sign
     /// with ssh key `key` (a path, or `nil` for none).
-    private func makeRepository(_ name: String, in root: URL, key: String?) throws -> URL {
+    func makeRepository(_ name: String, in root: URL, key: String?) throws -> URL {
         let repo = root.appendingPathComponent(name)
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
         try systemGit(["init", "-q", "-b", "main"], in: repo)
@@ -105,7 +106,7 @@ struct GitCommandSigningTests {
         return repo
     }
 
-    private func makeRoot() throws -> URL {
+    func makeRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("Signing-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
@@ -113,7 +114,7 @@ struct GitCommandSigningTests {
 
     /// An ed25519 key pair `name` in `root`, and an allowed signers file
     /// trusting it for `test@example.com`.
-    private func makeKey(_ name: String, in root: URL) throws -> (key: String, allowed: String) {
+    func makeKey(_ name: String, in root: URL) throws -> (key: String, allowed: String) {
         let result = try run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", name, "-f", name], in: root)
         guard result.status == 0 else { throw Failure(description: result.err) }
         let publicKey = try String(contentsOf: root.appendingPathComponent(name + ".pub"), encoding: .utf8)
