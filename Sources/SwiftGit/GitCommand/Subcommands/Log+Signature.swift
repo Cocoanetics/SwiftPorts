@@ -78,6 +78,21 @@ extension Log {
         return check.output ?? ""
     }
 
+    /// What `--show-signature` shows after the `commit` line: git's
+    /// `show_signature`, then its `show_mergetag` — each tag the commit
+    /// merged, what it names, and what checking its signature said (or
+    /// `No signature` when that failed without a word).
+    static func showSignatureLines(
+        _ check: SwiftGit.GitClient.SignatureCheck?, commit: String, client: SwiftGit.GitClient
+    ) async throws -> String {
+        var lines = signatureLines(check)
+        for tag in try await client.mergeTags(commit) {
+            lines += tag.description
+            if let signature = tag.signature { lines += signature.output ?? "No signature\n" }
+        }
+        return lines
+    }
+
     /// `--show-signature` / `--no-show-signature` among `positionals`
     /// (before any `--`), the last one winning over `flag`, then
     /// `log.showSignature`; the positionals without them.

@@ -83,7 +83,8 @@ struct Log: AsyncParsableCommand {
             // git shows the signature after the `commit` line (with
             // `--oneline`, the abbreviated name), before the commit itself
             // with `--format`.
-            let signature = showSignatures ? Self.signatureLines(check) : ""
+            let signature = showSignatures
+                ? try await Self.showSignatureLines(check, commit: entry.sha, client: client) : ""
             if useOneline {
                 var line = entry.onelineFormat()
                 if let space = line.firstIndex(of: " ") {
