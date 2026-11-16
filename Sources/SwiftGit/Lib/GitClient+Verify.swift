@@ -109,7 +109,13 @@ extension GitClient {
     /// Tag object `oid` split into payload and signature; `nil` when
     /// `oid` can't be read as an object.
     func signedObject(_ oid: String) async throws -> SignedObject? {
-        let object: Data? = try await withRepository { _ in
+        try await rawObject(oid).map(Self.split)
+    }
+
+    /// The bytes of object `oid`, as git's `odb_read_object` gives them;
+    /// `nil` when `oid` can't be read as an object.
+    func rawObject(_ oid: String) async throws -> Data? {
+        try await withRepository { _ in
             var repo: OpaquePointer?
             var odb: OpaquePointer?
             var object: OpaquePointer?
@@ -126,7 +132,10 @@ extension GitClient {
             else { return nil }
             return Data(bytes: bytes, count: git_odb_object_size(object))
         }
-        guard let object else { return nil }
+    }
+
+    /// `object` split as git's `parse_signature` splits it.
+    static func split(_ object: Data) -> SignedObject {
         let bytes = [UInt8](object)
         // git's parse_signed_buffer: the last line that opens a signature.
         var start = 0

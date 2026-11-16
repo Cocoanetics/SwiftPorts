@@ -51,6 +51,10 @@ struct Pull: AsyncParsableCommand {
             help: "GPG-sign commits (-S[<keyid>], --gpg-sign[=<keyid>], --no-gpg-sign).")
     var gpgSign: [String] = []
 
+    @Flag(name: .customLong("verify-signatures"), inversion: .prefixedNo,
+          help: "Refuse to merge a commit without a good, trusted signature (merge.verifySignatures).")
+    var verifySignatures: Bool?
+
     @Argument(help: "The remote, then the refspecs to fetch and merge (e.g. `origin main`).")
     var arguments: [String] = []
 
@@ -257,6 +261,7 @@ struct Pull: AsyncParsableCommand {
         }
 
         if rebasing != .no, !canFastForward {
+            Self.warnVerifySignaturesIgnored(verifySignatures)
             // GitKit's rebase replays commits one by one: it can neither
             // recreate merges (`--rebase-merges`) nor ask what to do.
             if rebasing == .interactive {
@@ -302,6 +307,8 @@ struct Pull: AsyncParsableCommand {
             mergeMessage = try await client.pullMergeMessage(
                 for: Self.messageHeads(heads, current: current, client: client), repository: fetchFrom)
         }
+        try await Self.verifyPulledSignatures(heads, current: current, flag: verifySignatures, quiet: quiet,
+                                              client: client)
         if heads.count > 1 {
             // git's merge of `FETCH_HEAD`: the heads named by their
             // object names, the message from all that were fetched.
