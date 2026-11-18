@@ -12,7 +12,7 @@ struct LocalStoreTests {
     static let oid = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
 
     private func tmpDir(_ prefix: String) -> URL {
-        host.root.appendingPathComponent("\(prefix)-\(UUID().uuidString)")
+        host.root.appendingPathComponent(IsolatedLFSHost.shortName(prefix))
     }
 
     /// The path with symlinks resolved, as far up as it exists.
@@ -29,7 +29,7 @@ struct LocalStoreTests {
 
     private func makeRepo() async throws -> URL {
         try await host.run {
-            let dir = tmpDir("LocalStore")
+            let dir = tmpDir("Repo")
             let client = GitClient(workingDirectory: dir)
             try await client.initRepository(initialBranch: "main")
             try await client.configSet("user.email", "test@example.com")
@@ -61,7 +61,7 @@ struct LocalStoreTests {
     func linkedWorktree() async throws {
         try await host.run {
             let repo = try await makeRepo()
-            let linked = tmpDir("LocalStoreLinked")
+            let linked = tmpDir("Linked")
             try await GitClient(workingDirectory: repo).worktreeAdd(path: linked, branch: "feature")
 
             let linkedClient = GitClient(workingDirectory: linked)
@@ -91,7 +91,7 @@ struct LocalStoreTests {
             #expect(canonicalPath(relative.storageDirectory)
                     == canonicalPath(repo.appendingPathComponent(".git/custom-lfs")))
 
-            let linked = tmpDir("LocalStoreLinked")
+            let linked = tmpDir("Linked")
             try await client.worktreeAdd(path: linked, branch: "feature")
             let fromWorktree = try await LocalStore.open(GitClient(workingDirectory: linked))
             #expect(canonicalPath(fromWorktree.storageDirectory) == canonicalPath(relative.storageDirectory))

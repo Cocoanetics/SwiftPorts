@@ -13,11 +13,17 @@ struct IsolatedLFSHost: Sendable {
     let xdgConfigHome: URL
     let globalConfig: URL
 
+    /// A short random name, so paths under the root (worktree metadata
+    /// included) stay within Windows' `MAX_PATH`, which libgit2 enforces there.
+    static func shortName(_ prefix: String) -> String {
+        "\(prefix)-\(UUID().uuidString.prefix(8))"
+    }
+
     /// Makes the directories and an empty global config under a fresh
     /// temporary root.
     init() {
         root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("LFSHost-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent(Self.shortName("LFS"), isDirectory: true)
         home = root.appendingPathComponent("home", isDirectory: true)
         xdgConfigHome = root.appendingPathComponent("xdg", isDirectory: true)
         // libgit2 finds the global config as `$HOME/.gitconfig`; git is told the same file.
