@@ -5,6 +5,11 @@ import GitLab
 /// GitLab issue URL. Returns the IID plus an optional repository
 /// reference parsed from the URL (if URL form was used).
 enum IssueArgument {
+    // Mirrors glab v1.130's internal/cmdutils/url_parser.go issueURLPathRE.
+    // Only issues accept incident/; both URL kinds accept trailing path segments.
+    private static let issueURLPathRE = try? NSRegularExpression(
+        pattern: #"^(/(?:[^-][^/]+/){2,})+(?:-/)?(?:issues/(?:incident/)?|work_items/)([0-9]+)(?:/.*)?$"#)
+
     struct Parsed {
         let iid: Int
         let repoFromURL: RepositoryReference?
@@ -13,11 +18,11 @@ enum IssueArgument {
     static func parse(_ raw: String) throws -> Parsed {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
 
-        // URL form: https://gitlab.com/group/sub/repo/-/issues/123
+        // URL form: https://gitlab.com/group/sub/repo/-/{issues,work_items}/123
         if let url = URL(string: trimmed),
            let scheme = url.scheme?.lowercased(),
            ["http", "https"].contains(scheme) {
-            return try parseURL(url)
+            return try parseURL(url, raw: raw)
         }
 
         // Numeric form (with or without leading `#`).
@@ -28,30 +33,18 @@ enum IssueArgument {
         return Parsed(iid: iid, repoFromURL: nil)
     }
 
-    private static func parseURL(_ url: URL) throws -> Parsed {
+    private static func parseURL(_ url: URL, raw: String) throws -> Parsed {
         guard let host = url.host, !host.isEmpty else {
-            throw IssueArgumentError.malformed(url.absoluteString)
+            throw IssueArgumentError.malformed(raw)
         }
-        // Path shape (after leading slash): group(/sub)*/repo[/-]/issues[/incident]/<id>
-        let raw = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let segments = raw.split(separator: "/").map(String.init)
-        guard let issuesIdx = segments.lastIndex(of: "issues") else {
-            throw IssueArgumentError.malformed(url.absoluteString)
+        let path = url.path
+        guard let match = issueURLPathRE?.firstMatch(in: path, range: NSRange(path.startIndex..., in: path)),
+              let repoRange = Range(match.range(at: 1), in: path),
+              let iidRange = Range(match.range(at: 2), in: path),
+              let iid = Int(path[iidRange]), iid > 0 else {
+            throw IssueArgumentError.malformed(raw)
         }
-        // The issue IID comes after "issues" (or after "issues/incident").
-        var idIdx = issuesIdx + 1
-        if idIdx < segments.count, segments[idIdx] == "incident" { idIdx += 1 }
-        guard idIdx < segments.count, let iid = Int(segments[idIdx]), iid > 0 else {
-            throw IssueArgumentError.malformed(url.absoluteString)
-        }
-        // Repo path = segments before the optional `-` separator
-        // (which sits right before `issues`), so trim those.
-        var repoEnd = issuesIdx
-        if repoEnd > 0, segments[repoEnd - 1] == "-" { repoEnd -= 1 }
-        let repoSegments = Array(segments[..<repoEnd])
-        guard repoSegments.count >= 2 else {
-            throw IssueArgumentError.malformed(url.absoluteString)
-        }
+        let repoSegments = path[repoRange].split(separator: "/").map(String.init)
         let ref = RepositoryReference(host: host, pathSegments: repoSegments)
         return Parsed(iid: iid, repoFromURL: ref)
     }
@@ -63,7 +56,7 @@ enum IssueArgumentError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .malformed(let s):
-            return "Invalid issue argument: \"\(s)\". Expected a number, `#123`, or a full URL."
+            return "invalid issue format: \(String(reflecting: s))"
         }
     }
 }
