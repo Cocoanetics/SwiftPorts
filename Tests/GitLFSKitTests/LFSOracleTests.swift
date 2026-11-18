@@ -98,7 +98,7 @@ struct LFSOracleTests {
             }
             for dir in [repo, linked] {
                 let theirs = try oracle.lfsEnvironment(in: dir)
-                let ours = try await LocalStore.open(GitClient(workingDirectory: dir))
+                let ours = try await oracle.host.run { try await LocalStore.open(GitClient(workingDirectory: dir)) }
                 #expect(canonicalPath(ours.storageDirectory.path)
                         == canonicalPath(try #require(theirs["LfsStorageDir"])))
                 #expect(canonicalPath(ours.temporaryDirectory.path) == canonicalPath(try #require(theirs["TempDir"])))

@@ -95,9 +95,15 @@ public struct LocalStore: Sendable {
         guard size != 0 else { return true }
         let path = objectPathname(oid)
         try await Shell.authorize(path)
+        return Self.isObject(at: path, size: size)
+    }
+
+    /// `tools.FileExistsOfSize`: whether `url` is a file (not a directory)
+    /// of `size` bytes.
+    static func isObject(at url: URL, size: Int64) -> Bool {
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path.path, isDirectory: &isDirectory), !isDirectory.boolValue,
-              let attributes = try? FileManager.default.attributesOfItem(atPath: path.path)
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
         else { return false }
         return (attributes[.size] as? NSNumber)?.int64Value == size
     }

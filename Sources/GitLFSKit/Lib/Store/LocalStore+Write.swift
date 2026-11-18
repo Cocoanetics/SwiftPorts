@@ -7,15 +7,22 @@ import ShellKit
 // transfer adapters' verify, `tools.RenameFileCopyPermissions`).
 extension LocalStore {
 
-    /// A new, empty file in ``temporaryDirectory`` (`lfs.TempFile`).
+    /// A new, empty file in ``temporaryDirectory`` (`lfs.TempFile`). Like
+    /// Go's `os.CreateTemp`, the name is created exclusively: a name already
+    /// taken is never truncated, another one is tried instead.
     public func makeTemporaryFile() async throws -> URL {
         try await Self.makeDirectory(temporaryDirectory)
-        let file = temporaryDirectory.appendingPathComponent(String(UInt32.random(in: .min ... .max)))
-        try await Shell.authorize(file)
-        guard FileManager.default.createFile(atPath: file.path, contents: nil) else {
-            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: file.path])
+        var attempts = 0
+        while true {
+            let file = temporaryDirectory.appendingPathComponent(String(UInt32.random(in: .min ... .max)))
+            try await Shell.authorize(file)
+            do {
+                try Data().write(to: file, options: .withoutOverwriting)
+                return file
+            } catch CocoaError.fileWriteFileExists where attempts < 10_000 {
+                attempts += 1
+            }
         }
-        return file
     }
 
     /// Writes `data` to a file in ``temporaryDirectory`` and moves it into
@@ -38,12 +45,18 @@ extension LocalStore {
         guard actual == oid else {
             throw LocalStoreError.unexpectedOID(expected: oid, actual: actual, written: written)
         }
+        // The empty object is the null device, always present: nothing to move.
+        if oid == Pointer.emptyObjectSHA256 {
+            try FileManager.default.removeItem(at: temporaryFile)
+            return Self.nullDevice
+        }
         let destination = try await objectPath(oid)
         try await Shell.authorize(destination)
         do {
             try Self.renameCopyingPermissions(temporaryFile, to: destination)
-        } catch where FileManager.default.fileExists(atPath: destination.path) {
+        } catch where Self.isObject(at: destination, size: written) {
             // Already downloaded, possibly by another git-lfs process.
+            try? FileManager.default.removeItem(at: temporaryFile)
         }
         return destination
     }

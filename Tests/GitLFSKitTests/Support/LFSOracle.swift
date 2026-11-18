@@ -1,39 +1,21 @@
 // The system `git` and `git-lfs` as the oracle the LFS suites compare
-// against, run in an isolated HOME / XDG / global config (as
-// `IsolatedGitHost` does for the git suites) so a developer's own
-// `lfs.*` or filter settings can't reach a test.
+// against, run in an isolated HOME / XDG / global config
+// (`IsolatedLFSHost`) so a developer's own `lfs.*` or filter settings
+// can't reach a test.
 #if os(macOS) || os(Linux)
 import Foundation
 
 struct LFSOracle: Sendable {
-    let root: URL
-    let home: URL
-    let xdgConfigHome: URL
-    let globalConfig: URL
+    /// The isolated configuration both the oracle and ours run under.
+    let host = IsolatedLFSHost()
+
+    var root: URL { host.root }
+    var variables: [String: String] { host.variables }
 
     /// Whether `git lfs version` runs; the oracle suites are skipped otherwise.
     static let isAvailable: Bool = {
         (try? LFSOracle().run(["lfs", "version"], in: FileManager.default.temporaryDirectory).status) == 0
     }()
-
-    init() {
-        root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("LFSOracle-\(UUID().uuidString)", isDirectory: true)
-        home = root.appendingPathComponent("home", isDirectory: true)
-        xdgConfigHome = root.appendingPathComponent("xdg", isDirectory: true)
-        globalConfig = home.appendingPathComponent(".gitconfig")
-        try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: xdgConfigHome, withIntermediateDirectories: true)
-        try? "".write(to: globalConfig, atomically: true, encoding: .utf8)
-    }
-
-    /// The variables that isolate git's configuration.
-    var variables: [String: String] {
-        ["HOME": home.path,
-         "XDG_CONFIG_HOME": xdgConfigHome.path,
-         "GIT_CONFIG_GLOBAL": globalConfig.path,
-         "GIT_CONFIG_NOSYSTEM": "1"]
-    }
 
     /// `git <args>` in `dir`, with `input` on stdin: its stdout bytes,
     /// stderr text and exit status.
