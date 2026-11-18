@@ -31,9 +31,32 @@ extension GitCommandSigningTests {
         return repo
     }
 
+    /// Clone a fixture for the system-git oracle / remote. Skips
+    /// `.git/objects/maintenance.lock`, which git may create and unlink while
+    /// `FileManager.copyItem` is walking the tree (NSCocoaErrorDomain Code=4).
+    private func copyRepository(_ source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        let items = try fm.contentsOfDirectory(
+            at: source, includingPropertiesForKeys: [.isDirectoryKey], options: [])
+        for item in items {
+            if item.lastPathComponent == "maintenance.lock" { continue }
+            let target = destination.appendingPathComponent(item.lastPathComponent)
+            var isDirectory: ObjCBool = false
+            guard fm.fileExists(atPath: item.path, isDirectory: &isDirectory) else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            if isDirectory.boolValue {
+                try copyRepository(item, to: target)
+            } else {
+                try fm.copyItem(at: item, to: target)
+            }
+        }
+    }
+
     private func parityTwin(of repo: URL) throws -> URL {
         let oracle = repo.deletingLastPathComponent().appendingPathComponent("oracle")
-        try FileManager.default.copyItem(at: repo, to: oracle)
+        try copyRepository(repo, to: oracle)
         return oracle
     }
 
@@ -59,6 +82,21 @@ extension GitCommandSigningTests {
         let repo = try parityRepository(in: root)
         if rebase { try systemGit(["checkout", "-q", "side"], in: repo) }
         return (repo, try parityTwin(of: repo))
+    }
+
+    @Test("oracle clone skips .git/objects/maintenance.lock so a vanishing lock cannot fail the copy")
+    func oracleCloneSkipsMaintenanceLock() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try parityRepository(in: root)
+        let lock = repo.appendingPathComponent(".git/objects/maintenance.lock")
+        try Data("locked\n".utf8).write(to: lock)
+        let oracle = try parityTwin(of: repo)
+        #expect(!FileManager.default.fileExists(
+            atPath: oracle.appendingPathComponent(".git/objects/maintenance.lock").path))
+        #expect(FileManager.default.fileExists(
+            atPath: oracle.appendingPathComponent(".git/HEAD").path))
+        try expectObjectParity(repo, oracle)
     }
 
     @Test("merge --no-ff and merge -m write git's objects with separate environment signatures", arguments: [
@@ -152,7 +190,7 @@ extension GitCommandSigningTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let repo = try parityRepository(in: root)
         let remote = root.appendingPathComponent("remote")
-        try FileManager.default.copyItem(at: repo, to: remote)
+        try copyRepository(repo, to: remote)
         try systemGit(["checkout", "-q", "side"], in: repo)
         try systemGit(["remote", "add", "origin", remote.path], in: repo)
         for (name, value) in [("branch.side.remote", "origin"), ("branch.side.merge", "refs/heads/main"),
