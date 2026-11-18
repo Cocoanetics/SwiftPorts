@@ -18,7 +18,7 @@ struct LFSOracleTests {
         Data((0..<256).map { UInt8($0) }),
         Data(repeating: 0x61, count: 1023),
         Data(repeating: 0x62, count: 1024),
-        Data((0..<200_000).map { UInt8(truncatingIfNeeded: $0 &* 31) }),
+        Data((0..<200_000).map { UInt8(truncatingIfNeeded: $0 &* 31) })
     ]
 
     private func canonicalPath(_ path: String) -> String {
@@ -99,7 +99,8 @@ struct LFSOracleTests {
             for dir in [repo, linked] {
                 let theirs = try oracle.lfsEnvironment(in: dir)
                 let ours = try await LocalStore.open(GitClient(workingDirectory: dir))
-                #expect(canonicalPath(ours.storageDirectory.path) == canonicalPath(try #require(theirs["LfsStorageDir"])))
+                #expect(canonicalPath(ours.storageDirectory.path)
+                        == canonicalPath(try #require(theirs["LfsStorageDir"])))
                 #expect(canonicalPath(ours.temporaryDirectory.path) == canonicalPath(try #require(theirs["TempDir"])))
                 #expect(canonicalPath(ours.gitStorageDirectory.path)
                         == canonicalPath(try #require(theirs["LocalGitStorageDir"])))

@@ -78,7 +78,8 @@ struct LocalStoreTests {
 
         try await client.configSet("lfs.storage", "custom-lfs")
         let relative = try await LocalStore.open(client)
-        #expect(canonicalPath(relative.storageDirectory) == canonicalPath(repo.appendingPathComponent(".git/custom-lfs")))
+        #expect(canonicalPath(relative.storageDirectory)
+                == canonicalPath(repo.appendingPathComponent(".git/custom-lfs")))
 
         let linked = tmpDir("LocalStoreLinked")
         try await client.worktreeAdd(path: linked, branch: "feature")

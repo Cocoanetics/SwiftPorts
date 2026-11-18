@@ -74,7 +74,7 @@ struct PointerTests {
         let pointer = try Pointer.decode(Data(text.utf8))
         #expect(pointer.extensions == [
             PointerExtension(name: "foo", priority: 0, oid: a),
-            PointerExtension(name: "bar", priority: 1, oid: b),
+            PointerExtension(name: "bar", priority: 1, oid: b)
         ])
         #expect(!pointer.canonical)
         let ordered = """

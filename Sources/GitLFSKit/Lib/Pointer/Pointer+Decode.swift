@@ -105,7 +105,8 @@ extension Pointer {
         let type = String(value[..<colon])
         guard type == oidType else { throw PointerError.invalidOIDType(type) }
         let oid = String(value[value.index(after: colon)...])
-        guard oid.utf8.count == 64, oid.utf8.allSatisfy({ (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }) else {
+        let isLowerHex = { (byte: UInt8) in (0x30...0x39).contains(byte) || (0x61...0x66).contains(byte) }
+        guard oid.utf8.count == 64, oid.utf8.allSatisfy(isLowerHex) else {
             throw PointerError.invalidOID(oid)
         }
         return oid

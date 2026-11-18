@@ -30,7 +30,8 @@ struct PointerRejection: Sendable, CustomStringConvertible {
               error: "pointer parsing: Expected key size, got oid"),
         .init(name: "line after size", text: version + "oid sha256:\(oid)\nsize 12345\nsize 12345\n",
               error: "Pointer file error: extra line: size 12345"),
-        .init(name: "empty version", text: "version \next-0-x-git-lfs sha256:\(otherOID)\noid sha256:\(oid)\nsize 12345\n",
+        .init(name: "empty version",
+              text: "version \next-0-x-git-lfs sha256:\(otherOID)\noid sha256:\(oid)\nsize 12345\n",
               error: "Pointer file error: Missing version"),
         .init(name: "unknown version", text: "version https://git-lfs.github.com/spec/v2\noid sha256:\(oid)\nsize 1\n",
               error: "Invalid version: https://git-lfs.github.com/spec/v2"),
@@ -53,7 +54,8 @@ struct PointerRejection: Sendable, CustomStringConvertible {
         .init(name: "extension with a bad oid", text: version + "ext-0-foo sha256:xyz\noid sha256:\(oid)\nsize 12345\n",
               error: "Invalid OID: xyz"),
         .init(name: "duplicate extension priority",
-              text: version + "ext-0-foo sha256:\(otherOID)\next-0-bar sha256:\(otherOID)\noid sha256:\(oid)\nsize 12345\n",
-              error: "duplicate priority found: 0"),
+              text: version + "ext-0-foo sha256:\(otherOID)\next-0-bar sha256:\(otherOID)\n"
+                  + "oid sha256:\(oid)\nsize 12345\n",
+              error: "duplicate priority found: 0")
     ]
 }

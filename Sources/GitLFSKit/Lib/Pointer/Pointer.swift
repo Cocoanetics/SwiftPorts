@@ -24,7 +24,7 @@ public struct Pointer: Sendable, Equatable {
     public static let v1Aliases = [
         "http://git-media.io/v/2",
         "https://hawser.github.com/spec/v1",
-        latestVersion,
+        latestVersion
     ]
 
     /// `sha256`, the only OID type git-lfs accepts.
