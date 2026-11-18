@@ -39,6 +39,49 @@ import Testing
         #expect(parsed.iid == 42)
     }
 
+    @Test(arguments: [
+        "-/work_items/6",
+        "work_items/6",
+        "-/work_items/6/",
+        "-/work_items/6/activity",
+        "-/work_items/6?foo=bar#note_123",
+        "-/work_items/6/merge_requests/99",
+        "-/issues/6",
+        "issues/6",
+        "-/issues/incident/6",
+        "issues/incident/6"
+    ])
+    func parsesIssueURLPaths(_ path: String) throws {
+        let parsed = try IssueArgument.parse("https://gitlab.example.com/group/sub/repo/\(path)")
+        #expect(parsed.iid == 6)
+        let repo = try #require(parsed.repoFromURL)
+        #expect(repo.host == "gitlab.example.com")
+        #expect(repo.pathSegments == ["group", "sub", "repo"])
+    }
+
+    @Test(arguments: [
+        "abc",
+        "",
+        "https://gitlab.example.com/group/sub/repo/-/work_items/incident/6",
+        "https://gitlab.example.com/group/sub/repo/work_items/incident/6",
+        "https://gitlab.example.com/group/sub/repo/-/work_items/",
+        "https://gitlab.example.com/group/sub/repo/-/work_items/nope",
+        "https://gitlab.example.com/group/sub/repo/-/work_items/6extra",
+        "https://gitlab.example.com/group/sub/repo/-/merge_requests/6",
+        "https://gitlab.example.com/repo/-/work_items/6",
+        "ftp://gitlab.example.com/group/sub/repo/-/work_items/6"
+    ])
+    func rejectsInvalidIssueFormat(_ raw: String) {
+        #expect(throws: IssueArgumentError.self) {
+            do {
+                _ = try IssueArgument.parse(raw)
+            } catch {
+                #expect(error.localizedDescription == "invalid issue format: \"\(raw)\"")
+                throw error
+            }
+        }
+    }
+
     @Test func rejectsNonNumeric() {
         #expect(throws: IssueArgumentError.self) {
             _ = try IssueArgument.parse("abc")
