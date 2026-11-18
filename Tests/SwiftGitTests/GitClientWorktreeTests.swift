@@ -59,6 +59,25 @@ struct GitClientWorktreeTests {
         #expect(try await client.worktreeList().count == 1)
     }
 
+    @Test("commonDir is the main repository's git dir, from a linked worktree too")
+    func commonDir() async throws {
+        let dir = try await makeRepo()
+        let linked = tmpDir("GitClientCommonDirWorktree")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { try? FileManager.default.removeItem(at: linked) }
+
+        let client = SwiftGit.GitClient(workingDirectory: dir)
+        try await client.worktreeAdd(path: linked, branch: "common-dir")
+        let main = try #require(try await client.commonDir())
+        #expect(canonicalPath(URL(fileURLWithPath: main)) == canonicalPath(dir.appendingPathComponent(".git")))
+
+        let linkedClient = SwiftGit.GitClient(workingDirectory: linked)
+        let shared = try #require(try await linkedClient.commonDir())
+        let gitDir = try #require(try await linkedClient.gitDir())
+        #expect(canonicalPath(URL(fileURLWithPath: shared)) == canonicalPath(URL(fileURLWithPath: main)))
+        #expect(canonicalPath(URL(fileURLWithPath: gitDir)) != canonicalPath(URL(fileURLWithPath: main)))
+    }
+
     @Test("remove refuses dirty linked worktree unless forced")
     func removeDirtyRequiresForce() async throws {
         let dir = try await makeRepo()

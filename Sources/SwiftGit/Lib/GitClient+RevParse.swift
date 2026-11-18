@@ -1,4 +1,5 @@
 import Foundation
+import CGitKit
 import GitKit
 
 // Sandbox-aware delegation onto the pure `Repository` rev-parse /
@@ -13,6 +14,16 @@ extension GitClient {
     /// Path to the repo's `.git` directory — `git rev-parse --git-dir`.
     public func gitDir() async throws -> String? {
         try await withRepository { try $0.gitDir() }
+    }
+
+    /// Path to the directory a linked worktree shares with the main
+    /// repository (objects, refs, config) — `git rev-parse --git-common-dir`.
+    /// The same as ``gitDir()`` outside a linked worktree.
+    public func commonDir() async throws -> String? {
+        try await withRepository { repository in
+            guard let pointer = Self.handle(of: repository) else { return try repository.gitDir() }
+            return git_repository_commondir(pointer).map { String(cString: $0) }
+        }
     }
 
     /// Working-tree root — `git rev-parse --show-toplevel`. Nil for bare repos.
