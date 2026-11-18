@@ -73,11 +73,7 @@ extension LocalStore {
             }
         }
         do {
-            if manager.fileExists(atPath: destination.path) {
-                _ = try manager.replaceItemAt(destination, withItemAt: source)
-            } else {
-                try manager.moveItem(at: source, to: destination)
-            }
+            try renameReplacing(source.path, destination.path)
         } catch {
             throw LocalStoreError.cannotReplace(destination.path, source.path, String(describing: error))
         }

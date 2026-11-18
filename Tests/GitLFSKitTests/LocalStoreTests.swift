@@ -48,7 +48,7 @@ struct LocalStoreTests {
         #expect(canonicalPath(store.incompleteDirectory) == canonicalPath(lfs.appendingPathComponent("incomplete")))
         #expect(canonicalPath(store.objectPathname(Self.oid))
                 == canonicalPath(lfs.appendingPathComponent("objects/58/91/\(Self.oid)")))
-        #expect(store.objectPathname(Pointer.emptyObjectSHA256).path == "/dev/null")
+        #expect(store.objectPathname(Pointer.emptyObjectSHA256) == LocalStore.nullDevice)
     }
 
     @Test("a linked worktree shares the main repository's store")
@@ -104,6 +104,17 @@ struct LocalStoreTests {
         #expect(try Data(contentsOf: path) == Self.content)
         #expect(try await store.objectExists(Self.oid, size: 6))
         #expect(try await !store.objectExists(Self.oid, size: 7))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: store.temporaryDirectory.path).isEmpty)
+    }
+
+    @Test("storing an object that is already there keeps it")
+    func storesExistingObject() async throws {
+        let repo = try await makeRepo()
+        let store = try await LocalStore.open(GitClient(workingDirectory: repo))
+        try await store.store(Self.content, oid: Self.oid)
+        let path = try await store.store(Self.content, oid: Self.oid)
+        #expect(try Data(contentsOf: path) == Self.content)
+        #expect(try await store.objectExists(Self.oid, size: 6))
         #expect(try FileManager.default.contentsOfDirectory(atPath: store.temporaryDirectory.path).isEmpty)
     }
 

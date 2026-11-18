@@ -61,7 +61,7 @@ oracle suite.
 | `LocalStore(gitStorageDirectory:storage:)` | `fs.New` — `lfs.storage` absolute as is, relative against the common dir, else `lfs` |
 | `storageDirectory` | `LFSStorageDir` |
 | `objectsDirectory`, `temporaryDirectory`, `incompleteDirectory` | `<lfs dir>/objects`, `/tmp`, `/incomplete` |
-| `objectPathname(_:)` | `ObjectPathname` — `objects/<oid[0:2]>/<oid[2:4]>/<oid>`, `/dev/null` for the empty object |
+| `objectPathname(_:)` | `ObjectPathname` — `objects/<oid[0:2]>/<oid[2:4]>/<oid>`, the null device (`/dev/null`, `NUL` on Windows) for the empty object |
 | `objectPath(_:)` | `ObjectPath` — makes the directory; `too short object ID: "<oid>"` |
 | `objectExists(_:size:)` | `ObjectExists` |
 | `makeTemporaryFile()` | `lfs.TempFile` |

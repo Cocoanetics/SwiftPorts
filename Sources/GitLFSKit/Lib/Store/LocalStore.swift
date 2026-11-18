@@ -55,11 +55,21 @@ public struct LocalStore: Sendable {
         storageDirectory.appendingPathComponent("incomplete", isDirectory: true)
     }
 
-    /// Where object `oid` lives (`ObjectPathname`); `/dev/null` for the
+    /// The platform's null device, Go's `os.DevNull`: `NUL` on Windows,
+    /// `/dev/null` elsewhere.
+    public static var nullDevice: URL {
+        #if os(Windows)
+        URL(fileURLWithPath: "NUL")
+        #else
+        URL(fileURLWithPath: "/dev/null")
+        #endif
+    }
+
+    /// Where object `oid` lives (`ObjectPathname`); ``nullDevice`` for the
     /// empty object.
     public func objectPathname(_ oid: String) -> URL {
         if oid == Pointer.emptyObjectSHA256 {
-            return URL(fileURLWithPath: "/dev/null")
+            return Self.nullDevice
         }
         return localObjectDirectory(oid).appendingPathComponent(oid)
     }
@@ -68,7 +78,7 @@ public struct LocalStore: Sendable {
     public func objectPath(_ oid: String) async throws -> URL {
         guard oid.utf8.count >= 4 else { throw LocalStoreError.tooShortObjectID(oid) }
         if oid == Pointer.emptyObjectSHA256 {
-            return URL(fileURLWithPath: "/dev/null")
+            return Self.nullDevice
         }
         let directory = localObjectDirectory(oid)
         do {
