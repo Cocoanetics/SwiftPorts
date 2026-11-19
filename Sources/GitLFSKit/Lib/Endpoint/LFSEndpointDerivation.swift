@@ -2,8 +2,10 @@ import Foundation
 
 /// `lfsapi.endpointGitFinder.NewEndpoint` and `lfshttp.EndpointFrom*`.
 enum LFSEndpointDerivation {
-    static func fromCloneURL(_ raw: String, upload: Bool, gitProtocol: String, aliases: AliasMaps) -> LFSEndpoint {
-        var endpoint = fromURL(raw, upload: upload, gitProtocol: gitProtocol, aliases: aliases)
+    static func fromCloneURL(
+        _ raw: String, upload: Bool, gitProtocol: String, aliases: AliasMaps, base: String
+    ) -> LFSEndpoint {
+        var endpoint = fromURL(raw, upload: upload, gitProtocol: gitProtocol, aliases: aliases, base: base)
         if endpoint.url == LFSEndpoint.unknown { return endpoint }
         if endpoint.url.hasSuffix("/") { endpoint.url.removeLast() }
         if endpoint.url.hasPrefix("file://") { return endpoint }
@@ -15,14 +17,16 @@ enum LFSEndpointDerivation {
         return endpoint
     }
 
-    static func fromURL(_ raw: String, upload: Bool, gitProtocol: String, aliases: AliasMaps) -> LFSEndpoint {
+    static func fromURL(
+        _ raw: String, upload: Bool, gitProtocol: String, aliases: AliasMaps, base: String
+    ) -> LFSEndpoint {
         let raw = aliases.replace(raw, upload: upload)
-        if raw.hasPrefix("/") { return fromLocalPath(raw) }
+        if raw.hasPrefix("/") { return fromLocalPath(raw, base: base) }
         #if os(Windows)
-        if raw.contains(":\\") || raw.hasPrefix("\\\\") { return fromLocalPath(raw) }
+        if raw.contains(":\\") || raw.hasPrefix("\\\\") { return fromLocalPath(raw, base: base) }
         #endif
         guard let scheme = LFSURL.scheme(of: raw) else {
-            if fileExists(raw) { return fromLocalPath(raw) }
+            if fileExists(raw, base: base) { return fromLocalPath(raw, base: base) }
             return fromBareSSH(raw)
         }
         switch scheme {
@@ -40,7 +44,7 @@ enum LFSEndpointDerivation {
             return LFSEndpoint(url: text, originalURL: text)
         default:
             if raw.hasPrefix(scheme + "::") { return LFSEndpoint(url: raw) }
-            if fileExists(raw) { return fromLocalPath(raw) }
+            if fileExists(raw, base: base) { return fromLocalPath(raw, base: base) }
             return fromBareSSH(LFSURL.parse(raw).string())
         }
     }
@@ -77,28 +81,28 @@ enum LFSEndpointDerivation {
     }
 
     /// `git.RewriteLocalPathAsURL`, then an endpoint whose URL is that result.
-    static func fromLocalPath(_ path: String) -> LFSEndpoint {
-        let url = rewriteLocalPath(path)
+    static func fromLocalPath(_ path: String, base: String) -> LFSEndpoint {
+        let url = rewriteLocalPath(path, base: base)
         return LFSEndpoint(url: url, originalURL: url)
     }
 
-    static func rewriteLocalPath(_ path: String) -> String {
+    static func rewriteLocalPath(_ path: String, base: String) -> String {
         var path = path
         var slash = ""
-        let absolute = absolutePath(path)
+        let absolute = absolutePath(path, base: base)
         if !absolute.hasPrefix("/") { slash = "/" }
         path = absolute
-        let base = (path as NSString).lastPathComponent
+        let leaf = (path as NSString).lastPathComponent
         var gitpath: String
-        if base == ".git" {
+        if leaf == ".git" {
             gitpath = path
             path = (path as NSString).deletingLastPathComponent
         } else {
             gitpath = (path as NSString).appendingPathComponent(".git")
         }
-        if fileExists(gitpath) {
+        if fileExists(gitpath, base: base) {
             path = gitpath
-        } else if !fileExists(path) {
+        } else if !fileExists(path, base: base) {
             return path
         }
         let slashed = path.replacingOccurrences(of: "\\", with: "/")
@@ -117,19 +121,22 @@ enum LFSEndpointDerivation {
         return (host, port)
     }
 
-    static func fileExists(_ path: String) -> Bool {
-        FileManager.default.fileExists(atPath: path)
+    static func fileExists(_ path: String, base: String) -> Bool {
+        FileManager.default.fileExists(atPath: located(path, base: base))
     }
 
     /// `filepath.Abs` without resolving symlinks, then `filepath.Clean`.
-    static func absolutePath(_ path: String) -> String {
-        let absolute: String
-        if (path as NSString).isAbsolutePath {
-            absolute = path
-        } else {
-            absolute = (FileManager.default.currentDirectoryPath as NSString).appendingPathComponent(path)
-        }
-        return clean(absolute)
+    /// A relative path joins `base`, the repository directory git-lfs would
+    /// have been run in, rather than the process's current directory.
+    static func absolutePath(_ path: String, base: String) -> String {
+        clean(located(path, base: base))
+    }
+
+    /// An absolute path stays put. A relative one is joined onto `base`
+    /// the way `filepath.Abs` joins onto the process directory.
+    static func located(_ path: String, base: String) -> String {
+        if (path as NSString).isAbsolutePath || base.isEmpty { return path }
+        return (base as NSString).appendingPathComponent(path)
     }
 
     static func clean(_ path: String) -> String {

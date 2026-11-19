@@ -149,10 +149,13 @@ public final class LFSEndpointFinder: @unchecked Sendable {
     }
 
     private func derived(_ raw: String, upload: Bool, clone: Bool) -> LFSEndpoint {
+        let base = client.workingDirectory.path
         if clone {
-            return LFSEndpointDerivation.fromCloneURL(raw, upload: upload, gitProtocol: gitProtocol, aliases: aliases)
+            return LFSEndpointDerivation.fromCloneURL(
+                raw, upload: upload, gitProtocol: gitProtocol, aliases: aliases, base: base)
         }
-        return LFSEndpointDerivation.fromURL(raw, upload: upload, gitProtocol: gitProtocol, aliases: aliases)
+        return LFSEndpointDerivation.fromURL(
+            raw, upload: upload, gitProtocol: gitProtocol, aliases: aliases, base: base)
     }
 
     private func described(_ endpoint: LFSEndpoint) -> String {
@@ -194,7 +197,9 @@ public final class LFSEndpointFinder: @unchecked Sendable {
         while dir.hasSuffix("/") { dir.removeLast() }
         let path = dir + "/FETCH_HEAD"
         let url = URL(fileURLWithPath: path)
-        _ = try? await Shell.authorize(url)
+        // A denial is not a missing file. Reading after `try?` would let a
+        // refused FETCH_HEAD choose the endpoint anyway.
+        do { try await Shell.authorize(url) } catch { return nil }
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
         guard let line = text.split(separator: "\n", omittingEmptySubsequences: false).first else { return nil }
         return extractRemoteURL(String(line).trimmingCharacters(in: .newlines))

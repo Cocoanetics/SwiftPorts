@@ -1,4 +1,5 @@
 import Foundation
+import ShellKit
 
 /// One `machine` (or `default`) from a netrc file (`git-lfs/go-netrc`).
 struct NetrcMachine: Equatable, Sendable {
@@ -55,8 +56,8 @@ struct NetrcFile: Equatable, Sendable {
     }
 
     /// `$HOME/.netrc`, then `_netrc` on Windows. `nil` when the file can't be parsed
-    /// (git-lfs then skips netrc). An absent file is an empty one.
-    static func load(home: String?) -> NetrcFile? {
+    /// or the sandbox refuses it (git-lfs then skips netrc). An absent file is an empty one.
+    static func load(home: String?) async -> NetrcFile? {
         guard let home, !home.isEmpty else { return NetrcFile(machines: []) }
         var names = [".netrc"]
         #if os(Windows)
@@ -65,6 +66,10 @@ struct NetrcFile: Equatable, Sendable {
         for name in names {
             let path = (home as NSString).appendingPathComponent(name)
             guard FileManager.default.fileExists(atPath: path) else { continue }
+            let url = URL(fileURLWithPath: path)
+            // Denial has to win before the bytes are read. A refused
+            // credential file is unusable, same as one that will not parse.
+            do { try await Shell.authorize(url) } catch { return nil }
             guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
             return try? parse(text)
         }

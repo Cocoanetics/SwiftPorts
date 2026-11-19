@@ -260,13 +260,13 @@ jobs:
           Write-Host "vcpkg .lib inventory under $base (recursive):"
           Get-ChildItem "$base" -Recurse -Filter "*.lib" -ErrorAction SilentlyContinue |
             ForEach-Object { Write-Host "  $($_.FullName)" }
-          # vcpkg's x64-windows-static-md triplet ships zlib's static
-          # library as `zs.lib` (yes, really — the inventory above
-          # confirmed this). Other vcpkg triplets and historical
-          # releases used `zlib.lib`; cover both. libarchive's
-          # `linkedLibrary("z")` looks up `z.lib`, so we always end
-          # up aliasing the chosen artifact under that name.
-          $candidates = @("zs.lib", "zlib.lib", "libzlib.lib", "libz.lib", "z.lib")
+          # vcpkg's x64-windows-static-md triplet has shipped zlib's
+          # static library as `zs.lib` and, currently, `libzs.lib`
+          # (the inventory above is what to trust when the name moves
+          # again). Other triplets used `zlib.lib`. libarchive's
+          # `linkedLibrary("z")` looks up `z.lib`, so the chosen
+          # artifact is aliased to that name.
+          $candidates = @("libzs.lib", "zs.lib", "zlib.lib", "libzlib.lib", "libz.lib", "z.lib")
           $zlibLib = $null
           foreach ($name in $candidates) {
             $p = Join-Path "$base\lib" $name

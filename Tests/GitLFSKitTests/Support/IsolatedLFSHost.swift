@@ -54,6 +54,29 @@ struct IsolatedLFSHost: Sendable {
             authorize: { _ in })
     }
 
+    /// The same regions as ``sandbox``, refusing URLs for which `refuses` is true.
+    func sandbox(refusing refuses: @escaping @Sendable (URL) -> Bool) -> Sandbox {
+        let open = sandbox
+        return Sandbox(
+            documentsDirectory: open.documentsDirectory,
+            downloadsDirectory: open.downloadsDirectory,
+            libraryDirectory: open.libraryDirectory,
+            moviesDirectory: open.moviesDirectory,
+            musicDirectory: open.musicDirectory,
+            picturesDirectory: open.picturesDirectory,
+            sharedPublicDirectory: open.sharedPublicDirectory,
+            temporaryDirectory: open.temporaryDirectory,
+            trashDirectory: open.trashDirectory,
+            userDirectory: open.userDirectory,
+            cachesDirectory: open.cachesDirectory,
+            homeDirectory: open.homeDirectory,
+            authorize: { url in
+                if refuses(url) {
+                    throw Sandbox.Denial(url: url, reason: "denied")
+                }
+            })
+    }
+
     /// Runs `body` in a shell whose git configuration is this host's.
     func run<T: Sendable>(_ body: () async throws -> T) async rethrows -> T {
         let shell = Shell(environment: Environment(variables: variables, workingDirectory: root.path))

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import SwiftGit
+import ShellKit
 @testable import GitLFSKit
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -242,5 +243,39 @@ struct LFSCredentialTests {
             #expect(calls.count == 0)
             #expect(LFSMockURLProtocol.requests().count == 1)
         }
+    }
+
+    @Test("a denied netrc file is not sent")
+    func deniedNetrc() async throws {
+        let calls = CredentialCalls()
+        let providerHeader = LFSBasicAuth.header(username: "git", password: "from-provider")
+        LFSMockURLProtocol.install { request in
+            let status = request.value(forHTTPHeaderField: "Authorization") == providerHeader ? 200 : 401
+            return (status, Data())
+        }
+        defer { LFSMockURLProtocol.reset() }
+        let directory = try await host.run {
+            let netrc = "machine example.com\nlogin git\npassword from-netrc\n"
+            try Data(netrc.utf8).write(to: host.home.appendingPathComponent(".netrc"))
+            let made = try await LFSFixture.make(
+                host, "netrc-deny",
+                remotes: [("origin", "https://example.com/repo.git")],
+                config: [("lfs.https://example.com/repo.git/info/lfs.access", "basic")])
+            return made.directory
+        }
+        let shell = Shell(
+            environment: Environment(variables: host.variables, workingDirectory: host.root.path),
+            sandbox: host.sandbox { $0.lastPathComponent == ".netrc" || $0.lastPathComponent == "_netrc" })
+        try await shell.withCurrent {
+            let lfs = await LFSClient(
+                git: GitClient(workingDirectory: directory),
+                credentials: provider(calls),
+                session: LFSMockURLProtocol.session())
+            _ = try await lfs.data(for: get())
+        }
+        #expect(calls.count == 1)
+        let requests = LFSMockURLProtocol.requests()
+        #expect(requests.count == 1)
+        #expect(requests[0].value(forHTTPHeaderField: "Authorization") == providerHeader)
     }
 }

@@ -20,13 +20,16 @@ public final class LFSClient: @unchecked Sendable {
     public let finder: LFSEndpointFinder
     let context: LFSCredentialContext
     let session: URLSession
+    /// Which access modes this client may still try. Shared by concurrent
+    /// requests, so every read and write takes ``modesLock``.
+    private let modesLock = NSLock()
     private var modes = ["none", "negotiate", "basic"]
 
     public init(git: GitClient, credentials: CredentialProvider? = nil, session: URLSession? = nil) async {
         let finder = await LFSEndpointFinder(git)
         self.finder = finder
         context = LFSCredentialContext(
-            netrc: NetrcFile.load(home: Shell.env("HOME")),
+            netrc: await NetrcFile.load(home: Shell.env("HOME")),
             provider: credentials,
             cacheEnabled: finder.cacheCredentials)
         self.session = session ?? URLSession(configuration: .default)
@@ -45,25 +48,20 @@ public final class LFSClient: @unchecked Sendable {
         let starting = finder.access(for: endpoint.url)
         let attempts = starting.mode == "none" ? 4 : 3
         for index in 0..<attempts {
-            if try await perform(&request, endpoint: endpoint, operation: operation, remote: remote) {
-                return body()
+            if let payload = try await perform(
+                &request, endpoint: endpoint, operation: operation, remote: remote) {
+                return payload
             }
             if index == attempts - 1 { break }
         }
         throw LFSClientError("too many authentication attempts")
     }
 
-    /// The body of the attempt ``perform`` just accepted.
-    private var carried: Data?
-    private func body() -> Data {
-        defer { carried = nil }
-        return carried ?? Data()
-    }
-
-    /// Performs one attempt. Returns true when the response is success and ``carried`` holds the body.
+    /// Performs one attempt. The payload stays with this call: concurrent
+    /// requests on the same client must not share a body buffer.
     private func perform(
         _ request: inout URLRequest, endpoint: LFSEndpoint, operation: String, remote: String
-    ) async throws -> Bool {
+    ) async throws -> Data? {
         let access = finder.access(for: endpoint.url)
         applyExtra(&request, finder.extraHeaders(for: request.url?.absoluteString ?? endpoint.url))
         let applied = try applyCredentials(
@@ -76,12 +74,10 @@ public final class LFSClient: @unchecked Sendable {
         }
         if (200..<300).contains(http.statusCode) {
             if case .helper(let filled) = applied { context.approve(filled) }
-            carried = data
-            return true
+            return data
         }
         if http.statusCode < 400 {
-            carried = data
-            return true
+            return data
         }
         let message = Self.httpMessage(status: http.statusCode, body: data, url: request.url)
         guard http.statusCode == 401 else { throw LFSClientError(message) }
@@ -96,7 +92,7 @@ public final class LFSClient: @unchecked Sendable {
         if promoted != access.mode {
             await finder.setAccess(LFSAccess(mode: promoted, url: access.url))
         }
-        return false
+        return nil
     }
 
     private func resolvedRemote(_ remote: String?, operation: String) async throws -> String {
@@ -168,6 +164,8 @@ public final class LFSClient: @unchecked Sendable {
     }
 
     private func promote(_ response: HTTPURLResponse, from current: String) -> String {
+        modesLock.lock()
+        defer { modesLock.unlock() }
         let remaining = modes.filter { $0 != current }
         let chosen = remaining.first { Self.authenticateTokens(response).contains($0) } ?? "basic"
         if chosen != current { modes = remaining }

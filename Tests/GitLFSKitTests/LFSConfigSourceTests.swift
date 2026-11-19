@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import SwiftGit
+import ShellKit
 @testable import GitLFSKit
 
 @Suite("LFS config sources")
@@ -153,6 +154,45 @@ struct LFSConfigSourceTests {
             #expect(url.hasSuffix("/.git"))
             #expect(!url.contains("info/lfs"))
         }
+    }
+
+    @Test("a relative local URL resolves against the repository directory")
+    func relativeLocalURL() async throws {
+        try await host.run {
+            let made = try await LFSFixture.make(host, "rel", commit: true)
+            let server = made.directory.deletingLastPathComponent()
+                .appendingPathComponent("server.git", isDirectory: true)
+            try await GitClient(workingDirectory: server).initRepository(initialBranch: "main")
+            let wanted = "file://\(server.path)/.git"
+            try await made.client.configSet("remote.origin.url", "../server.git")
+            let remote = await LFSEndpointFinder(made.client).endpoint(operation: "download").url
+            #expect(remote == wanted)
+            try await made.client.configSet("lfs.url", "../server.git")
+            let configured = await LFSEndpointFinder(made.client).endpoint(operation: "download").url
+            #expect(configured == wanted)
+        }
+    }
+
+    @Test("a denied FETCH_HEAD does not choose the endpoint")
+    func deniedFetchHead() async throws {
+        let directory = try await host.run {
+            let made = try await LFSFixture.make(host, "fetch-deny", commit: true)
+            let gitDir = try #require(try await made.client.gitDir())
+            let oid = String(repeating: "b", count: 40)
+            let text = "\(oid)\t\tbranch 'main' of https://example.com/denied-fetch\n"
+            try text.write(
+                to: URL(fileURLWithPath: gitDir).appendingPathComponent("FETCH_HEAD"),
+                atomically: true, encoding: .utf8)
+            return made.directory
+        }
+        let shell = Shell(
+            environment: Environment(variables: host.variables, workingDirectory: host.root.path),
+            sandbox: host.sandbox { $0.lastPathComponent == "FETCH_HEAD" })
+        let url = await shell.withCurrent {
+            let client = GitClient(workingDirectory: directory)
+            return await LFSEndpointFinder(client).endpoint(operation: "download").url
+        }
+        #expect(url.isEmpty)
     }
 
     @Test(".lfsconfig is read from the index, then HEAD; a bare repo reads HEAD only")
