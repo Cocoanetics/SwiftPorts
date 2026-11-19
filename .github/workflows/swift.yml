@@ -212,7 +212,9 @@ jobs:
     # ships archive_windows.{h,c} POSIX-compat shims so the C sources
     # build cleanly. The whole tree (`zip`, `unzip`, `gh`, `glab`,
     # `git`) compiles here.
-    runs-on: windows-latest
+    # Swift 6.4.2 bundles Clang 21; the newest VS 2026 STL requires Clang 22.
+    # Keep the VS 2022 toolchain until Swift supports the newer headers.
+    runs-on: windows-2022
     # 40 (was 30): the full monorepo build plus a both-traits SQLite rebuild
     # (recompiling the 10 MB sqlite3.c amalgamation) is tight on the slowest
     # runner. Combining the trait runs into one step keeps this well under, but
