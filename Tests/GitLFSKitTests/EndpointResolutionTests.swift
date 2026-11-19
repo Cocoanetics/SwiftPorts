@@ -128,6 +128,14 @@ struct EndpointResolutionTests {
             remotes: [("origin", "https://example.com:8443/a/b.git")],
             url: "https://example.com:8443/a/b.git/info/lfs"),
         EndpointRow(
+            name: "an IPv6 host keeps its brackets",
+            remotes: [("origin", "https://[2001:db8::1]/repo.git")],
+            url: "https://[2001:db8::1]/repo.git/info/lfs"),
+        EndpointRow(
+            name: "an IPv6 host with a port keeps its brackets",
+            remotes: [("origin", "https://[2001:db8::1]:8443/repo.git")],
+            url: "https://[2001:db8::1]:8443/repo.git/info/lfs"),
+        EndpointRow(
             name: "one trailing slash is stripped before .git is detected",
             remotes: [("origin", "https://example.com/a/b.git/")],
             url: "https://example.com/a/b.git/info/lfs"),

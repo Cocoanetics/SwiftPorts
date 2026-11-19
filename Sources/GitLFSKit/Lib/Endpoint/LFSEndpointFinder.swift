@@ -142,7 +142,8 @@ public final class LFSEndpointFinder: @unchecked Sendable {
         let git = gitRemoteURL(remote, upload: upload)
         if !git.isEmpty { return derived(git, upload: upload, clone: true) }
         if remote == "origin", let fetchHead {
-            // FETCH_HEAD is only ever a download URL.
+            // git-lfs calls NewEndpointFromCloneURL("download", url) here.
+            // The recorded URL is a fetch URL, and pushInsteadOf is not applied.
             return derived(fetchHead, upload: false, clone: true)
         }
         return LFSEndpoint()

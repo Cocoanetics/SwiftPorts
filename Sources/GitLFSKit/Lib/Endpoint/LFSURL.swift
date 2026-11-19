@@ -14,11 +14,12 @@ struct LFSURL: Equatable, Sendable {
     var path = ""
     var rawQuery = ""
 
-    /// `url.URL.Host`: host and, when set, `:port`.
+    /// `url.URL.Host`: an IPv6 address stays in brackets, with `:port` when set.
+    /// A bare `2001:db8::1` is not a host; parsers stop at the first colon.
     var hostPort: String {
-        guard !port.isEmpty else { return host }
-        if host.contains(":") { return "[\(host)]:\(port)" }
-        return "\(host):\(port)"
+        let name = host.contains(":") ? "[\(host)]" : host
+        guard !port.isEmpty else { return name }
+        return "\(name):\(port)"
     }
 
     var hasPassword: Bool { password != nil }

@@ -30,29 +30,48 @@ struct NetrcFile: Equatable, Sendable {
         var tokens = tokenize(text).makeIterator()
         while let token = tokens.next() {
             switch token {
-            case "machine":
+            case .blank:
+                continue
+            case .word("machine"):
                 if sawDefault { throw ParseError("bad default order") }
                 if let current { machines.append(current) }
-                current = NetrcMachine(name: tokens.next() ?? "", login: "", password: "")
-            case "default":
+                current = NetrcMachine(name: nextWord(&tokens), login: "", password: "")
+            case .word("default"):
                 if let current { machines.append(current) }
                 sawDefault = true
                 current = NetrcMachine(name: "", login: "", password: "")
-            case "login":
-                current?.login = tokens.next() ?? ""
-            case "password":
-                current?.password = tokens.next() ?? ""
-            case "account":
-                _ = tokens.next()
-            case "macdef":
-                _ = tokens.next()
-                // The macro body runs until a blank line. Tokens already dropped those.
-            default:
+            case .word("login"):
+                current?.login = nextWord(&tokens)
+            case .word("password"):
+                current?.password = nextWord(&tokens)
+            case .word("account"):
+                _ = nextWord(&tokens)
+            case .word("macdef"):
+                // The name, then the body through the blank line that ends it.
+                // Words in the body are not login or password for the machine above.
+                skipMacro(&tokens)
+            case .word:
                 break
             }
         }
         if let current { machines.append(current) }
         return NetrcFile(machines: machines)
+    }
+
+    /// The next word, or empty when the value is missing.
+    private static func nextWord(_ tokens: inout IndexingIterator<[Token]>) -> String {
+        guard case .word(let word) = tokens.next() else { return "" }
+        return word
+    }
+
+    /// A `macdef` name, then every word until the blank line that ends the body.
+    /// A body that runs to EOF is skipped too (`netrc` macros end at a blank line).
+    private static func skipMacro(_ tokens: inout IndexingIterator<[Token]>) {
+        if case .word = tokens.next() {
+            while let body = tokens.next() {
+                if case .blank = body { return }
+            }
+        }
     }
 
     /// `$HOME/.netrc`, then `_netrc` on Windows. `nil` when the file can't be parsed
@@ -76,25 +95,39 @@ struct NetrcFile: Equatable, Sendable {
         return NetrcFile(machines: [])
     }
 
+    enum Token: Equatable {
+        case word(String)
+        /// A blank line. A `macdef` body ends on one.
+        case blank
+    }
+
     /// Words split on whitespace, `#` comments to the end of the line, and
-    /// double quotes keeping their spaces. Blank lines separate macros; we
-    /// don't need the macro body.
-    static func tokenize(_ text: String) -> [String] {
-        var tokens: [String] = []
+    /// double quotes keeping their spaces. A blank line is its own token so
+    /// a `macdef` body can be skipped instead of parsed as credentials.
+    static func tokenize(_ text: String) -> [Token] {
+        var tokens: [Token] = []
         var current = ""
         var quoting = false
         var comment = false
+        var lineHasContent = false
+        func flushWord() {
+            guard !current.isEmpty else { return }
+            tokens.append(.word(current))
+            current = ""
+            lineHasContent = true
+        }
         for character in text {
             if comment {
-                if character == "\n" { comment = false }
+                if character == "\n" {
+                    comment = false
+                    lineHasContent = false
+                }
                 continue
             }
             if character == "#" && !quoting {
                 comment = true
-                if !current.isEmpty {
-                    tokens.append(current)
-                    current = ""
-                }
+                flushWord()
+                lineHasContent = true
                 continue
             }
             if character == "\"" {
@@ -102,15 +135,17 @@ struct NetrcFile: Equatable, Sendable {
                 continue
             }
             if !quoting && character.isWhitespace {
-                if !current.isEmpty {
-                    tokens.append(current)
-                    current = ""
+                flushWord()
+                if character == "\n" {
+                    if !lineHasContent { tokens.append(.blank) }
+                    lineHasContent = false
                 }
                 continue
             }
+            lineHasContent = true
             current.append(character)
         }
-        if !current.isEmpty { tokens.append(current) }
+        flushWord()
         return tokens
     }
 

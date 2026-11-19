@@ -144,6 +144,31 @@ struct LFSConfigSourceTests {
         }
     }
 
+    @Test("an upload that falls back to FETCH_HEAD still uses insteadOf")
+    func fetchHeadUploadUsesInsteadOf() async throws {
+        // git-lfs RemoteEndpoint calls NewEndpointFromCloneURL("download", url)
+        // for FETCH_HEAD, so pushInsteadOf is not applied to that URL.
+        try await host.run {
+            let made = try await LFSFixture.make(
+                host, "fetch-upload",
+                config: [
+                    ("url.https://lfs.example/.insteadof", "https://github.com/"),
+                    ("url.https://push.example/.pushinsteadof", "https://github.com/")
+                ],
+                commit: true)
+            let gitDir = try #require(try await made.client.gitDir())
+            let oid = String(repeating: "c", count: 40)
+            let text = "\(oid)\t\tbranch 'main' of https://github.com/org/repo.git\n"
+            try text.write(
+                to: URL(fileURLWithPath: gitDir).appendingPathComponent("FETCH_HEAD"),
+                atomically: true, encoding: .utf8)
+            let finder = await LFSEndpointFinder(made.client)
+            let wanted = "https://lfs.example/org/repo.git/info/lfs"
+            #expect(finder.endpoint(operation: "download").url == wanted)
+            #expect(finder.endpoint(operation: "upload").url == wanted)
+        }
+    }
+
     @Test("a local repository remote becomes file:// and is not given /info/lfs")
     func localPath() async throws {
         try await host.run {
@@ -174,6 +199,14 @@ struct LFSConfigSourceTests {
             let configured = await LFSEndpointFinder(made.client).endpoint(operation: "download").url
             #expect(configured == wanted)
         }
+    }
+
+    @Test("filepath.Clean keeps a Windows volume when .. walks off the drive")
+    func windowsCleanKeepsVolume() {
+        #expect(LFSEndpointDerivation.clean(#"C:\repo\..\..\server.git"#) == #"C:\server.git"#)
+        #expect(LFSEndpointDerivation.clean(#"C:\repo\..\server.git"#) == #"C:\server.git"#)
+        #expect(LFSEndpointDerivation.clean("/repo/../../server.git") == "/server.git")
+        #expect(LFSEndpointDerivation.clean(#"\\server\share\a\..\..\b"#) == #"\\server\share\b"#)
     }
 
     @Test("a denied FETCH_HEAD does not choose the endpoint")
@@ -282,5 +315,23 @@ struct LFSConfigSourceTests {
         #expect(throws: NetrcFile.ParseError.self) {
             try NetrcFile.parse("default\nlogin a\npassword b\nmachine h\nlogin g\npassword p\n")
         }
+    }
+
+    @Test("a macdef body does not replace the machine password")
+    func netrcMacro() throws {
+        let file = try NetrcFile.parse("""
+        machine example.com
+        login real
+        password secret
+        macdef init
+        login fake
+        password stolen
+
+        machine other.com
+        login other
+        password other-secret
+        """)
+        #expect(file.find(host: "example.com", login: "real")?.password == "secret")
+        #expect(file.find(host: "other.com", login: "other")?.password == "other-secret")
     }
 }

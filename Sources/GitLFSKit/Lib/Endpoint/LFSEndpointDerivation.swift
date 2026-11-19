@@ -139,11 +139,60 @@ enum LFSEndpointDerivation {
         return (base as NSString).appendingPathComponent(path)
     }
 
+    /// `filepath.Clean`. A Windows drive or UNC share is a volume, so `..`
+    /// that walks off `C:\` stays on that drive (`C:\server.git`).
     static func clean(_ path: String) -> String {
-        let windows = path.contains("\\") && !path.hasPrefix("/")
-        let slash: Character = windows ? "\\" : "/"
+        if let cleaned = windowsClean(path) { return cleaned }
+        return slashClean(path, separator: "/")
+    }
+
+    /// `C:` or `\\server\share`, after `/` has been normalized to `\`.
+    private static func volumeName(_ path: String) -> String {
+        if path.count >= 2 {
+            let start = path.startIndex
+            let second = path.index(after: start)
+            if path[second] == ":", isASCIILetter(path[start]) {
+                return String(path[start...second])
+            }
+        }
+        guard path.hasPrefix("\\\\") else { return "" }
+        let pieces = path.dropFirst(2).split(separator: "\\", maxSplits: 2, omittingEmptySubsequences: false)
+        guard pieces.count >= 2, !pieces[0].isEmpty, !pieces[1].isEmpty else { return "" }
+        return "\\\\" + pieces[0] + "\\" + pieces[1]
+    }
+
+    /// Nil when `path` is a Unix path. Otherwise `filepath.Clean` on Windows.
+    private static func windowsClean(_ path: String) -> String? {
+        let normalized = path.replacingOccurrences(of: "/", with: "\\")
+        let volume = volumeName(normalized)
+        let backslash = path.contains("\\") && !path.hasPrefix("/")
+        guard !volume.isEmpty || backslash else { return nil }
+        var rest = String(normalized.dropFirst(volume.count))
+        let rooted = rest.hasPrefix("\\")
+        if rooted { rest.removeFirst() }
         var stack: [String] = []
-        for part in path.split(separator: slash, omittingEmptySubsequences: true) {
+        var leading = 0
+        for part in rest.split(separator: "\\", omittingEmptySubsequences: true) {
+            if part == "." { continue }
+            if part == ".." {
+                if !stack.isEmpty {
+                    stack.removeLast()
+                } else if !rooted {
+                    leading += 1
+                }
+                continue
+            }
+            stack.append(String(part))
+        }
+        let tail = (Array(repeating: "..", count: leading) + stack).joined(separator: "\\")
+        if rooted { return volume + "\\" + tail }
+        if tail.isEmpty { return volume.isEmpty ? "\\" : volume }
+        return volume + tail
+    }
+
+    private static func slashClean(_ path: String, separator: Character) -> String {
+        var stack: [String] = []
+        for part in path.split(separator: separator, omittingEmptySubsequences: true) {
             if part == "." { continue }
             if part == ".." {
                 if !stack.isEmpty { stack.removeLast() }
@@ -151,9 +200,16 @@ enum LFSEndpointDerivation {
             }
             stack.append(String(part))
         }
-        let joined = stack.joined(separator: String(slash))
-        if path.hasPrefix(String(slash)) { return String(slash) + joined }
-        return joined.isEmpty ? String(slash) : joined
+        let joined = stack.joined(separator: String(separator))
+        if path.hasPrefix(String(separator)) { return String(separator) + joined }
+        return joined.isEmpty ? String(separator) : joined
+    }
+
+    private static func isASCIILetter(_ character: Character) -> Bool {
+        guard let value = character.unicodeScalars.first?.value, character.unicodeScalars.count == 1 else {
+            return false
+        }
+        return (value >= 65 && value <= 90) || (value >= 97 && value <= 122)
     }
 
     static func splitColon(_ raw: String) -> [String] {
