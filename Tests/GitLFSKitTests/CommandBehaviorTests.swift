@@ -64,4 +64,20 @@ struct CommandBehaviorTests {
             #expect(!FileManager.default.fileExists(atPath: hook.path.path))
         }
     }
+
+    @Test("pointer stdin stops at the upstream 1024-byte cutoff", .timeLimit(.minutes(1)))
+    func pointerInputCutoff() async throws {
+        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        defer { continuation.finish() }
+        let pointer = Pointer(oid: String(repeating: "a", count: 64), size: 10).encoded
+        continuation.yield(Data(pointer.utf8) + Data(repeating: 0x20, count: Pointer.blobSizeCutoff))
+        let shell = Shell(stdin: InputSource(bytes: stream))
+        let result = try await shell.withCurrent {
+            var options = LFSPointerOptions()
+            options.stdin = true
+            options.check = true
+            return try await options.run()
+        }
+        #expect(result.status == 0)
+    }
 }

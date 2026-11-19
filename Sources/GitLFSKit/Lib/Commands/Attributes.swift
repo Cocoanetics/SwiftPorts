@@ -24,18 +24,22 @@ struct Attributes {
         where (entry.path as NSString).lastPathComponent == ".gitattributes" {
             files.insert(entry.path)
         }
-        // Macros in the root file apply to all nested attribute files.
-        var local: [AttributePath] = []
-        for file in files.sorted() {
-            let directory = (file as NSString).deletingLastPathComponent
-            local += try await read(root.appendingPathComponent(file), source: file, prefix: directory,
-                                    readMacros: file == ".gitattributes")
-        }
         let info = repo.gitDirectory.appendingPathComponent("info/attributes")
         let infoSource = relative(info, to: root)
-        local += try await read(info, source: infoSource,
-                                prefix: (infoSource as NSString).deletingLastPathComponent, readMacros: true)
-        local.sort { $0.source.utf8.count > $1.source.utf8.count }
+        var sources = files.map { (url: root.appendingPathComponent($0), source: $0) }
+        if FileManager.default.fileExists(atPath: info.path) { sources.append((info, infoSource)) }
+        // Upstream reads the more specific sources first. In particular, a macro
+        // defined in the root file hasn't yet been seen while reading nested files.
+        sources.sort {
+            $0.source.utf8.count == $1.source.utf8.count
+                ? $0.source < $1.source : $0.source.utf8.count > $1.source.utf8.count
+        }
+        var local: [AttributePath] = []
+        for file in sources {
+            let directory = (file.source as NSString).deletingLastPathComponent
+            local += try await read(file.url, source: file.source, prefix: directory,
+                                    readMacros: file.source == ".gitattributes" || file.source == infoSource)
+        }
         return local + globalPaths + external
     }
 

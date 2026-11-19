@@ -44,7 +44,9 @@ public struct Hook: Sendable {
 
     public func uninstall() async throws {
         try await Shell.authorize(path)
-        _ = try matchesCurrent()
+        do { _ = try matchesCurrent() }
+        catch let error as LFSFailure { throw error }
+        catch { throw LFSFailure(lfsFileError(error, path: path.path)) }
         try FileManager.default.removeItem(at: path)
     }
 

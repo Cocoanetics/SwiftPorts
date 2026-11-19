@@ -37,7 +37,7 @@ public struct LFSPointerOptions: Sendable {
                     result.stderr += "\nGit blob OID: \(blobOID(Data(text.utf8)))\n\n"
                 }
             } catch {
-                result.fail(fileError(error, path: file), status: 1)
+                result.fail(lfsFileError(error, path: file), status: 1)
                 return result
             }
         }
@@ -49,12 +49,12 @@ public struct LFSPointerOptions: Sendable {
             let data: Data
             do {
                 if stdin {
-                    data = await Shell.current.stdin.readAllData()
+                    data = await readPointerInput()
                 } else {
-                    data = try Data(contentsOf: await authorizedFile(pointer))
+                    data = try await readPointerFile(pointer)
                 }
             } catch {
-                result.fail(fileError(error, path: pointer), status: 1)
+                result.fail(lfsFileError(error, path: pointer), status: 1)
                 return result
             }
             // DecodePointer reads at most BlobSizeCutoff bytes through its tee.
@@ -95,14 +95,12 @@ public struct LFSPointerOptions: Sendable {
         let data: Data
         do {
             if stdin {
-                data = await Shell.current.stdin.readAllData()
+                data = await readPointerInput()
             } else {
-                let handle = try FileHandle(forReadingFrom: await authorizedFile(file))
-                defer { try? handle.close() }
-                data = try handle.read(upToCount: Pointer.blobSizeCutoff) ?? Data()
+                data = try await readPointerFile(file)
             }
         } catch {
-            return LFSCommandResult(stderr: fileError(error, path: file) + "\n", status: 2)
+            return LFSCommandResult(stderr: lfsFileError(error, path: file) + "\n", status: 2)
         }
         guard let decoded = try? Pointer.decode(data) else { return LFSCommandResult(status: 1) }
         return LFSCommandResult(status: strict && !decoded.canonical ? 2 : 0)
@@ -114,22 +112,24 @@ public struct LFSPointerOptions: Sendable {
         return url
     }
 
+    private func readPointerFile(_ path: String) async throws -> Data {
+        let handle = try FileHandle(forReadingFrom: await authorizedFile(path))
+        defer { try? handle.close() }
+        return try handle.read(upToCount: Pointer.blobSizeCutoff) ?? Data()
+    }
+
+    private func readPointerInput() async -> Data {
+        var data = Data()
+        for await chunk in Shell.current.stdin.bytes {
+            data.append(chunk.prefix(Pointer.blobSizeCutoff - data.count))
+            if data.count == Pointer.blobSizeCutoff { break }
+        }
+        return data
+    }
+
     private func blobOID(_ data: Data) -> String {
         let header = Data("blob \(data.count)\0".utf8)
         return Insecure.SHA1.hash(data: header + data).map { String(format: "%02x", $0) }.joined()
     }
 
-    private func fileError(_ error: Error, path: String) -> String {
-        let nsError = error as NSError
-        let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError
-        let reason: String
-        if nsError.code == NSFileReadNoSuchFileError || underlying?.code == Int(ENOENT) {
-            reason = "no such file or directory"
-        } else if underlying?.code == Int(EACCES) {
-            reason = "permission denied"
-        } else {
-            reason = error.localizedDescription
-        }
-        return "open \(path): \(reason)"
-    }
 }

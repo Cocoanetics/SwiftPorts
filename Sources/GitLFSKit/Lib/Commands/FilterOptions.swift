@@ -1,6 +1,13 @@
 import Foundation
 import ShellKit
 import SwiftGit
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#elseif canImport(Android)
+import Android
+#endif
 
 /// git-lfs `lfs/attribute.go` FilterOptions and install/uninstall command behavior.
 public struct FilterOptions: Sendable {
@@ -26,12 +33,12 @@ public struct FilterOptions: Sendable {
                     try config.set(key, value)
                 } else if current != value {
                     return LFSCommandResult(
-                        stdout: "warning: the \(key.goQuoted) attribute should be \(value.goQuoted) "
+                        stdout: systemWarning + "warning: the \(key.goQuoted) attribute should be \(value.goQuoted) "
                             + "but is \(current.goQuoted)\nRun `git lfs install --force` to reset Git configuration.\n",
                         status: 2)
                 }
             }
-            var result = LFSCommandResult()
+            var result = LFSCommandResult(stdout: systemWarning)
             let inRepo = (try? await client.gitDir()) != nil
             if !skipRepo && (local || worktree || inRepo) {
                 let repo = try await LFSRepository.open(client)
@@ -72,16 +79,17 @@ public struct FilterOptions: Sendable {
     public func uninstall(_ client: SwiftGit.GitClient) async throws -> LFSCommandResult {
         do {
             try await validate(client)
-            var result = LFSCommandResult()
+            var result = LFSCommandResult(stdout: systemWarning)
             let config = try await FilterConfiguration.open(self, client: client)
             if try await config.uninstall() == false {
-                result.stdout += "warning: error running /usr/bin/git 'config' "
-                    + "'\(local ? "--local" : worktree ? "--worktree" : system ? "--system" : "--global")' "
+                let destination = !file.isEmpty ? "'--file' '\(file)'"
+                    : "'\(local ? "--local" : worktree ? "--worktree" : system ? "--system" : "--global")'"
+                result.stdout += "warning: error running \(gitExecutable) 'config' '--includes' \(destination) "
                     + "'--remove-section' 'filter.lfs': 'fatal: no such section: filter.lfs' 'exit status 128'\n"
             }
             let inRepo = (try? await client.gitDir()) != nil
             if !skipRepo && (local || worktree || inRepo) {
-                let repo = try await LFSRepository.open(client)
+                let repo = try await LFSRepository.open(client, verifyFormat: false)
                 do {
                     for hook in Hook.loadHooks(directory: try await repo.hookDirectory(client)) {
                         try await hook.uninstall()
@@ -99,6 +107,25 @@ public struct FilterOptions: Sendable {
         } catch let error as LFSFailure {
             return error.result
         }
+    }
+
+    private var systemWarning: String {
+        #if os(Windows)
+        ""
+        #else
+        system && geteuid() != 0 ? "warning: current user is not root/admin, system install is likely to fail.\n" : ""
+        #endif
+    }
+
+    /// Only used in upstream's diagnostic for a failed config subprocess; never executed.
+    private var gitExecutable: String {
+        let search = [Shell.env("GIT_EXEC_PATH")].compactMap { $0 }
+            + (Shell.env("PATH") ?? "").components(separatedBy: ":")
+        for directory in search {
+            let path = URL(fileURLWithPath: directory).appendingPathComponent("git").path
+            if FileManager.default.isExecutableFile(atPath: path) { return path }
+        }
+        return "git"
     }
 
     private func validate(_ client: SwiftGit.GitClient) async throws {
