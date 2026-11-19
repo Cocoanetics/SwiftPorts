@@ -23,7 +23,9 @@ jobs:
 
   build-macos:
     runs-on: xcode-27
-    timeout-minutes: 25
+    # The full build, tests and SQLite traits rebuild exceed 25 minutes on
+    # hosted runners. Leave room for all three phases and runner variance.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - name: Select Xcode 27.1 (Swift 6.4)

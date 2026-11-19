@@ -57,6 +57,10 @@ let androidDroppedTargets: Set<String> = [
     // platforms; `SSHKit`/`GitKitSSH` themselves — the libraries, not
     // their tests — stay on Android, same as `GitHub`.)
     "GitHubTests", "SSHKitTests", "GitKitSSHTests",
+    // GitLFSKitTests links swift-crypto's BoringSSL C++ target too (through
+    // GitLFSKit's `Crypto` dependency), so it's dropped for the same reason.
+    // `GitLFSKit` itself stays on Android.
+    "GitLFSKitTests",
 ]
 
 func androidFiltered(products list: [Product]) -> [Product] {
@@ -350,6 +354,10 @@ let package = Package(
         // `GitSSHTransportProvider` hook. Opt-in: a host calls
         // `GitKitSSH.install()` itself; `SwiftGit`/`GitCommand` never do.
         .library(name: "GitKitSSH", targets: ["GitKitSSH"]),
+
+        // GitLFSKit — Git LFS SDK (git-lfs ≥ 3.x port, issue #184): v1
+        // pointers and the local object store shared by linked worktrees.
+        .library(name: "GitLFSKit", targets: ["GitLFSKit"]),
     ]),
     // Package traits — opt-in, build-time toggles. Off by default (none are
     // listed in any `.default(enabledTraits:)`).
@@ -1160,6 +1168,25 @@ let package = Package(
                 // `Shell.parsableCommand`, to run git the way a host shell does.
                 .product(name: "ShellCommandKit", package: "ShellKit"),
             ]
+        ),
+
+        // MARK: GitLFSKit (git-lfs SDK)
+        // No ArgumentParser dependency; stays in the Android build.
+        .target(
+            name: "GitLFSKit",
+            dependencies: [
+                "SwiftGit",
+                "SSHKit",
+                .product(name: "ShellKit", package: "ShellKit"),
+                .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "HTTPTypes", package: "swift-http-types"),
+                .product(name: "HTTPTypesFoundation", package: "swift-http-types"),
+            ],
+            path: "Sources/GitLFSKit/Lib"
+        ),
+        .testTarget(
+            name: "GitLFSKitTests",
+            dependencies: ["GitLFSKit", "SwiftGit", .product(name: "ShellKit", package: "ShellKit")]
         ),
 
         // MARK: RipgrepKit umbrella
