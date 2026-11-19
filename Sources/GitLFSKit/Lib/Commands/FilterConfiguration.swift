@@ -31,11 +31,17 @@ struct FilterConfiguration {
         return FilterConfiguration(path: path)
     }
 
-    /// libgit2 splits an include's directory on `/` only. A Windows `\`
-    /// path leaves `path = extra.cfg` relative, and authorising that
-    /// relative URL uses the process directory instead of this file.
+    /// Path passed to `git_config_open_ondisk`. On Windows, libgit2 splits an
+    /// include's directory on `/` only, so a `\` path would leave
+    /// `path = extra.cfg` relative. On Unix `\` is a filename character:
+    /// rewriting it opens a different file from the one `Shell.authorize`
+    /// approved, including through a symlink.
     private var openedPath: String {
+        #if os(Windows)
         path.path.replacingOccurrences(of: "\\", with: "/")
+        #else
+        path.path
+        #endif
     }
 
     func value(_ key: String) async throws -> String {
@@ -70,19 +76,25 @@ struct FilterConfiguration {
     /// Section names are case-insensitive; a quoted or dotted subsection is not,
     /// so `[filter "LFS"]` is a different section and stays.
     func uninstall() async throws -> Bool {
-        let lock = URL(fileURLWithPath: path.path + ".lock")
+        // Git rewrites the file a symlink points at and puts `<file>.lock`
+        // beside that file (`ConfigFileLock`). Renaming the lock onto the
+        // link itself would drop the link and leave `filter.lfs` in the target.
+        let targetPath = URL(fileURLWithPath: path.path).resolvingSymlinksInPath().path
+        let target = URL(fileURLWithPath: targetPath)
+        let lock = URL(fileURLWithPath: targetPath + ".lock")
+        try await Shell.authorize(target)
         try await Shell.authorize(lock)
         try Data().write(to: lock, options: .withoutOverwriting)
         defer { try? FileManager.default.removeItem(at: lock) }
-        guard FileManager.default.fileExists(atPath: path.path) else { return false }
-        let original = try String(contentsOf: path, encoding: .utf8)
+        guard FileManager.default.fileExists(atPath: targetPath) else { return false }
+        let original = try String(contentsOf: target, encoding: .utf8)
         guard let text = removingLFSFilter(original) else { return false }
         try text.write(to: lock, atomically: false, encoding: .utf8)
-        let attributes = try FileManager.default.attributesOfItem(atPath: path.path)
+        let attributes = try FileManager.default.attributesOfItem(atPath: targetPath)
         if let mode = attributes[.posixPermissions] {
             try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: lock.path)
         }
-        try renameReplacing(lock.path, path.path)
+        try renameReplacing(lock.path, targetPath)
         return true
     }
 

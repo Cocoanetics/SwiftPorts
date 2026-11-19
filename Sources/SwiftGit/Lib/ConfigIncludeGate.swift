@@ -45,10 +45,15 @@ final class ConfigIncludeGate: @unchecked Sendable {
     /// gate's). Throws the sandbox's denial.
     func authorizeRefused() async throws -> Bool {
         guard let path = takeRefused() else { return false }
-        // libgit2 may report `C:\repo\extra.cfg`. The sandbox prefix check
-        // uses the URL spelling (`C:/repo/...`); a raw backslash path is
-        // outside that root even when the file is inside it.
+        // Authorise the path libgit2 will open. On Windows it may report
+        // `C:\repo\extra.cfg` while the sandbox prefix check uses `C:/repo/...`,
+        // so only that platform rewrites separators. On Unix `\` is part of
+        // the name: authorising the slash form would approve a different file.
+        #if os(Windows)
         let readable = path.replacingOccurrences(of: "\\", with: "/")
+        #else
+        let readable = path
+        #endif
         try await Shell.authorize(URL(fileURLWithPath: readable))
         allow(path)
         return true
@@ -107,7 +112,14 @@ public func withAuthorizedConfigIncludes<T>(_ body: () throws -> T) async throws
     let gate = ConfigIncludeGate(enforcing: Shell.current.sandbox != nil)
     while true {
         do {
-            return try gate.run(body)
+            // `~/filters.cfg` expands through libgit2's process-global homedir.
+            // Use the calling shell's home and the same isolation lock as
+            // `isolatedGated`, so a previous shell cannot choose this include.
+            return try await Libgit2Turnstile.shared.run {
+                try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) {
+                    try gate.run(body)
+                }
+            }
         } catch {
             guard try await gate.authorizeRefused() else { throw error }
         }

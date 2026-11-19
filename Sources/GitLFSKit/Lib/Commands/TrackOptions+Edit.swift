@@ -60,7 +60,7 @@ extension TrackOptions {
         var modified = false
         for pattern in order where changed[pattern] != nil {
             if verbose { result.stdout += "Searching for files matching pattern: \(pattern)\n" }
-            let files = try matchingFiles(pattern, indexed: indexed, prefix: prefix)
+            let files = matchingFiles(pattern, indexed: indexed, prefix: prefix)
             if verbose {
                 result.stdout += "Found \(files.count) files previously added to Git matching pattern: \(pattern)\n"
             }
@@ -96,31 +96,82 @@ extension TrackOptions {
         return result
     }
 
-    private func matchingFiles(_ pattern: String, indexed: [String], prefix: String) throws -> [String] {
+    private func matchingFiles(_ pattern: String, indexed: [String], prefix: String) -> [String] {
+        indexed.compactMap { file in
+            guard file.hasPrefix(prefix) else { return nil }
+            let relative = String(file.dropFirst(prefix.count))
+            return Self.exclusionMatches(pattern, path: relative) ? relative : nil
+        }
+    }
+
+    /// `git ls-files -x`: a slash-free pattern matches the basename in any
+    /// directory, and `*` / `?` in a slash pattern do not cross `/`. A `**`
+    /// path component may. On Windows `\` is a separator; on Unix it is literal.
+    static func exclusionMatches(_ pattern: String, path: String) -> Bool {
+        var specs: [String: OpaquePointer] = [:]
+        defer { specs.values.forEach { git_pathspec_free($0) } }
+        let gitPattern = normalizedSeparator(pattern)
+        let anchored = gitPattern.hasPrefix("/")
+        let body = anchored ? String(gitPattern.dropFirst()) : gitPattern
+        if !anchored && !body.contains("/") {
+            return componentMatches(body, pathBasename(path), specs: &specs)
+        }
+        let patternParts = body.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let pathParts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        return partsMatch(patternParts[...], pathParts[...], specs: &specs)
+    }
+
+    private static func normalizedSeparator(_ pattern: String) -> String {
+        #if os(Windows)
+        pattern.replacingOccurrences(of: "\\", with: "/")
+        #else
+        pattern
+        #endif
+    }
+
+    private static func partsMatch(
+        _ pattern: ArraySlice<String>, _ path: ArraySlice<String>, specs: inout [String: OpaquePointer]
+    ) -> Bool {
+        guard let part = pattern.first else { return path.isEmpty }
+        let rest = pattern.dropFirst()
+        if part == "**" {
+            if partsMatch(rest, path, specs: &specs) { return true }
+            guard !path.isEmpty else { return false }
+            return partsMatch(pattern, path.dropFirst(), specs: &specs)
+        }
+        guard let component = path.first, componentMatches(part, component, specs: &specs) else { return false }
+        return partsMatch(rest, path.dropFirst(), specs: &specs)
+    }
+
+    private static func componentMatches(
+        _ pattern: String, _ component: String, specs: inout [String: OpaquePointer]
+    ) -> Bool {
+        if !pattern.contains(where: { "*?[\\".contains($0) }) { return pattern == component }
+        let spec: OpaquePointer
+        if let cached = specs[pattern] {
+            spec = cached
+        } else if let created = pathspec(for: pattern) {
+            specs[pattern] = created
+            spec = created
+        } else {
+            return false
+        }
+        return component.withCString { git_pathspec_matches_path(spec, 0, $0) == 1 }
+    }
+
+    private static func pathspec(for pattern: String) -> OpaquePointer? {
+        // A direct match can run before any repository open. libgit2 refuses
+        // pathspec allocation until it has been initialized.
+        git_libgit2_init()
         var spec: OpaquePointer?
-        let safe = pattern.hasPrefix("/") ? String(pattern.dropFirst()) : pattern
-        let code = safe.withCString { value in
+        let code = pattern.withCString { value in
             var pointer: UnsafeMutablePointer<CChar>? = UnsafeMutablePointer(mutating: value)
             return withUnsafeMutablePointer(to: &pointer) { array in
                 var strings = git_strarray(strings: array, count: 1)
                 return git_pathspec_new(&spec, &strings)
             }
         }
-        guard code == 0 else { return [] }
-        defer { git_pathspec_free(spec) }
-        // `git ls-files -x` matches a slash-free pattern against the basename,
-        // so `model.bin` touches `assets/model.bin`. Pathspec compares the whole path.
-        let rootWildcard = pattern.hasPrefix("/") && safe.contains("*")
-        return indexed.compactMap { file in
-            guard file.hasPrefix(prefix) else { return nil }
-            let relative = String(file.dropFirst(prefix.count))
-            if rootWildcard && relative.contains("/") { return nil }
-            // `git ls-files -x` matches a slash-free pattern against the basename.
-            // NSString.lastPathComponent splits on `\` on Windows and leaves
-            // `assets/model.bin` whole, so the pathspec never matches.
-            let candidate = safe.contains("/") || safe.contains("\\") ? relative : Self.pathBasename(relative)
-            return git_pathspec_matches_path(spec, 0, candidate) == 1 ? relative : nil
-        }
+        return code == 0 ? spec : nil
     }
 
     /// Path from the worktree root to the shell directory, with a trailing
