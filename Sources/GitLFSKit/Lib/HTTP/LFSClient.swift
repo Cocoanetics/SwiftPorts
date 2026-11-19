@@ -1,4 +1,6 @@
 import Foundation
+import HTTPTypes
+import HTTPTypesFoundation
 import ShellKit
 import SwiftGit
 #if canImport(FoundationNetworking)
@@ -11,11 +13,24 @@ public struct LFSClientError: Error, Equatable, CustomStringConvertible, Sendabl
     public init(_ description: String) { self.description = description }
 }
 
+/// Body of an authenticated LFS request. `.file` and `.stream` are not copied
+/// into a `Data` buffer. `.stream` is `URLRequest.httpBodyStream`, which
+/// `URLSession` reads once.
+public enum LFSRequestBody: @unchecked Sendable {
+    case data(Data)
+    case file(URL)
+    case stream(InputStream)
+}
+
 /// Sends an LFS request the way `lfsapi.Client.DoWithAuth` does: `http.<url>.extraHeader`
 /// on every attempt, and credentials only once access is no longer `none`
 /// (URL-embedded, then `~/.netrc`, then the caller's `CredentialProvider`).
 /// A 401 selects the next access mode — `basic` when the server doesn't say —
 /// writes `lfs.<url>.access`, and retries. `User-Agent` is `git-lfs`.
+///
+/// Authentication is implemented once, on ``send(_:body:operation:remote:)``.
+/// That entry point takes an `HTTPRequest` (`HTTPTypes` / `HTTPTypesFoundation`).
+/// ``data(for:operation:remote:)`` adapts a `URLRequest` onto it.
 public final class LFSClient: @unchecked Sendable {
     public let finder: LFSEndpointFinder
     public let ssh: LFSSSHResolver
@@ -26,7 +41,14 @@ public final class LFSClient: @unchecked Sendable {
     private let modesLock = NSLock()
     private var modes = ["none", "negotiate", "basic"]
 
-    public init(git: GitClient, credentials: CredentialProvider? = nil, session: URLSession? = nil) async {
+    /// `configuration` builds the session when `session` is nil, so a test can
+    /// inject `protocolClasses` without a second authentication path.
+    public init(
+        git: GitClient,
+        credentials: CredentialProvider? = nil,
+        configuration: URLSessionConfiguration = .default,
+        session: URLSession? = nil
+    ) async {
         let finder = await LFSEndpointFinder(git)
         self.finder = finder
         ssh = LFSSSHResolver(finder: finder)
@@ -34,14 +56,20 @@ public final class LFSClient: @unchecked Sendable {
             netrc: await NetrcFile.load(home: Shell.env("HOME")),
             provider: credentials,
             cacheEnabled: finder.cacheCredentials)
-        self.session = session ?? URLSession(configuration: .default)
+        self.session = session ?? URLSession(configuration: configuration)
     }
 
-    /// `DoAPIRequestWithAuth` for an already built request. `operation` defaults
-    /// from the method (`GET`/`HEAD` download, anything else upload). A nil
-    /// `remote` is the selected download or upload remote.
+    /// `DoAPIRequestWithAuth` for an `HTTPRequest`. `operation` defaults from
+    /// the method (`POST`/`PUT` upload, anything else download). A nil `remote`
+    /// is the selected download or upload remote. `.file` uses
+    /// `URLSession.upload(fromFile:)`, which does not read the file into memory.
     @discardableResult
-    public func data(for request: URLRequest, operation: String? = nil, remote: String? = nil) async throws -> Data {
+    public func send(
+        _ request: HTTPRequest,
+        body: LFSRequestBody? = nil,
+        operation: String? = nil,
+        remote: String? = nil
+    ) async throws -> (Data, HTTPResponse) {
         let operation = Self.operation(of: request, override: operation)
         let remote = try await resolvedRemote(remote, operation: operation)
         let endpoint = finder.endpoint(operation: operation, remote: remote)
@@ -50,7 +78,7 @@ public final class LFSClient: @unchecked Sendable {
         var sshHeaders: [String: String] = [:]
         let base = endpoint.url.hasSuffix("/") ? endpoint.url : endpoint.url + "/"
         if let url = request.url?.absoluteString, url == endpoint.url || url.hasPrefix(base) {
-            let response = try await ssh.resolve(endpoint, method: request.httpMethod ?? "GET")
+            let response = try await ssh.resolve(endpoint, method: request.method.rawValue)
             if !response.href.isEmpty {
                 resolved.url = response.href
                 request.url = try Self.sshRequestURL(
@@ -63,45 +91,63 @@ public final class LFSClient: @unchecked Sendable {
         let attempts = starting.mode == "none" ? 4 : 3
         for index in 0..<attempts {
             if let payload = try await perform(
-                &request, endpoint: endpoint, operation: operation, remote: remote, sshHeaders: sshHeaders) {
-                return payload
+                &request, body: body, endpoint: endpoint, operation: operation,
+                remote: remote, sshHeaders: sshHeaders) {
+                return (payload.0, Self.makeResponse(payload.1))
             }
             if index == attempts - 1 { break }
         }
         throw LFSClientError("too many authentication attempts")
     }
 
+    /// `DoAPIRequestWithAuth` for an already built `URLRequest`. The request is
+    /// sent through ``send(_:body:operation:remote:)``.
+    @discardableResult
+    public func data(for request: URLRequest, operation: String? = nil, remote: String? = nil) async throws -> Data {
+        guard let http = request.httpRequest else {
+            throw LFSClientError("invalid URL: \(request.url?.absoluteString ?? "")")
+        }
+        let body = Self.requestBody(request)
+        let (data, _) = try await send(http, body: body, operation: operation, remote: remote)
+        return data
+    }
+
+    /// Prefer `httpBody`. When it is absent, forward `httpBodyStream`.
+    private static func requestBody(_ request: URLRequest) -> LFSRequestBody? {
+        if let payload = request.httpBody { return .data(payload) }
+        if let stream = request.httpBodyStream { return .stream(stream) }
+        return nil
+    }
+
     /// Performs one attempt. The payload stays with this call: concurrent
     /// requests on the same client must not share a body buffer.
     private func perform(
-        _ request: inout URLRequest, endpoint: LFSEndpoint, operation: String, remote: String,
-        sshHeaders: [String: String]
-    ) async throws -> Data? {
+        _ request: inout HTTPRequest, body: LFSRequestBody?, endpoint: LFSEndpoint,
+        operation: String, remote: String, sshHeaders: [String: String]
+    ) async throws -> (Data, HTTPURLResponse)? {
         let access = finder.access(for: endpoint.url)
         applyExtra(&request, finder.extraHeaders(for: request.url?.absoluteString ?? endpoint.url))
-        for (key, value) in sshHeaders { request.setValue(value, forHTTPHeaderField: key) }
+        for (key, value) in sshHeaders {
+            if let name = HTTPField.Name(key) { request.headerFields[name] = value }
+        }
         let applied = try applyCredentials(
             &request, access: access, endpoint: endpoint, operation: operation, remote: remote)
-        request.setValue("git-lfs", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            let method = request.httpMethod ?? "GET"
-            throw LFSClientError("Invalid HTTP status for \(method) \(request.url?.absoluteString ?? ""): 0")
-        }
+        request.headerFields[.userAgent] = "git-lfs"
+        let (data, http) = try await execute(request, body: body)
         if (200..<300).contains(http.statusCode) {
             if case .helper(let filled) = applied { context.approve(filled) }
-            return data
+            return (data, http)
         }
         if http.statusCode < 400 {
-            return data
+            return (data, http)
         }
         let message = Self.httpMessage(status: http.statusCode, body: data, url: request.url)
         guard http.statusCode == 401 else { throw LFSClientError(message) }
-        if applied.stopsRetry, request.value(forHTTPHeaderField: "Authorization") != nil {
+        if applied.stopsRetry, request.headerFields[.authorization] != nil {
             throw LFSClientError("Authentication required: \(message)")
         }
         if case .helper(let filled) = applied {
-            request.setValue(nil, forHTTPHeaderField: "Authorization")
+            request.headerFields[.authorization] = nil
             context.reject(filled)
         }
         let promoted = promote(http, from: access.mode)
@@ -111,13 +157,54 @@ public final class LFSClient: @unchecked Sendable {
         return nil
     }
 
+    /// `HTTPTypesFoundation` turns the `HTTPRequest` into a `URLRequest` here.
+    /// A file body stays on `upload(fromFile:)` and is not buffered.
+    private func execute(
+        _ request: HTTPRequest, body: LFSRequestBody?
+    ) async throws -> (Data, HTTPURLResponse) {
+        guard var urlRequest = URLRequest(httpRequest: request) else {
+            throw LFSClientError("invalid URL: \(request.url?.absoluteString ?? "")")
+        }
+        let data: Data
+        let response: URLResponse
+        switch body {
+        case .file(let file):
+            (data, response) = try await session.upload(for: urlRequest, fromFile: file)
+        case .data(let payload):
+            urlRequest.httpBody = payload
+            (data, response) = try await session.data(for: urlRequest)
+        case .stream(let stream):
+            urlRequest.httpBodyStream = stream
+            (data, response) = try await session.data(for: urlRequest)
+        case nil:
+            (data, response) = try await session.data(for: urlRequest)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            let method = urlRequest.httpMethod ?? request.method.rawValue
+            let target = urlRequest.url?.absoluteString ?? ""
+            throw LFSClientError("Invalid HTTP status for \(method) \(target): 0")
+        }
+        return (data, http)
+    }
+
+    /// `HTTPURLResponse.httpResponse` drops headers when its dictionary cast
+    /// fails. `Content-Type` is read back so a batch body can still be decoded.
+    static func makeResponse(_ http: HTTPURLResponse) -> HTTPResponse {
+        var response = http.httpResponse ?? HTTPResponse(status: .init(code: http.statusCode))
+        if response.headerFields[.contentType] == nil,
+           let type = http.value(forHTTPHeaderField: "Content-Type") {
+            response.headerFields[.contentType] = type
+        }
+        return response
+    }
+
     private func resolvedRemote(_ remote: String?, operation: String) async throws -> String {
         if let remote { return remote }
         return operation == "upload" ? finder.uploadRemote() : await finder.downloadRemote()
     }
 
     private func applyCredentials(
-        _ request: inout URLRequest, access: LFSAccess, endpoint: LFSEndpoint,
+        _ request: inout HTTPRequest, access: LFSAccess, endpoint: LFSEndpoint,
         operation: String, remote: String
     ) throws -> LFSAppliedCredential {
         if access.mode == "negotiate" || access.mode == "none" || Self.hasAuthorization(request) {
@@ -126,7 +213,7 @@ public final class LFSClient: @unchecked Sendable {
         if let embedded = embeddedPassword(request: request, endpoint: endpoint, operation: operation, remote: remote) {
             LFSStandardError.write("warning: current Git remote contains credentials\n")
             if let header = LFSBasicAuth.header(username: embedded.user, password: embedded.password) {
-                request.setValue(header, forHTTPHeaderField: "Authorization")
+                request.headerFields[.authorization] = header
             }
             return .embedded
         }
@@ -138,13 +225,13 @@ public final class LFSClient: @unchecked Sendable {
             throw LFSClientError("Git credentials for \(target) not found.")
         }
         if let header = filled.authorization {
-            request.setValue(header, forHTTPHeaderField: "Authorization")
+            request.headerFields[.authorization] = header
         }
         return .helper(filled)
     }
 
     private func embeddedPassword(
-        request: URLRequest, endpoint: LFSEndpoint, operation: String, remote: String
+        request: HTTPRequest, endpoint: LFSEndpoint, operation: String, remote: String
     ) -> (user: String, password: String)? {
         let api = LFSURL.parse(endpoint.url)
         guard sameOrigin(request, as: api) else { return nil }
@@ -159,7 +246,7 @@ public final class LFSClient: @unchecked Sendable {
     }
 
     private func credentialURL(
-        request: URLRequest, endpoint: LFSEndpoint, operation: String, remote: String
+        request: HTTPRequest, endpoint: LFSEndpoint, operation: String, remote: String
     ) -> String {
         let api = LFSURL.parse(endpoint.url)
         if !sameOrigin(request, as: api) { return request.url?.absoluteString ?? endpoint.url }
@@ -174,7 +261,7 @@ public final class LFSClient: @unchecked Sendable {
         return endpoint.url
     }
 
-    private func sameOrigin(_ request: URLRequest, as api: LFSURL) -> Bool {
+    private func sameOrigin(_ request: HTTPRequest, as api: LFSURL) -> Bool {
         let parsed = LFSURL.parse(request.url?.absoluteString ?? "")
         return parsed.scheme == api.scheme && parsed.hostPort == api.hostPort
     }
@@ -188,30 +275,31 @@ public final class LFSClient: @unchecked Sendable {
         return chosen
     }
 
-    private func applyExtra(_ request: inout URLRequest, _ headers: [(name: String, value: String)]) {
+    private func applyExtra(_ request: inout HTTPRequest, _ headers: [(name: String, value: String)]) {
         for header in headers {
-            let existing = request.value(forHTTPHeaderField: header.name) ?? ""
+            guard let name = HTTPField.Name(header.name) else { continue }
+            let existing = request.headerFields[name] ?? ""
             let values = existing.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
             if values.contains(header.value) { continue }
             if existing.isEmpty {
-                request.setValue(header.value, forHTTPHeaderField: header.name)
+                request.headerFields[name] = header.value
             } else {
-                request.addValue(header.value, forHTTPHeaderField: header.name)
+                request.headerFields[name] = existing + ", " + header.value
             }
         }
     }
 
     /// `getReqOperation`: `POST` and `PUT` upload; every other method downloads.
-    static func operation(of request: URLRequest, override: String?) -> String {
+    static func operation(of request: HTTPRequest, override: String?) -> String {
         if let override { return override }
-        switch (request.httpMethod ?? "GET").uppercased() {
+        switch request.method.rawValue.uppercased() {
         case "POST", "PUT": return "upload"
         default: return "download"
         }
     }
 
-    static func hasAuthorization(_ request: URLRequest) -> Bool {
-        if let value = request.value(forHTTPHeaderField: "Authorization"), !value.isEmpty { return true }
+    static func hasAuthorization(_ request: HTTPRequest) -> Bool {
+        if let value = request.headerFields[.authorization], !value.isEmpty { return true }
         guard let url = request.url,
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else { return false }
         return items.contains { $0.name == "token" && !($0.value ?? "").isEmpty }
@@ -272,8 +360,12 @@ public final class LFSClient: @unchecked Sendable {
         case 404:
             return "Repository or object not found: \(target)\n"
                 + "Check that it exists and that you have proper access to it"
+        case 422: return "Unprocessable entity: \(target)"
         case 429: return "Rate limit exceeded: \(target)"
         case 500: return "Server error: \(target)"
+        case 501: return "Not Implemented: \(target)"
+        case 507: return "Insufficient server storage: \(target)"
+        case 509: return "Bandwidth limit exceeded: \(target)"
         default:
             if status < 500 { return "Client error \(target) from HTTP \(status)" }
             return "Server error \(target) from HTTP \(status)"
