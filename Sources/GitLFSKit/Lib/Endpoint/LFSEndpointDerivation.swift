@@ -45,7 +45,10 @@ enum LFSEndpointDerivation {
         default:
             if raw.hasPrefix(scheme + "::") { return LFSEndpoint(url: raw) }
             if fileExists(raw, base: base) { return fromLocalPath(raw, base: base) }
-            return fromBareSSH(LFSURL.parse(raw).string())
+            // A bare alias such as `host:repo` is an opaque URL to Go's
+            // net/url. Preserve that spelling; LFSURL.string() would turn
+            // it into `host://repo` and insert two slashes into the SSH path.
+            return fromBareSSH(raw)
         }
     }
 
