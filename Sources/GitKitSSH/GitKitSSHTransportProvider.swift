@@ -37,21 +37,8 @@ public struct GitKitSSHTransportProvider: GitSSHTransportProvider {
         command: GitSSHCommand,
         sshConfigPath: String
     ) async throws -> GitKitSSHChannel {
-        let config = try await SSHConfig.load(path: sshConfigPath)
-        let hostConfig = try config.resolve(host: host)
-
-        let identities = try await IdentityLoader.loadAvailable(paths: hostConfig.identityFiles)
-        let knownHosts = try await KnownHostsStore.load(paths: hostConfig.userKnownHostsFile)
-
         let client = try await SSHClient.connect(
-            host: hostConfig.hostName,
-            port: port ?? hostConfig.port,
-            username: user ?? hostConfig.user ?? Shell.current.hostInfo.userName,
-            identities: identities,
-            knownHosts: knownHosts,
-            userKnownHostsFilePath: hostConfig.userKnownHostsFile.first,
-            strictHostKeyChecking: hostConfig.strictHostKeyChecking
-        )
+            host: host, port: port, user: user, configPath: sshConfigPath)
 
         do {
             let exec = try await client.exec(Self.remoteCommand(for: command))
