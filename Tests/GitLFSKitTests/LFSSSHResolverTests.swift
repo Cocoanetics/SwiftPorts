@@ -166,18 +166,50 @@ struct LFSSSHResolverTests {
         }
     }
 
-    @Test("sshtransfer always disables authentication, with URL-specific precedence")
+    @Test("sshtransfer applies only to SSH and matches the HTTP endpoint case-insensitively")
     func transferMode() async throws {
         let host = IsolatedLFSHost()
         try await host.run {
             let fixture = try await LFSFixture.make(host, "mode", config: [
-                ("lfs.sshtransfer", "never"), ("lfs.ssh://alias/repo.sshtransfer", "always")])
-            let resolver = LFSSSHResolver(finder: await LFSEndpointFinder(fixture.client))
-            let endpoint = LFSEndpoint(originalURL: "ssh://alias/repo")
+                ("lfs.sshtransfer", "always"),
+                ("lfs.https://alias/repo.git/info/lfs.sshtransfer", "Never")])
+            let calls = SSHAuthCalls()
+            let resolver = LFSSSHResolver(
+                finder: await LFSEndpointFinder(fixture.client), now: { calls.date }, authenticate: { _, _ in
+                    _ = calls.record()
+                    return Data("{}".utf8)
+                })
+            let endpoint = LFSEndpoint(
+                url: "https://alias/repo.git/info/lfs",
+                ssh: LFSSSHMetadata(host: "alias", userAndHost: "alias"),
+                originalURL: "ssh://alias/repo.git")
+            _ = try await resolver.resolve(endpoint, method: "POST")
+            #expect(calls.count == 1)
+
+            let http = LFSEndpoint(
+                url: "https://other.example/repo.git/info/lfs",
+                originalURL: "https://other.example/repo.git")
+            #expect(try await resolver.resolve(http, method: "GET").href.isEmpty)
+
+            var disabled = endpoint
+            disabled.url = "https://other.example/repo.git/info/lfs"
             await #expect(throws: LFSClientError("git-lfs-authenticate has been disabled by request")) {
-                try await resolver.resolve(endpoint, method: "POST")
+                try await resolver.resolve(disabled, method: "POST")
             }
-            #expect(try await resolver.resolve(LFSEndpoint(), method: "GET").href.isEmpty)
+            #expect(calls.count == 1)
+        }
+    }
+
+    @Test("SSH href query stays attached while the request suffix joins its path")
+    func hrefQuery() throws {
+        let endpoint = "https://example.com/repo.git/info/lfs"
+        let request = try #require(URL(string: endpoint + "/objects/batch"))
+        let resolved = try LFSClient.sshRequestURL(
+            href: "https://lfs.example/repo.git/info/lfs?token=abc",
+            endpointURL: endpoint, requestURL: request)
+        #expect(resolved.absoluteString == "https://lfs.example/repo.git/info/lfs/objects/batch?token=abc")
+        #expect(throws: LFSClientError("invalid URL: https://[")) {
+            try LFSClient.sshRequestURL(href: "https://[", endpointURL: endpoint, requestURL: request)
         }
     }
 }

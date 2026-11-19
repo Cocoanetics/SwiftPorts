@@ -43,7 +43,7 @@ extension LFSCredentialTests {
                 fi
                 [ "$#" = 2 ] || exit 8
                 [ "$1" = "org/o'neil repo.git" ] || exit 9
-                printf '%s\\n' '{"href":"https://lfs.example/alternate/",'\
+                printf '%s\\n' '{"href":"https://lfs.example/alternate/?token=abc",'\
                 '"header":{"Authorization":"RemoteAuth secret","X-LFS-SSH":"yes"},"expires_in":3600}'
                 """.write(to: executable, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
@@ -72,7 +72,7 @@ extension LFSCredentialTests {
                 if request.url?.host == "foreign.example" {
                     return (request.value(forHTTPHeaderField: "Authorization") == nil ? 200 : 403, Data())
                 }
-                let valid = request.url?.absoluteString == "https://lfs.example/alternate/objects/batch"
+                let valid = request.url?.absoluteString == "https://lfs.example/alternate/objects/batch?token=abc"
                     && request.value(forHTTPHeaderField: "Authorization") == "RemoteAuth secret"
                     && request.value(forHTTPHeaderField: "X-LFS-SSH") == "yes"
                     && Self.requestBody(request) == Data("{\"operation\":\"download\"}".utf8)
@@ -80,7 +80,9 @@ extension LFSCredentialTests {
             }
             defer { LFSMockURLProtocol.reset() }
             let fixture = try await LFSFixture.make(host, "ssh-request", remotes: [
-                ("origin", "lfs-test-alias:org/o'neil repo.git")], config: [("lfs.ssh.retries", "1")])
+                ("origin", "lfs-test-alias:org/o'neil repo.git")], config: [
+                    ("lfs.ssh.retries", "1"),
+                    ("http.https://lfs.example/alternate.extraheader", "Authorization: Basic configured")])
             let client = await LFSClient(git: fixture.client, session: LFSMockURLProtocol.session())
             let endpoint = client.finder.endpoint(operation: "download", remote: "origin")
             var request = URLRequest(url: try #require(URL(string: endpoint.url + "/objects/batch")))

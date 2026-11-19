@@ -47,23 +47,23 @@ public final class LFSClient: @unchecked Sendable {
         let endpoint = finder.endpoint(operation: operation, remote: remote)
         var request = request
         var resolved = endpoint
+        var sshHeaders: [String: String] = [:]
         let base = endpoint.url.hasSuffix("/") ? endpoint.url : endpoint.url + "/"
         if let url = request.url?.absoluteString, url == endpoint.url || url.hasPrefix(base) {
             let response = try await ssh.resolve(endpoint, method: request.httpMethod ?? "GET")
             if !response.href.isEmpty {
                 resolved.url = response.href
-                let suffix = url.dropFirst(endpoint.url.count).drop(while: { $0 == "/" })
-                let separator = response.href.hasSuffix("/") || suffix.isEmpty ? "" : "/"
-                request.url = URL(string: response.href + separator + suffix)
+                request.url = try Self.sshRequestURL(
+                    href: response.href, endpointURL: endpoint.url, requestURL: request.url)
             }
-            for (key, value) in response.header { request.setValue(value, forHTTPHeaderField: key) }
+            sshHeaders = response.header
         }
         try Self.requireHTTP(resolved)
         let starting = finder.access(for: endpoint.url)
         let attempts = starting.mode == "none" ? 4 : 3
         for index in 0..<attempts {
             if let payload = try await perform(
-                &request, endpoint: endpoint, operation: operation, remote: remote) {
+                &request, endpoint: endpoint, operation: operation, remote: remote, sshHeaders: sshHeaders) {
                 return payload
             }
             if index == attempts - 1 { break }
@@ -74,10 +74,12 @@ public final class LFSClient: @unchecked Sendable {
     /// Performs one attempt. The payload stays with this call: concurrent
     /// requests on the same client must not share a body buffer.
     private func perform(
-        _ request: inout URLRequest, endpoint: LFSEndpoint, operation: String, remote: String
+        _ request: inout URLRequest, endpoint: LFSEndpoint, operation: String, remote: String,
+        sshHeaders: [String: String]
     ) async throws -> Data? {
         let access = finder.access(for: endpoint.url)
         applyExtra(&request, finder.extraHeaders(for: request.url?.absoluteString ?? endpoint.url))
+        for (key, value) in sshHeaders { request.setValue(value, forHTTPHeaderField: key) }
         let applied = try applyCredentials(
             &request, access: access, endpoint: endpoint, operation: operation, remote: remote)
         request.setValue("git-lfs", forHTTPHeaderField: "User-Agent")
@@ -213,6 +215,24 @@ public final class LFSClient: @unchecked Sendable {
         guard let url = request.url,
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else { return false }
         return items.contains { $0.name == "token" && !($0.value ?? "").isEmpty }
+    }
+
+    static func sshRequestURL(href: String, endpointURL: String, requestURL: URL?) throws -> URL {
+        guard let requestURL,
+              let request = URLComponents(url: requestURL, resolvingAgainstBaseURL: false),
+              let endpoint = URLComponents(string: endpointURL),
+              var resolved = URLComponents(string: href),
+              request.percentEncodedPath.hasPrefix(endpoint.percentEncodedPath) else {
+            throw LFSClientError("invalid URL: \(href)")
+        }
+        let suffix = request.percentEncodedPath.dropFirst(endpoint.percentEncodedPath.count)
+            .drop(while: { $0 == "/" })
+        if !suffix.isEmpty {
+            if !resolved.percentEncodedPath.hasSuffix("/") { resolved.percentEncodedPath += "/" }
+            resolved.percentEncodedPath += suffix
+        }
+        guard let url = resolved.url else { throw LFSClientError("invalid URL: \(href)") }
+        return url
     }
 
     static func fixSchemeless(_ raw: String) -> String {

@@ -59,12 +59,12 @@ public actor LFSSSHResolver {
     /// `sshResolveWithRetries`. An explicit endpoint operation wins over the
     /// method (`GET`/`HEAD` download, otherwise upload).
     public func resolve(_ endpoint: LFSEndpoint, method: String) async throws -> LFSSSHAuthResponse {
-        if let mode = finder.urlConfig.get(prefix: "lfs", url: endpoint.originalURL, key: "sshtransfer"),
-           mode != "negotiate" && mode != "never" {
-            throw LFSClientError("git-lfs-authenticate has been disabled by request")
-        }
         guard !endpoint.ssh.userAndHost.isEmpty else {
             return try JSONDecoder().decode(LFSSSHAuthResponse.self, from: Data("{}".utf8))
+        }
+        if let mode = finder.urlConfig.get(prefix: "lfs", url: endpoint.url, key: "sshtransfer")?.lowercased(),
+           mode != "negotiate" && mode != "never" {
+            throw LFSClientError("git-lfs-authenticate has been disabled by request")
         }
         let key = [endpoint.ssh.userAndHost, endpoint.ssh.port, endpoint.ssh.path,
                    Self.operation(endpoint, method: method)].joined(separator: "//")
