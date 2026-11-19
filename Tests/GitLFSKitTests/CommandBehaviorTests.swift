@@ -105,6 +105,8 @@ struct CommandBehaviorTests {
                 .write(to: external, atomically: false, encoding: .utf8)
             let client = GitClient()
             try await client.configSet("core.attributesfile", external.path)
+            // Pin the output ending so this regression is identical on every OS.
+            try await client.configSet("core.autocrlf", "true")
 
             let listing = try await TrackOptions().track([], client: client)
             #expect(listing.stdout.contains("*.bin"))
@@ -113,7 +115,7 @@ struct CommandBehaviorTests {
             let result = try await TrackOptions().track(["*.bin"], client: client)
             #expect(result.stdout == "Tracking \"*.bin\"\n")
             #expect(try String(contentsOf: Shell.currentDirectory.appendingPathComponent(".gitattributes"),
-                               encoding: .utf8) == "*.bin filter=lfs diff=lfs merge=lfs -text\n")
+                               encoding: .utf8) == "*.bin filter=lfs diff=lfs merge=lfs -text\r\n")
         }
     }
 
