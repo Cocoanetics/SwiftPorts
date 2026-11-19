@@ -1144,6 +1144,7 @@ let package = Package(
             name: "GitCommand",
             dependencies: [
                 "SwiftGit",
+                "GitLFSKit",
                 "ForgeKit",
                 .product(name: "ShellKit", package: "ShellKit"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
