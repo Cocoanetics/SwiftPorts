@@ -6,7 +6,8 @@ describes the module surface as it stands and is extended by each one.
 
 The reference is the upstream source — `lfs/pointer.go`, `lfs/lfs.go`,
 `config/`, `fs/fs.go`, `lfsapi/endpoint_finder.go`, `lfshttp/endpoint.go`,
-`lfsapi/auth.go`, `lfshttp/client.go`, `creds/`. Behaviour and error texts
+`lfsapi/auth.go`, `lfshttp/client.go`, `lfshttp/ssh.go`, `ssh/ssh.go`,
+`tools/time_tools.go`, `creds/`. Behaviour and error texts
 match it; nothing it doesn't have is added.
 
 ## Target
@@ -129,7 +130,59 @@ one request the way `lfsapi.Client.DoWithAuth` does.
 | `LFSClient.init(git:credentials:session:)` | `~/.netrc` from `Shell.env("HOME")` (`_netrc` on Windows), then the caller's `CredentialProvider` — the same callback `GitClient` takes. `GitCommand` passes `CommandContext.envCredentialProvider()` |
 | `data(for:operation:remote:)` | `http.<url>.extraHeader` on every attempt, `User-Agent: git-lfs`. Credentials are added only when access is neither `none` nor `negotiate`, in the order URL-embedded, netrc, cache, provider. A 401 writes the next mode (`basic` when the server doesn't say) and retries. `file://` prints git-lfs's hint and fails with `missing protocol` |
 
-SSH authentication (`git-lfs-authenticate`) is not performed here; a later transfer consumes `LFSSSHMetadata`. Negotiate is not implemented: the request is sent without a Basic header.
+Negotiate HTTP authentication is not implemented: the request is sent without
+a Basic header.
+
+## SSH authentication (`HTTP/`, #188)
+
+`LFSClient.ssh` is an async `LFSSSHResolver`, corresponding to git-lfs's SSH
+resolver and cache. `resolve(_:method:)` takes the endpoint from the finder
+and returns `LFSSSHAuthResponse` (`href`, `header`, `expires_at`, `expires_in`).
+The endpoint's operation wins over the HTTP method; otherwise `GET`/`HEAD`
+download and other methods upload. A batch request builder uses a nonempty
+`href` instead of the guessed HTTP base URL, and sets the returned headers.
+`LFSClient.data(for:operation:remote:)` also applies this authentication to
+requests built with the original endpoint URL, preserving the request suffix
+and body.
+Requests to a different base URL do not receive these SSH-provided headers.
+
+For SSH and scp-style remotes, the resolver opens SSHKit's exec channel for
+`git-lfs-authenticate <path> download|upload`, without a subprocess or a
+semaphore bridge. Paths use upstream's `subprocess.ShellQuoteSingle`: plain
+shell words are bare; other paths are single-quoted with embedded quotes
+escaped. This follows upstream's corrected quoting in `ssh/ssh.go` rather
+than the unquoted interpolation in 3.7.1.
+`SSHClient.connect(host:port:user:configPath:commandLineOptions:requireConfigFile:)`
+is shared with `GitKitSSHTransportProvider`; it loads `~/.ssh/config`, resolves
+aliases, URL overrides, identities, known_hosts and StrictHostKeyChecking
+through the existing SSHKit APIs. GitKitSSH retains its existing behavior.
+
+Authentication is cached separately for download and upload and for each SSH
+destination, port and repository path. Expiration uses the command start time;
+nonzero `expires_in` takes precedence over `expires_at`. A response without
+either lifetime uses `lfs.defaulttokenttl` (negative values become zero),
+otherwise it does not expire. Cached responses refresh five seconds early.
+`lfs.cachecredentials=false` disables the cache. Failed commands or JSON
+decoding are retried `max(0, lfs.ssh.retries) + 1` times (default six attempts)
+and are never cached. A remote failure reports trimmed stderr followed by
+`: exit status <n>` (or just the exit status when stderr is empty).
+
+URL-specific `lfs.<url>.sshtransfer` overrides `lfs.sshtransfer`. Only unset,
+`negotiate` and `never` permit authentication; other values, including
+`always`, fail with upstream's `git-lfs-authenticate has been disabled by
+request`. The pure `git-lfs-transfer` protocol remains out of scope.
+
+SSH command precedence follows git-lfs: `GIT_SSH_COMMAND`, then `GIT_SSH`,
+then `core.sshCommand`, then `ssh`. For an `ssh` command, `-F`, `-i`, `-o`,
+`-p` and `-l` become SSHKit configuration directives, preceding URL and config
+values. `GIT_SSH_VARIANT` overrides `ssh.variant`; PuTTY/Plink variants,
+custom SSH executables/wrappers and other command-line options fail
+explicitly because SSHKit cannot run an external SSH implementation. SSHKit's
+existing key algorithm and configuration limits still apply (see [SSH.md](SSH.md)).
+
+At the examined main commit `b6c9639`, #187's batch client and HTTP test server
+are not present. The resolver API and the existing HTTP request path are wired;
+the assertion through #187's batch client/server remains open for that work.
 
 
 ## Tests
@@ -167,5 +220,13 @@ SSH authentication (`git-lfs-authenticate`) is not performed here; a later trans
   autodetect, `searchall`, `FETCH_HEAD`, and `extraHeader`.
 - `LFSCredentialTests` — netrc and a password embedded in the URL, and a
   401 → credential → retry against a `URLProtocol` mock.
+- `LFSSSHResolverTests` / `LFSSSHCommandOptionsTests` — response parsing,
+  absolute/relative expiry, default TTL, operation caching, retries, command
+  quoting, SSH command precedence and URL-specific `sshtransfer`.
+- `LFSCredentialTests.sshAuthentication` (macOS / Linux, skipped without
+  `sshd`) — a throwaway OpenSSH server with a fake `git-lfs-authenticate`
+  verifies config alias resolution, identities and known_hosts, path quoting,
+  separate download/upload tokens, cached authentication, and stderr failures.
+  A `URLProtocol` recorder asserts the request's overridden URL and headers.
 - `LFSEndpointOracleTests` (macOS / Linux) — `Endpoint=` / `Endpoint (<remote>)=`
   from `git lfs env` against `environmentEndpoints()`, skipped without `git-lfs`.

@@ -18,6 +18,7 @@ public struct LFSClientError: Error, Equatable, CustomStringConvertible, Sendabl
 /// writes `lfs.<url>.access`, and retries. `User-Agent` is `git-lfs`.
 public final class LFSClient: @unchecked Sendable {
     public let finder: LFSEndpointFinder
+    public let ssh: LFSSSHResolver
     let context: LFSCredentialContext
     let session: URLSession
     /// Which access modes this client may still try. Shared by concurrent
@@ -28,6 +29,7 @@ public final class LFSClient: @unchecked Sendable {
     public init(git: GitClient, credentials: CredentialProvider? = nil, session: URLSession? = nil) async {
         let finder = await LFSEndpointFinder(git)
         self.finder = finder
+        ssh = LFSSSHResolver(finder: finder)
         context = LFSCredentialContext(
             netrc: await NetrcFile.load(home: Shell.env("HOME")),
             provider: credentials,
@@ -43,8 +45,20 @@ public final class LFSClient: @unchecked Sendable {
         let operation = Self.operation(of: request, override: operation)
         let remote = try await resolvedRemote(remote, operation: operation)
         let endpoint = finder.endpoint(operation: operation, remote: remote)
-        try Self.requireHTTP(endpoint)
         var request = request
+        var resolved = endpoint
+        let base = endpoint.url.hasSuffix("/") ? endpoint.url : endpoint.url + "/"
+        if let url = request.url?.absoluteString, url == endpoint.url || url.hasPrefix(base) {
+            let response = try await ssh.resolve(endpoint, method: request.httpMethod ?? "GET")
+            if !response.href.isEmpty {
+                resolved.url = response.href
+                let suffix = url.dropFirst(endpoint.url.count).drop(while: { $0 == "/" })
+                let separator = response.href.hasSuffix("/") || suffix.isEmpty ? "" : "/"
+                request.url = URL(string: response.href + separator + suffix)
+            }
+            for (key, value) in response.header { request.setValue(value, forHTTPHeaderField: key) }
+        }
+        try Self.requireHTTP(resolved)
         let starting = finder.access(for: endpoint.url)
         let attempts = starting.mode == "none" ? 4 : 3
         for index in 0..<attempts {
