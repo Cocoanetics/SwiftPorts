@@ -15,7 +15,9 @@ extension TrackOptions {
         let prefix = cwd == root ? "" : String(cwd.dropFirst(root.count + 1)) + "/"
         let autocrlf = try await client.configGet("core.autocrlf") ?? ""
         let defaultEnding = ["true", "t", "1"].contains(autocrlf.lowercased()) ? "\r\n" : Self.osLineEnding
-        let ending = known.first { $0.source == ".gitattributes" }?.lineEnding ?? defaultEnding
+        // An empty recorded ending means the file had no newline; fall back to autocrlf.
+        let recorded = known.first { $0.source == ".gitattributes" }?.lineEnding ?? defaultEnding
+        let ending = recorded.isEmpty ? defaultEnding : recorded
         let modify = !noModifyAttrs && !dryRun
         var changed: [String: String] = [:]
         var order: [String] = []
@@ -103,11 +105,15 @@ extension TrackOptions {
         }
         guard code == 0 else { return [] }
         defer { git_pathspec_free(spec) }
+        // `git ls-files -x` matches a slash-free pattern against the basename,
+        // so `model.bin` touches `assets/model.bin`. Pathspec compares the whole path.
+        let rootWildcard = pattern.hasPrefix("/") && safe.contains("*")
         return indexed.compactMap { file in
             guard file.hasPrefix(prefix) else { return nil }
             let relative = String(file.dropFirst(prefix.count))
-            if pattern.hasPrefix("/") && safe.contains("*") && relative.contains("/") { return nil }
-            return git_pathspec_matches_path(spec, 0, relative) == 1 ? relative : nil
+            if rootWildcard && relative.contains("/") { return nil }
+            let candidate = safe.contains("/") ? relative : (relative as NSString).lastPathComponent
+            return git_pathspec_matches_path(spec, 0, candidate) == 1 ? relative : nil
         }
     }
 

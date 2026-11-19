@@ -93,10 +93,32 @@ public struct TrackOptions: Sendable {
 
     static func lines(_ text: String) -> [String] {
         // Match Go's bufio.Scanner: split LF bytes, including inside CRLF.
-        // Foundation's string separator handling differs across platforms here.
+        // A CR is dropped only when it belongs to a newline. Foundation's
+        // string separator handling differs across platforms here.
+        let terminated = text.utf8.last == 0x0A
         var lines = text.utf8.split(separator: 0x0A, omittingEmptySubsequences: false)
             .map { String(decoding: $0, as: UTF8.self) }
-        if lines.last == "" { lines.removeLast() }
-        return lines.map { $0.hasSuffix("\r") ? String($0.dropLast()) : $0 }
+        if terminated, lines.last == "" { lines.removeLast() }
+        return lines.enumerated().map { index, line in
+            let dropCarriage = line.hasSuffix("\r") && (terminated || index < lines.count - 1)
+            return dropCarriage ? String(line.dropLast()) : line
+        }
+    }
+
+    /// git-lfs `lineEndingSplitter`: CRLF only when it outnumbers LF.
+    /// A file with no newline (the unterminated tail is not counted) yields "".
+    static func attributeLineEnding(_ text: String) -> String {
+        var lineFeeds = 0
+        var carriageReturns = 0
+        var previous: UInt8 = 0
+        for byte in text.utf8 {
+            if byte == 0x0A {
+                if previous == 0x0D { carriageReturns += 1 } else { lineFeeds += 1 }
+            }
+            previous = byte
+        }
+        if carriageReturns > lineFeeds { return "\r\n" }
+        if lineFeeds == 0 { return "" }
+        return "\n"
     }
 }

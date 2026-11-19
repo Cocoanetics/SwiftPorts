@@ -107,7 +107,8 @@ public struct LFSPointerOptions: Sendable {
     }
 
     private func authorizedFile(_ path: String) async throws -> URL {
-        let url = URL(fileURLWithPath: path, relativeTo: Shell.currentDirectory)
+        // Translate a virtual path (`/workspace/payload`) before the sandbox sees it.
+        let url = Shell.resolve(path)
         try await Shell.authorize(url)
         return url
     }

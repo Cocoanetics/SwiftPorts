@@ -28,9 +28,9 @@ public struct FilterOptions: Sendable {
             let config = try await FilterConfiguration.open(self, client: client)
             for (name, value, upgradeables) in properties {
                 let key = "filter.lfs." + name
-                let current = try config.value(key)
+                let current = try await config.value(key)
                 if force || current.isEmpty || upgradeables.contains(current) {
-                    try config.set(key, value)
+                    try await config.set(key, value)
                 } else if current != value {
                     return LFSCommandResult(
                         stdout: systemWarning + "warning: the \(key.goQuoted) attribute should be \(value.goQuoted) "

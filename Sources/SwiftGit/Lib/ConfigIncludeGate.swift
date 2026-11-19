@@ -94,3 +94,18 @@ extension GitClient {
         }
     }
 }
+
+/// Runs `body` on this thread with the sandbox deciding which `[include]`
+/// files libgit2 may open. Without a sandbox every include is read. A
+/// denied include throws the sandbox denial. The body can run again after
+/// each file is authorised, so it has to be safe to repeat.
+public func withAuthorizedConfigIncludes<T>(_ body: () throws -> T) async throws -> T {
+    let gate = ConfigIncludeGate(enforcing: Shell.current.sandbox != nil)
+    while true {
+        do {
+            return try gate.run(body)
+        } catch {
+            guard try await gate.authorizeRefused() else { throw error }
+        }
+    }
+}

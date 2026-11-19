@@ -11,15 +11,16 @@ struct Attributes {
     ) async throws -> [AttributePath] {
         guard let root = repo.workingDirectory else { return [] }
         var external: [AttributePath] = []
-        let system = Shell.env("GIT_ATTR_SYSTEM") ?? (Shell.env("PREFIX") ?? "") + "/etc/gitattributes"
+        // System and global files are optional. A rooted sandbox denies `/etc/gitattributes`
+        // even when it is absent; that must not fail `git lfs track`.
         if Shell.env("GIT_ATTR_NOSYSTEM") != "1" {
-            external += try await read(URL(fileURLWithPath: system), source: system, prefix: "", readMacros: true)
+            let system = Shell.env("GIT_ATTR_SYSTEM") ?? (Shell.env("PREFIX") ?? "") + "/etc/gitattributes"
+            external += try await readOptional(
+                URL(fileURLWithPath: system), source: system, prefix: "", readMacros: true)
         }
-        let global = try await client.configGet("core.attributesfile")
-            ?? (Shell.env("XDG_CONFIG_HOME") ?? (Shell.env("HOME") ?? "") + "/.config") + "/git/attributes"
-        let expanded = global.hasPrefix("~/") ? (Shell.env("HOME") ?? "") + global.dropFirst() : global
-        let globalPaths = try await read(URL(fileURLWithPath: expanded, relativeTo: root),
-                                         source: String(expanded), prefix: "", readMacros: true)
+        let global = try await globalAttributesPath(client)
+        let globalPaths = try await readOptional(
+            URL(fileURLWithPath: global, relativeTo: root), source: global, prefix: "", readMacros: true)
         let indexed = try await client.indexedPaths()
         var files = Set(indexed.filter { ($0 as NSString).lastPathComponent == ".gitattributes" })
         for entry in try await client.status().entries
@@ -45,20 +46,51 @@ struct Attributes {
         return includeExternal ? local + globalPaths + external : local
     }
 
+    /// `$XDG_CONFIG_HOME/git/attributes`, else `$HOME/.config/git/attributes`.
+    /// An absent HOME uses the shell's home, which is the sandbox home when one is set,
+    /// rather than the host's `/.config/git/attributes`.
+    private func globalAttributesPath(_ client: SwiftGit.GitClient) async throws -> String {
+        if let configured = try await client.configGet("core.attributesfile") {
+            return expandHome(configured)
+        }
+        if let xdg = Shell.env("XDG_CONFIG_HOME"), !xdg.isEmpty {
+            return (xdg as NSString).appendingPathComponent("git/attributes")
+        }
+        if let home = Shell.env("HOME"), !home.isEmpty {
+            return home + "/.config/git/attributes"
+        }
+        return Shell.homeDirectory.appendingPathComponent(".config/git/attributes").path
+    }
+
+    private func expandHome(_ path: String) -> String {
+        guard path.hasPrefix("~/") else { return path }
+        let home = Shell.env("HOME").flatMap { $0.isEmpty ? nil : $0 } ?? Shell.homeDirectory.path
+        return home + path.dropFirst()
+    }
+
+    private mutating func readOptional(
+        _ url: URL, source: String, prefix: String, readMacros: Bool
+    ) async throws -> [AttributePath] {
+        do { return try await read(url, source: source, prefix: prefix, readMacros: readMacros) }
+        catch is Sandbox.Denial { return [] }
+    }
+
     private mutating func read(
         _ url: URL, source: String, prefix: String, readMacros: Bool
     ) async throws -> [AttributePath] {
         try await Shell.authorize(url)
         guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) else { return [] }
-        let ending = text.contains("\r\n") ? "\r\n" : "\n"
+        let ending = TrackOptions.attributeLineEnding(text)
         var paths: [AttributePath] = []
         for raw in TrackOptions.lines(text) {
             let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty || line.hasPrefix("#") { continue }
             let pattern: String
             let applied: String
-            if line.hasPrefix("\""), let last = line.dropFirst().lastIndex(of: "\""),
-               let decoded = try? JSONDecoder().decode(String.self, from: Data(line[...last].utf8)) {
+            if line.hasPrefix("\"") {
+                guard let last = line.dropFirst().lastIndex(of: "\""), last > line.startIndex else { return [] }
+                let quoted = String(line[...last])
+                guard let decoded = try? GoQuotedLiteral.unquote(quoted) else { return [] }
                 pattern = decoded
                 applied = String(line[line.index(after: last)...])
             } else {
@@ -83,19 +115,36 @@ struct Attributes {
     }
 
     private func expand(_ values: [String], into attributes: inout [String: String], seen: Set<String>) {
-        for value in values {
-            let parts = value.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
-            if value.hasPrefix("-") || value.hasPrefix("!") {
-                attributes[String(value.dropFirst())] = value.hasPrefix("-") ? "false" : ""
-            } else if parts.count == 2 {
-                attributes[parts[0]] = parts[1]
+        for value in values where !value.isEmpty {
+            if value.hasPrefix("!") {
+                // `!macro` marks every attribute in the macro unspecified and keeps the alias.
+                // A plain `!filter` only unsets that key. `-name` stays false and is not expanded.
+                let name = String(value.dropFirst())
+                if let macro = macros[name] {
+                    for token in macro { attributes[Self.key(token)] = "" }
+                }
+                attributes[name] = ""
+            } else if value.hasPrefix("-") {
+                attributes[String(value.dropFirst())] = "false"
             } else {
-                attributes[value] = "true"
-                if let macro = macros[value], !seen.contains(value) {
-                    expand(macro, into: &attributes, seen: seen.union([value]))
+                let parts = value.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                    .map(String.init)
+                if parts.count == 2 {
+                    attributes[parts[0]] = parts[1]
+                } else {
+                    attributes[value] = "true"
+                    if let macro = macros[value], !seen.contains(value) {
+                        expand(macro, into: &attributes, seen: seen.union([value]))
+                    }
                 }
             }
         }
+    }
+
+    private static func key(_ token: String) -> String {
+        if token.hasPrefix("-") || token.hasPrefix("!") { return String(token.dropFirst()) }
+        if let eq = token.firstIndex(of: "=") { return String(token[..<eq]) }
+        return token
     }
 
     private func relative(_ file: URL, to root: URL) -> String {
