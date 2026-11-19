@@ -12,7 +12,8 @@ it doesn't have is added.
 
 - Library product `GitLFSKit`, sources at `Sources/GitLFSKit/Lib/`.
 - Depends on `SwiftGit`, `ShellKit`, swift-crypto `Crypto`, swift-http-types
-  (`HTTPTypes`, `HTTPTypesFoundation`) and `SSHKit`. No ArgumentParser.
+  (`HTTPTypes`, `HTTPTypesFoundation`), `SSHKit` and GitKit's `CGitKit` config
+  and pathspec APIs. No ArgumentParser.
 - Builds on Android. `GitLFSKitTests` does not: it links swift-crypto's
   BoringSSL C++ target, so it is in `androidDroppedTargets` (see
   [Android.md](Android.md)).
@@ -77,6 +78,41 @@ where it is. Every path is authorized through `Shell.authorize`.
 `SwiftGit.GitClient.commonDir()` was added for this; it mirrors
 `git rev-parse --git-common-dir` and nothing more.
 
+## Commands (`git lfs`, #189)
+
+`GitCommand` depends on `GitLFSKit` and registers `lfs`. Its ArgumentParser
+adapters live in `Sources/SwiftGit/GitCommand/Subcommands/LFS/`; behavior lives
+in the SDK's `Commands/` directory:
+
+- `version`: `git-lfs/3.7.1 (SwiftPorts; <os> <arch>; swift <version>)`.
+  The compatibility release is upstream 3.7.1; the implementation/runtime
+  identity is deliberately SwiftPorts/Swift, as agreed for #189.
+- `pointer`: generate (`--file`), inspect/compare (`--pointer`, `--stdin`), or
+  check (`--check`, `--strict`, `--no-strict`). `LFSPointerOptions` streams
+  file hashing, computes Git blob OIDs, and preserves upstream diagnostics
+  and exit statuses, including silent check failures.
+- `install`/`uninstall`: `FilterOptions` selects global, local, system, file,
+  or worktree config, writes the upstream filter commands, and installs/removes
+  standard hooks through `Hook`. Hook bytes and historical-script upgrades
+  follow `lfs/hook.go`; foreign scripts require `--force` to replace.
+  Relative `core.hooksPath` is relative to the worktree root, and default
+  hooks live in the common Git directory for linked worktrees.
+- `track`/`untrack`: `TrackOptions` edits `.gitattributes`, lists patterns
+  (including JSON), expands attribute macros, handles nested attribute files,
+  preserves track's line endings and untrack's LF rewrite, escapes patterns,
+  and touches matching indexed files. Supports `--lockable`, `--not-lockable`,
+  `--dry-run`, `--verbose`, `--no-excluded`, `--filename`, and `--no-modify-attrs`.
+
+All filesystem paths go through `Shell.authorize`; production code does not
+launch a system Git or git-lfs process. The hooks are scripts for real Git to
+execute. Filter execution, transfers, other LFS commands, and lock-based file
+permission management remain the separate sub-tasks described in #184.
+
+Bare `git lfs` prints upstream's complete usage text, preceded by the port's
+version, and succeeds. Unsupported subcommands receive git-lfs's diagnostic
+and exit status 127. `git lfs --help` uses embedded usage text; it does not
+launch the system Git's man viewer.
+
 ## Tests
 
 `Tests/GitLFSKitTests/`:
@@ -92,3 +128,12 @@ where it is. Every path is authorized through `Shell.authorize`.
   system `git` / `git-lfs` in an isolated HOME / XDG / global config
   (`Support/LFSOracle.swift`) and is skipped when `git lfs version` isn't on
   `PATH`.
+- `CommandBehaviorTests` — pointer checks, file-scoped filter installation,
+  and hook conflict protection without a system git-lfs dependency.
+- `GitCommandLFSParsingTests` — command and flag parsing, gated like the other
+  `GitCommandTests` using `commandTestPlatforms`.
+- `GitCommandLFSOracleTests` and `GitCommandLFSConfigOracleTests` — twin
+  repositories compare command output, exit status, attributes, hook bytes,
+  and config values. Only environment-specific absolute paths and the agreed
+  version identity are normalized. Config entries are sorted because upstream
+  installs them by iterating Go maps. Skipped when git-lfs is unavailable.

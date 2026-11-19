@@ -16,6 +16,7 @@ public struct GitCommand: AsyncParsableCommand {
         version: "0.1.0-dev",
         subcommands: [
             VersionCommand.self,
+            LFSCommand.self,
             GitInit.self,
             Clone.self,
             Fetch.self,
