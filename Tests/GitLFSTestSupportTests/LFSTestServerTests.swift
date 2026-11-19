@@ -56,6 +56,34 @@ struct LFSTestServerTests {
         }
     }
 
+    @Test("verify rejects an upload whose SHA-256 is not the oid")
+    func verifyRejectsMismatchedDigest() async throws {
+        let bytes = Data("hello\n".utf8)
+        let oid = sha256Hex(bytes)
+        var corrupt = bytes
+        corrupt[corrupt.startIndex] ^= 0xFF
+        #expect(corrupt.count == bytes.count)
+        #expect(sha256Hex(corrupt) != oid)
+        try await LFSTestServer.withServer { server in
+            let uploaded = try await LFSWireClient.postBatch(
+                server, operation: "upload", objects: [(oid: oid, size: bytes.count)]
+            )
+            let actions = try #require(try LFSWireClient.document(uploaded).object(oid)?.actions)
+            let upload = try #require(actions["upload"]?.href)
+            let verify = try #require(actions["verify"]?.href)
+            let put = try await LFSWireClient.put(upload, body: corrupt)
+            #expect(put.status == 200)
+            let verified = try await LFSWireClient.verify(verify, oid: oid, size: bytes.count)
+            #expect(verified.status == 422)
+            let message = try JSONDecoder().decode(ErrorEnvelope.self, from: verified.body).message
+            #expect(message == "Validation error")
+            let entry = try #require(server.requests().last { $0.path.hasSuffix("/verify") })
+            #expect(entry.method == "POST")
+            #expect(entry.status == 422)
+            #expect(entry.responseBody == verified.body)
+        }
+    }
+
     @Test("an object the server already has has no upload action")
     func alreadyPresentHasNoUploadAction() async throws {
         let present = Data("already\n".utf8)

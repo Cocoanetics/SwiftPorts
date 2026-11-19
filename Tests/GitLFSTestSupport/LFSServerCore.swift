@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 
 /// Mutable batch state. Callers hold `LFSServerCore`'s lock.
@@ -139,6 +140,10 @@ private struct LFSServerState {
         guard stored.count == request.size else {
             return .json(status: 422, message: objectMessage(422), fault: nil)
         }
+        // The object id is the SHA-256 of the bytes. Same-length corruption still fails.
+        guard sha256Hex(stored) == oid else {
+            return .json(status: 422, message: objectMessage(422), fault: nil)
+        }
         return .empty()
     }
 
@@ -240,6 +245,10 @@ final class LFSServerCore: @unchecked Sendable {
         defer { lock.unlock() }
         return state.handle(method: method, uri: uri, headers: headers, body: body)
     }
+}
+
+private func sha256Hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }
 
 private func objectMessage(_ code: Int) -> String {
