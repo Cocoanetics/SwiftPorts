@@ -167,13 +167,14 @@ jobs:
         # functional libsecret suite stays opt-in; this only needs the
         # headers to compile + link the shim.)
         run: |
-          # The default archive/security hosts time out in CI. Azure's Ubuntu
-          # mirror carries the same signed suites, including jammy-security.
-          sed -i -e 's|http://archive.ubuntu.com/ubuntu|https://azure.archive.ubuntu.com/ubuntu|g' \
-                 -e 's|http://security.ubuntu.com/ubuntu|https://azure.archive.ubuntu.com/ubuntu|g' \
-                 /etc/apt/sources.list
-          apt-get update -o Acquire::Retries=3 -o APT::Update::Error-Mode=any
-          apt-get install -y -o Acquire::Retries=3 curl libssl-dev pkg-config ca-certificates \
+          # The default archive/security mirrors time out in CI. Keep the
+          # existing suites, components and signature checks on Azure's mirror.
+          sed -i \
+            -e 's|http://archive\.ubuntu\.com/ubuntu|https://azure.archive.ubuntu.com/ubuntu|g' \
+            -e 's|http://security\.ubuntu\.com/ubuntu|https://azure.archive.ubuntu.com/ubuntu|g' \
+            /etc/apt/sources.list
+          apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update
+          apt-get -o Acquire::Retries=3 install -y curl libssl-dev pkg-config ca-certificates \
                              zlib1g-dev libbz2-dev liblzma-dev \
                              libzstd-dev liblz4-dev libsecret-1-dev
       - name: Verify Swift version
@@ -221,8 +222,9 @@ jobs:
     # ships archive_windows.{h,c} POSIX-compat shims so the C sources
     # build cleanly. The whole tree (`zip`, `unzip`, `gh`, `glab`,
     # `git`) compiles here.
-    # Swift 6.4.2 bundles Clang 21; the newest VS 2026 STL requires Clang 22.
-    # Keep the VS 2022 toolchain until Swift supports the newer headers.
+    # Swift 6.4.2 bundles Clang 21. The current windows-latest MSVC
+    # 14.52 headers require Clang 22; use the VS 2022 toolset until
+    # the Swift toolchain supports the newer STL.
     runs-on: windows-2022
     # 40 (was 30): the full monorepo build plus a both-traits SQLite rebuild
     # (recompiling the 10 MB sqlite3.c amalgamation) is tight on the slowest
@@ -271,11 +273,12 @@ jobs:
           Write-Host "vcpkg .lib inventory under $base (recursive):"
           Get-ChildItem "$base" -Recurse -Filter "*.lib" -ErrorAction SilentlyContinue |
             ForEach-Object { Write-Host "  $($_.FullName)" }
-          # vcpkg's x64-windows-static-md triplet ships zlib's static
-          # library as `libzs.lib` with zlib 1.4; older versions used
-          # `zs.lib` or `zlib.lib`. Cover these names. libarchive's
-          # `linkedLibrary("z")` looks up `z.lib`, so we always end
-          # up aliasing the chosen artifact under that name.
+          # vcpkg's x64-windows-static-md triplet has shipped zlib's
+          # static library as `zs.lib` and, currently, `libzs.lib`
+          # (the inventory above is what to trust when the name moves
+          # again). Other triplets used `zlib.lib`. libarchive's
+          # `linkedLibrary("z")` looks up `z.lib`, so the chosen
+          # artifact is aliased to that name.
           $candidates = @("libzs.lib", "zs.lib", "zlib.lib", "libzlib.lib", "libz.lib", "z.lib")
           $zlibLib = $null
           foreach ($name in $candidates) {

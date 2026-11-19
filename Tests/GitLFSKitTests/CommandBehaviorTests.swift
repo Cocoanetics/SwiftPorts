@@ -166,7 +166,10 @@ struct CommandBehaviorTests {
         let secret = outside.appendingPathComponent("private.gitconfig")
         try "[filter \"lfs\"]\n\tclean = stolen\n".write(to: secret, atomically: false, encoding: .utf8)
         let settings = root.appendingPathComponent("settings.cfg")
-        try "[include]\n\tpath = \(secret.path)\n".write(to: settings, atomically: false, encoding: .utf8)
+        // Git config treats a backslash as an escape, so `C:\\Users` is not
+        // a path. Forward slashes are the include spelling libgit2 follows.
+        let outsidePath = secret.path.replacingOccurrences(of: "\\", with: "/")
+        try "[include]\n\tpath = \(outsidePath)\n".write(to: settings, atomically: false, encoding: .utf8)
         let shell = Shell(environment: Environment(
             variables: ["GIT_CONFIG_NOSYSTEM": "1"], workingDirectory: root.path))
         shell.sandbox = .rooted(at: root)
@@ -345,6 +348,16 @@ struct CommandBehaviorTests {
                 == "*.bin filter=lfs diff=lfs merge=lfs -text\r\n"
                 + "*.dat filter=lfs diff=lfs merge=lfs -text\r\n")
         }
+    }
+
+    @Test func repositoryPrefixIgnoresDirectorySpelling() {
+        #expect(TrackOptions.repositoryPrefix(cwd: "/repo", root: "/repo/") == "")
+        #expect(TrackOptions.repositoryPrefix(cwd: "/repo/sub", root: "/repo") == "sub/")
+        #expect(TrackOptions.repositoryPrefix(cwd: "/other", root: "/repo") == "")
+        #expect(TrackOptions.repositoryPrefix(cwd: #"C:\repo"#, root: "C:/repo/") == "")
+        #expect(TrackOptions.repositoryPrefix(cwd: "/C:/repo/assets", root: #"C:\repo"#) == "assets/")
+        #expect(TrackOptions.pathBasename("assets/model.bin") == "model.bin")
+        #expect(TrackOptions.pathBasename(#"assets\model.bin"#) == "model.bin")
     }
 
 }

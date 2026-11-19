@@ -16,7 +16,11 @@ struct IsolatedLFSHost: Sendable {
     /// A short random name, so paths under the root (worktree metadata
     /// included) stay within Windows' `MAX_PATH`, which libgit2 enforces there.
     static func shortName(_ prefix: String) -> String {
-        "\(prefix)-\(UUID().uuidString.prefix(8))"
+        // Callers also pass descriptive endpoint-table labels, including URLs.
+        // Keep those labels from introducing Windows-invalid path characters.
+        let safePrefix = prefix.replacingOccurrences(
+            of: "[^A-Za-z0-9_-]", with: "-", options: .regularExpression).prefix(24)
+        return "\(safePrefix)-\(UUID().uuidString.prefix(8))"
     }
 
     /// Makes the directories and an empty global config under a fresh
@@ -52,6 +56,29 @@ struct IsolatedLFSHost: Sendable {
             sharedPublicDirectory: tmp, temporaryDirectory: tmp, trashDirectory: tmp,
             userDirectory: tmp, cachesDirectory: tmp, homeDirectory: home,
             authorize: { _ in })
+    }
+
+    /// The same regions as ``sandbox``, refusing URLs for which `refuses` is true.
+    func sandbox(refusing refuses: @escaping @Sendable (URL) -> Bool) -> Sandbox {
+        let open = sandbox
+        return Sandbox(
+            documentsDirectory: open.documentsDirectory,
+            downloadsDirectory: open.downloadsDirectory,
+            libraryDirectory: open.libraryDirectory,
+            moviesDirectory: open.moviesDirectory,
+            musicDirectory: open.musicDirectory,
+            picturesDirectory: open.picturesDirectory,
+            sharedPublicDirectory: open.sharedPublicDirectory,
+            temporaryDirectory: open.temporaryDirectory,
+            trashDirectory: open.trashDirectory,
+            userDirectory: open.userDirectory,
+            cachesDirectory: open.cachesDirectory,
+            homeDirectory: open.homeDirectory,
+            authorize: { url in
+                if refuses(url) {
+                    throw Sandbox.Denial(url: url, reason: "denied")
+                }
+            })
     }
 
     /// Runs `body` in a shell whose git configuration is this host's.

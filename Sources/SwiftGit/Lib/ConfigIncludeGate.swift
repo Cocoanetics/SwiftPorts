@@ -45,7 +45,11 @@ final class ConfigIncludeGate: @unchecked Sendable {
     /// gate's). Throws the sandbox's denial.
     func authorizeRefused() async throws -> Bool {
         guard let path = takeRefused() else { return false }
-        try await Shell.authorize(URL(fileURLWithPath: path))
+        // libgit2 may report `C:\repo\extra.cfg`. The sandbox prefix check
+        // uses the URL spelling (`C:/repo/...`); a raw backslash path is
+        // outside that root even when the file is inside it.
+        let readable = path.replacingOccurrences(of: "\\", with: "/")
+        try await Shell.authorize(URL(fileURLWithPath: readable))
         allow(path)
         return true
     }

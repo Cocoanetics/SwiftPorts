@@ -25,7 +25,17 @@ struct FilterConfiguration {
                        relativeTo: Shell.currentDirectory)
         }
         try await Shell.authorize(path)
-        return FilterConfiguration(path: path.resolvingSymlinksInPath())
+        // Keep the spelling authorize accepted. resolvingSymlinksInPath
+        // rewrites a Windows short name, and a relative [include] joined
+        // onto that other spelling then falls outside the sandbox root.
+        return FilterConfiguration(path: path)
+    }
+
+    /// libgit2 splits an include's directory on `/` only. A Windows `\`
+    /// path leaves `path = extra.cfg` relative, and authorising that
+    /// relative URL uses the process directory instead of this file.
+    private var openedPath: String {
+        path.path.replacingOccurrences(of: "\\", with: "/")
     }
 
     func value(_ key: String) async throws -> String {
@@ -33,7 +43,8 @@ struct FilterConfiguration {
         // libgit2 follows [include] while parsing. Authorise each file before it is opened.
         return try await withAuthorizedConfigIncludes {
             var config: OpaquePointer?
-            try self.check(git_config_open_ondisk(&config, self.path.path))
+            let opened = self.openedPath
+            try self.check(git_config_open_ondisk(&config, opened))
             defer { git_config_free(config) }
             var buffer = git_buf()
             let code = git_config_get_string_buf(&buffer, config, key)
@@ -48,7 +59,8 @@ struct FilterConfiguration {
         try await withAuthorizedConfigIncludes {
             var config: OpaquePointer?
             // open_ondisk allows a file which doesn't yet exist, as `git config` does.
-            try self.check(git_config_open_ondisk(&config, self.path.path))
+            let opened = self.openedPath
+            try self.check(git_config_open_ondisk(&config, opened))
             defer { git_config_free(config) }
             try self.check(git_config_set_multivar(config, key, ".*", value))
         }

@@ -12,7 +12,10 @@ extension TrackOptions {
         try await Shell.authorize(path)
         let root = repo.workingDirectory?.standardizedFileURL.path ?? ""
         let cwd = Shell.currentDirectory.standardizedFileURL.path
-        let prefix = cwd == root ? "" : String(cwd.dropFirst(root.count + 1)) + "/"
+        // libgit2's workdir and Shell's cwd spell the same directory differently
+        // on Windows (`C:/repo/`, `C:\repo`, `/C:/repo`). A raw string compare
+        // then treats the root as a subdirectory and drops every indexed file.
+        let prefix = Self.repositoryPrefix(cwd: cwd, root: root)
         let autocrlf = try await client.configGet("core.autocrlf") ?? ""
         let defaultEnding = ["true", "t", "1"].contains(autocrlf.lowercased()) ? "\r\n" : Self.osLineEnding
         // An empty recorded ending means the file had no newline; fall back to autocrlf.
@@ -63,7 +66,7 @@ extension TrackOptions {
             }
             var forbidden = false
             for file in files {
-                let base = (file as NSString).lastPathComponent
+                let base = Self.pathBasename(file)
                 if base.hasPrefix(".git") || base.hasPrefix(".lfs") {
                     forbidden = true
                     result.stdout += "Pattern '\(pattern)' matches forbidden file '\(file)'. "
@@ -112,9 +115,64 @@ extension TrackOptions {
             guard file.hasPrefix(prefix) else { return nil }
             let relative = String(file.dropFirst(prefix.count))
             if rootWildcard && relative.contains("/") { return nil }
-            let candidate = safe.contains("/") ? relative : (relative as NSString).lastPathComponent
+            // `git ls-files -x` matches a slash-free pattern against the basename.
+            // NSString.lastPathComponent splits on `\` on Windows and leaves
+            // `assets/model.bin` whole, so the pathspec never matches.
+            let candidate = safe.contains("/") || safe.contains("\\") ? relative : Self.pathBasename(relative)
             return git_pathspec_matches_path(spec, 0, candidate) == 1 ? relative : nil
         }
+    }
+
+    /// Path from the worktree root to the shell directory, with a trailing
+    /// slash, or empty at the root. Git spells that directory with `/` and no
+    /// trailing slash. On Windows `C:\repo`, `C:/repo/` and `/C:/repo` are the
+    /// same folder; comparing the raw strings makes the root look nested.
+    static func repositoryPrefix(cwd: String, root: String) -> String {
+        let current = gitFilesystemPath(cwd)
+        let base = gitFilesystemPath(root)
+        if directoriesEqual(current, base) { return "" }
+        let rooted = base.hasSuffix("/") ? base : base + "/"
+        guard directoryHasPrefix(current, rooted) else { return "" }
+        let relative = String(current.dropFirst(rooted.count))
+        return relative.isEmpty ? "" : relative + "/"
+    }
+
+    /// Last component of a Git or Windows path. Index paths use `/`, which
+    /// `NSString.lastPathComponent` does not split on Windows.
+    static func pathBasename(_ path: String) -> String {
+        guard let slash = path.lastIndex(where: { $0 == "/" || $0 == "\\" }) else { return path }
+        return String(path[path.index(after: slash)...])
+    }
+
+    private static func gitFilesystemPath(_ path: String) -> String {
+        var value = path.replacingOccurrences(of: "\\", with: "/")
+        // `/C:/repo` is the other spelling of `C:/repo`.
+        if value.count >= 4, value.first == "/" {
+            let drive = value.index(value.startIndex, offsetBy: 2)
+            if value[drive] == ":" { value.removeFirst() }
+        }
+        while value.hasSuffix("/"), value.count > 1 {
+            let trimmed = String(value.dropLast())
+            if trimmed.count == 2, trimmed.last == ":" { break }
+            value = trimmed
+        }
+        return value
+    }
+
+    private static func directoriesEqual(_ lhs: String, _ rhs: String) -> Bool {
+        #if os(Windows)
+        lhs.lowercased() == rhs.lowercased()
+        #else
+        lhs == rhs
+        #endif
+    }
+
+    private static func directoryHasPrefix(_ path: String, _ prefix: String) -> Bool {
+        #if os(Windows)
+        path.lowercased().hasPrefix(prefix.lowercased())
+        #else
+        path.hasPrefix(prefix)
+        #endif
     }
 
     private static var osLineEnding: String {

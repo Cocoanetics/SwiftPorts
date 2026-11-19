@@ -5,8 +5,9 @@
 describes the module surface as it stands and is extended by each one.
 
 The reference is the upstream source — `lfs/pointer.go`, `lfs/lfs.go`,
-`config/`, `fs/fs.go`, `tools/`. Behaviour and error texts match it; nothing
-it doesn't have is added.
+`config/`, `fs/fs.go`, `lfsapi/endpoint_finder.go`, `lfshttp/endpoint.go`,
+`lfsapi/auth.go`, `lfshttp/client.go`, `creds/`. Behaviour and error texts
+match it; nothing it doesn't have is added.
 
 ## Target
 
@@ -113,6 +114,24 @@ version, and succeeds. Unsupported subcommands receive git-lfs's diagnostic
 and exit status 127. `git lfs --help` uses embedded usage text; it does not
 launch the system Git's man viewer.
 
+## Endpoints and credentials (`Endpoint/`, `HTTP/`)
+
+`LFSEndpointFinder` is git-lfs's `lfsapi.EndpointFinder`. `LFSClient` sends
+one request the way `lfsapi.Client.DoWithAuth` does.
+
+| Swift | git-lfs |
+|-------|---------|
+| `LFSEndpointFinder.init(_:)` | reads `.lfsconfig` (work tree, else the index, else `HEAD`; bare repos read `HEAD` only) then `GitClient.configLines()`, so git config wins. A `.lfsconfig` that does not parse prints `Error reading \`git config\`: …` and both sources are dropped. Only git-lfs's safe keys are kept |
+| `endpoint(operation:remote:)` | `Endpoint` — upload tries `lfs.pushurl` then `lfs.url`; a named remote tries `remote.<name>.lfspushurl` (upload) then `lfsurl`; otherwise the remote's `pushurl` (upload) or `url`, rewritten with `url.<base>.insteadOf` / `pushInsteadOf` and, for a clone URL, `/info/lfs`. `ssh` and scp-style remotes also fill `LFSSSHMetadata` (`user`, `host`, `port`, `path`, `userAndHost`). `file://` is left alone |
+| `downloadRemote()` / `uploadRemote()` | `config.Remote` / `PushRemote`. `lfs.remote.autodetect` applies only to the download remote. `candidateRemotes(operation:)` is the `lfs.remote.searchall` list (git-lfs reads the flag and has no caller) |
+| `environmentEndpoints()` | the `Endpoint=` / `Endpoint (<remote>)=` lines of `git lfs env`. The bare `Endpoint` line is printed only when the selected remote is `origin`. Autodetect is not applied |
+| `access(for:)` / `setAccess(_:)` | `lfs.<url>.access`. `private` is `basic`. `none` unsets the key. The URL in the key has its userinfo removed |
+| `LFSClient.init(git:credentials:session:)` | `~/.netrc` from `Shell.env("HOME")` (`_netrc` on Windows), then the caller's `CredentialProvider` — the same callback `GitClient` takes. `GitCommand` passes `CommandContext.envCredentialProvider()` |
+| `data(for:operation:remote:)` | `http.<url>.extraHeader` on every attempt, `User-Agent: git-lfs`. Credentials are added only when access is neither `none` nor `negotiate`, in the order URL-embedded, netrc, cache, provider. A 401 writes the next mode (`basic` when the server doesn't say) and retries. `file://` prints git-lfs's hint and fails with `missing protocol` |
+
+SSH authentication (`git-lfs-authenticate`) is not performed here; a later transfer consumes `LFSSSHMetadata`. Negotiate is not implemented: the request is sent without a Basic header.
+
+
 ## Tests
 
 `Tests/GitLFSKitTests/`:
@@ -140,3 +159,13 @@ launch the system Git's man viewer.
   CI installs the checksum-verified 3.7.1 reference on macOS and Linux. For local
   command-oracle runs, put Git LFS 3.7.1 on `PATH`; newer releases change exact
   help and diagnostic text.
+- `EndpointResolutionTests` — `lfs.url`, `remote.<name>.lfsurl`, upload
+  `pushurl` / `lfspushurl`, `insteadOf` / `pushInsteadOf`, and `https` / `ssh`
+  / scp / `file://` derivation (nested paths, ports, a trailing `.git`).
+- `LFSConfigSourceTests` — `.lfsconfig` against git config, the index and
+  `HEAD` (and a bare repo's `HEAD`), access modes, remote selection,
+  autodetect, `searchall`, `FETCH_HEAD`, and `extraHeader`.
+- `LFSCredentialTests` — netrc and a password embedded in the URL, and a
+  401 → credential → retry against a `URLProtocol` mock.
+- `LFSEndpointOracleTests` (macOS / Linux) — `Endpoint=` / `Endpoint (<remote>)=`
+  from `git lfs env` against `environmentEndpoints()`, skipped without `git-lfs`.
