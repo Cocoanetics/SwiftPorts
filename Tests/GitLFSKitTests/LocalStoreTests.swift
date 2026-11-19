@@ -158,6 +158,29 @@ struct LocalStoreTests {
         }
     }
 
+    #if !os(Windows)
+    @Test("a corrupt object that can't be replaced keeps the verified temp file",
+          .enabled(if: getuid() != 0, "root ignores directory permissions"))
+    func keepsTempOverCorruptObject() async throws {
+        try await host.run {
+            let repo = try await makeRepo()
+            let store = try await LocalStore.open(GitClient(workingDirectory: repo))
+            let destination = try await store.objectPath(Self.oid)
+            try Data("hellO\n".utf8).write(to: destination)
+            let directory = destination.deletingLastPathComponent().path
+            try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory) }
+
+            let temporary = try await store.makeTemporaryFile()
+            try Self.content.write(to: temporary)
+            await #expect(throws: LocalStoreError.self) {
+                try await store.insert(temporaryFile: temporary, oid: Self.oid)
+            }
+            #expect(try Data(contentsOf: temporary) == Self.content)
+        }
+    }
+    #endif
+
     @Test("temporary files never share a name")
     func temporaryFilesAreExclusive() async throws {
         try await host.run {

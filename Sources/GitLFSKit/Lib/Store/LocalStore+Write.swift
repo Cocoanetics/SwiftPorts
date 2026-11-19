@@ -54,11 +54,19 @@ extension LocalStore {
         try await Shell.authorize(destination)
         do {
             try Self.renameCopyingPermissions(temporaryFile, to: destination)
-        } catch where Self.isObject(at: destination, size: written) {
+        } catch where Self.holdsObject(oid, at: destination, size: written) {
             // Already downloaded, possibly by another git-lfs process.
             try? FileManager.default.removeItem(at: temporaryFile)
         }
         return destination
+    }
+
+    /// Whether `url` already holds object `oid` intact: a file of `size`
+    /// bytes whose SHA-256 is `oid`. Anything less and the verified
+    /// temporary file is kept.
+    static func holdsObject(_ oid: String, at url: URL, size: Int64) -> Bool {
+        guard isObject(at: url, size: size), let (hash, _) = try? sha256(of: url) else { return false }
+        return hash == oid
     }
 
     /// The hex SHA-256 of the file at `url`, and how many bytes it has.
