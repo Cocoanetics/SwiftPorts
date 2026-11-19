@@ -49,6 +49,39 @@ struct LFSSSHResolverTests {
         }
     }
 
+    @Test("unavailable git-lfs-authenticate detection", arguments: [
+        (127, "", true),
+        (1, "bash: git-lfs-authenticate: command not found", true),
+        (1, "Gerrit: GIT-LFS-AUTHENTICATE: NOT FOUND", true),
+        (1, "git-lfs-authenticate: No such file or directory", true),
+        (1, "zsh: command not found: git-lfs-authenticate", true),
+        (0, "git-lfs-authenticate: not found", false),
+        (1, "repository not found", false),
+        (7, "not allowed", false)
+    ])
+    func unavailable(status: Int32, stderr: String, expected: Bool) {
+        #expect(LFSSSHResolver.authenticateUnavailable(status: status, stderr: stderr) == expected)
+    }
+
+    @Test("unavailable authentication falls back without retrying or caching")
+    func unavailableFallback() async throws {
+        let host = IsolatedLFSHost()
+        try await host.run {
+            let fixture = try await LFSFixture.make(host, "unavailable", config: [
+                ("lfs.ssh.retries", "5"), ("lfs.defaulttokenttl", "60")])
+            let calls = SSHAuthCalls()
+            let resolver = LFSSSHResolver(
+                finder: await LFSEndpointFinder(fixture.client), now: { calls.date }, authenticate: { _, _ in
+                    _ = calls.record()
+                    throw LFSSSHResolver.AuthenticateUnavailable()
+                })
+            let endpoint = LFSEndpoint(ssh: LFSSSHMetadata(host: "alias", userAndHost: "alias"))
+            #expect(try await resolver.resolve(endpoint, method: "GET").href.isEmpty)
+            #expect(try await resolver.resolve(endpoint, method: "GET").header.isEmpty)
+            #expect(calls.count == 2)
+        }
+    }
+
     @Test("cache separates operations, refreshes early, and retries failures")
     func cache() async throws {
         let host = IsolatedLFSHost()

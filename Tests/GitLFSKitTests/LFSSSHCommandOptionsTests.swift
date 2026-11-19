@@ -10,7 +10,7 @@ struct LFSSSHCommandOptionsTests {
         let host = IsolatedLFSHost()
         try await host.run {
             let fixture = try await LFSFixture.make(host, "ssh-options", config: [
-                ("core.sshcommand", "ssh -F '/core config' -p 2000 -l core")])
+                ("core.sshcommand", "C:/Windows/System32/OpenSSH/SSH.EXE -F '/core config' -p 2000 -l core")])
             let finder = await LFSEndpointFinder(fixture.client)
             let config = finder.configuration
             let core = try LFSSSHCommandOptions(configuration: config, configPath: "default", environment: { _ in nil })
@@ -18,12 +18,13 @@ struct LFSSSHCommandOptionsTests {
             #expect(core.requireConfigFile)
             #expect(core.directives == ["Port 2000", "User core"])
             let gitSSH = try LFSSSHCommandOptions(configuration: config, configPath: "default") {
-                $0 == "GIT_SSH" ? "/usr/bin/ssh" : nil
+                $0 == "GIT_SSH" ? "C:\\Windows\\System32\\OpenSSH\\ssh.exe" : nil
             }
             #expect(gitSSH.configPath == "default")
             #expect(gitSSH.directives.isEmpty)
             let env = ["GIT_SSH": "wrapper", "GIT_SSH_COMMAND":
-                "ssh -p2222 -l git -i '/my key' -o 'StrictHostKeyChecking yes' -F '/env config'"]
+                "C:/Windows/System32/OpenSSH/ssh.exe -p2222 -l git -i '/my key' "
+                + "-o 'StrictHostKeyChecking yes' -F '/env config'"]
             let command = try LFSSSHCommandOptions(
                 configuration: config, configPath: "default", environment: { env[$0] })
             #expect(command.configPath == "/env config")

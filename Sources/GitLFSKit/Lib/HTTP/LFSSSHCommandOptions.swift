@@ -26,7 +26,9 @@ struct LFSSSHCommandOptions {
         }
         guard let executable = arguments.first else { return }
         // A process-based wrapper cannot be run over an in-process exec channel.
-        guard URL(fileURLWithPath: executable).lastPathComponent == "ssh" else {
+        let name = executable.replacingOccurrences(of: "\\", with: "/")
+            .split(separator: "/").last?.lowercased()
+        guard name == "ssh" || name == "ssh.exe" else {
             throw LFSClientError("SSHKit cannot execute SSH command: \(executable)")
         }
         let variant = environment("GIT_SSH_VARIANT") ?? configuration.get("ssh.variant") ?? "auto"

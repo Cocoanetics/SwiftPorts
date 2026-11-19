@@ -6,6 +6,7 @@ import SSHKit
 /// before passing the request to `LFSClient`.
 public actor LFSSSHResolver {
     typealias Authenticate = @Sendable (LFSEndpoint, String) async throws -> Data
+    struct AuthenticateUnavailable: Error {}
     private let finder: LFSEndpointFinder
     private let authenticate: Authenticate
     private let now: @Sendable () -> Date
@@ -35,6 +36,9 @@ public actor LFSSSHResolver {
                 guard status == 0 else {
                     let message = String(decoding: stderr, as: UTF8.self)
                         .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if Self.authenticateUnavailable(status: status, stderr: message) {
+                        throw AuthenticateUnavailable()
+                    }
                     let reason = "exit status \(status)"
                     throw LFSClientError(message.isEmpty ? reason : "\(message): \(reason)")
                 }
@@ -76,6 +80,9 @@ public actor LFSSSHResolver {
                 if finder.cacheCredentials { cache[key] = response }
                 return response
             } catch {
+                if error is AuthenticateUnavailable {
+                    return try JSONDecoder().decode(LFSSSHAuthResponse.self, from: Data("{}".utf8))
+                }
                 if error is CancellationError || Task.isCancelled || attempt == attempts - 1 { throw error }
             }
         }
@@ -85,6 +92,18 @@ public actor LFSSSHResolver {
     static func remoteCommand(_ endpoint: LFSEndpoint, method: String) -> String {
         ["git-lfs-authenticate", endpoint.ssh.path, operation(endpoint, method: method)]
             .map(shellQuote).joined(separator: " ")
+    }
+
+    static func authenticateUnavailable(status: Int32, stderr: String) -> Bool {
+        if status == 127 { return true }
+        guard status != 0 else { return false }
+        let message = stderr.lowercased()
+        return [
+            "git-lfs-authenticate: not found",
+            "git-lfs-authenticate: command not found",
+            "git-lfs-authenticate: no such file",
+            "command not found: git-lfs-authenticate"
+        ].contains { message.contains($0) }
     }
 
     private static func operation(_ endpoint: LFSEndpoint, method: String) -> String {

@@ -165,7 +165,9 @@ otherwise it does not expire. Cached responses refresh five seconds early.
 `lfs.cachecredentials=false` disables the cache. Failed commands or JSON
 decoding are retried `max(0, lfs.ssh.retries) + 1` times (default six attempts)
 and are never cached. A remote failure reports trimmed stderr followed by
-`: exit status <n>` (or just the exit status when stderr is empty).
+`: exit status <n>` (or just the exit status when stderr is empty). Exit status
+127 and server responses identifying `git-lfs-authenticate` as unavailable
+instead fall back immediately to the guessed HTTPS endpoint.
 
 URL-specific `lfs.<url>.sshtransfer` overrides `lfs.sshtransfer`. Only unset,
 `negotiate` and `never` permit authentication; other values, including
@@ -173,9 +175,10 @@ URL-specific `lfs.<url>.sshtransfer` overrides `lfs.sshtransfer`. Only unset,
 request`. The pure `git-lfs-transfer` protocol remains out of scope.
 
 SSH command precedence follows git-lfs: `GIT_SSH_COMMAND`, then `GIT_SSH`,
-then `core.sshCommand`, then `ssh`. For an `ssh` command, `-F`, `-i`, `-o`,
-`-p` and `-l` become SSHKit configuration directives, preceding URL and config
-values. `GIT_SSH_VARIANT` overrides `ssh.variant`; PuTTY/Plink variants,
+then `core.sshCommand`, then `ssh`. For an `ssh` or Windows `ssh.exe` command,
+`-F`, `-i`, `-o`, `-p` and `-l` become SSHKit configuration directives,
+preceding URL and config values. `GIT_SSH_VARIANT` overrides `ssh.variant`;
+PuTTY/Plink variants,
 custom SSH executables/wrappers and other command-line options fail
 explicitly because SSHKit cannot run an external SSH implementation. SSHKit's
 existing key algorithm and configuration limits still apply (see [SSH.md](SSH.md)).

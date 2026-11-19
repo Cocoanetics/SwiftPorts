@@ -34,6 +34,10 @@ extension LFSCredentialTests {
                     printf '  not allowed\\n' >&2
                     exit 7
                 fi
+                if [ "$1" = "unavailable" ]; then
+                    printf 'bash: git-lfs-authenticate: command not found\\n' >&2
+                    exit 1
+                fi
                 [ "$#" = 2 ] || exit 8
                 [ "$1" = "org/o'neil repo.git" ] || exit 9
                 printf '%s\\n' '{"href":"https://lfs.example/alternate/",'\
@@ -101,6 +105,13 @@ extension LFSCredentialTests {
             let failures = try String(contentsOf: log, encoding: .utf8)
                 .split(whereSeparator: \.isNewline).filter { $0.contains(" failure ") }
             #expect(failures.count == 2)
+
+            var unavailable = endpoint
+            unavailable.ssh.path = "unavailable"
+            #expect(try await client.ssh.resolve(unavailable, method: "GET").href.isEmpty)
+            let unavailableCommands = try String(contentsOf: log, encoding: .utf8)
+                .split(whereSeparator: \.isNewline).filter { $0.contains(" unavailable ") }
+            #expect(unavailableCommands.count == 1)
         }
     }
 
