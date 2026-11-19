@@ -192,5 +192,29 @@ struct GitCommandLFSOracleTests {
         try fixture.compareFiles([".gitattributes", "assets/.gitattributes"])
         try expectDates(tracked, held: untouched)
     }
+
+    /// `foo/**/` matches a directory inside `foo`, not `foo` itself. git-lfs
+    /// touches `foo/bar/b` and leaves the direct child `foo/a` alone.
+    /// `foo/**` still includes that direct child.
+    @Test func trackDirectoryGlobRequiresChildDirectory() async throws {
+        let fixture = try LFSCommandFixture()
+        defer { fixture.cleanup() }
+        for path in [
+            "foo/a", "foo/bar/b", "foo/baz/qux/d", "other/e", "a/b/i", "a/b/c/h", "root.txt"
+        ] {
+            try fixture.write(path, "payload")
+        }
+        for repo in [fixture.ours, fixture.theirs] {
+            #expect(try fixture.system(["add", "."], in: repo).status == 0)
+        }
+        let dryRun = try await fixture.compare(["track", "--dry-run", "--verbose", "foo/**/"])
+        #expect(dryRun.stdout.contains("Touching \"foo/bar/b\""))
+        #expect(dryRun.stdout.contains("Touching \"foo/baz/qux/d\""))
+        #expect(!dryRun.stdout.contains("Touching \"foo/a\""))
+        for pattern in ["foo/**", "foo/**/**/", "*/**/", "**/", "foo/bar/**/", "foo/**/bar/", "a/b/**/"] {
+            try await fixture.compare(["track", "--dry-run", "--verbose", pattern])
+        }
+        try await fixture.compare(["track", "--dry-run", "--verbose", "foo/**/"], subdirectory: "foo")
+    }
 }
 #endif

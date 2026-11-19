@@ -112,8 +112,11 @@ extension TrackOptions {
     /// a matching directory includes its descendants. A pattern with a slash
     /// matches a parent directory the same way: `assets/*` matches `assets/sub`
     /// and therefore `assets/sub/model.bin`. `*` and `?` do not cross `/`. A
-    /// `**` component may. A leading `/` anchors the match at the root of the
-    /// path. On Windows `\` is a separator; on Unix it is literal.
+    /// `**` component may. A directory-only pattern that ends in `**`
+    /// (`foo/**/`) matches a child directory, not the directory written
+    /// immediately before that `**`: `foo/a` stays out and `foo/bar/b` is in.
+    /// A leading `/` anchors the match at the root of the path. On Windows
+    /// `\` is a separator; on Unix it is literal.
     static func exclusionMatches(_ pattern: String, path: String) -> Bool {
         var specs: [String: OpaquePointer] = [:]
         defer { specs.values.forEach { git_pathspec_free($0) } }
@@ -131,17 +134,23 @@ extension TrackOptions {
         // any parent directory. A trailing slash matches directories only.
         let limit = directoryOnly ? parts.count - 1 : parts.count
         guard limit > 0 else { return false }
-        for count in 1...limit where pathMatches(body, parts: parts.prefix(count), specs: &specs) {
+        for count in 1...limit where pathMatches(
+            body, parts: parts.prefix(count), directoryOnly: directoryOnly, specs: &specs
+        ) {
             return true
         }
         return false
     }
 
     private static func pathMatches(
-        _ pattern: String, parts: ArraySlice<String>, specs: inout [String: OpaquePointer]
+        _ pattern: String, parts: ArraySlice<String>, directoryOnly: Bool,
+        specs: inout [String: OpaquePointer]
     ) -> Bool {
         let patternParts = pattern.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        return partsMatch(patternParts[...], parts, specs: &specs)
+        let terminalGlobMustAdvance = directoryOnly && patternParts.last == "**"
+        return partsMatch(
+            patternParts[...], parts, terminalGlobMustAdvance: terminalGlobMustAdvance, specs: &specs
+        )
     }
 
     private static func normalizedSeparator(_ pattern: String) -> String {
@@ -153,17 +162,26 @@ extension TrackOptions {
     }
 
     private static func partsMatch(
-        _ pattern: ArraySlice<String>, _ path: ArraySlice<String>, specs: inout [String: OpaquePointer]
+        _ pattern: ArraySlice<String>, _ path: ArraySlice<String>, terminalGlobMustAdvance: Bool,
+        specs: inout [String: OpaquePointer]
     ) -> Bool {
         guard let part = pattern.first else { return path.isEmpty }
         let rest = pattern.dropFirst()
         if part == "**" {
-            if partsMatch(rest, path, specs: &specs) { return true }
+            // The final `**` of `foo/**/` has to consume a child directory.
+            // Once it has, a later empty match can finish the pattern.
+            let mustAdvance = terminalGlobMustAdvance && rest.isEmpty
+            if !mustAdvance, partsMatch(
+                rest, path, terminalGlobMustAdvance: terminalGlobMustAdvance, specs: &specs
+            ) { return true }
             guard !path.isEmpty else { return false }
-            return partsMatch(pattern, path.dropFirst(), specs: &specs)
+            let stillRequired = terminalGlobMustAdvance && !rest.isEmpty
+            return partsMatch(
+                pattern, path.dropFirst(), terminalGlobMustAdvance: stillRequired, specs: &specs
+            )
         }
         guard let component = path.first, componentMatches(part, component, specs: &specs) else { return false }
-        return partsMatch(rest, path.dropFirst(), specs: &specs)
+        return partsMatch(rest, path.dropFirst(), terminalGlobMustAdvance: terminalGlobMustAdvance, specs: &specs)
     }
 
     private static func componentMatches(

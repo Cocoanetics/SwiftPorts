@@ -38,6 +38,27 @@ struct CommandBehaviorReviewTests {
         #expect(!TrackOptions.exclusionMatches("assets/?.bin", path: "assets/sub/a.bin"))
     }
 
+    @Test func directoryOnlyDoubleStarRequiresAChildDirectory() {
+        #expect(!TrackOptions.exclusionMatches("foo/**/", path: "foo/a"))
+        #expect(TrackOptions.exclusionMatches("foo/**/", path: "foo/bar/b"))
+        #expect(TrackOptions.exclusionMatches("foo/**/", path: "foo/baz/qux/d"))
+        #expect(!TrackOptions.exclusionMatches("foo/**/", path: "other/e"))
+        #expect(TrackOptions.exclusionMatches("foo/**", path: "foo/a"))
+        #expect(TrackOptions.exclusionMatches("foo/**/**/", path: "foo/bar/b"))
+        #expect(!TrackOptions.exclusionMatches("foo/**/**/", path: "foo/a"))
+        #expect(!TrackOptions.exclusionMatches("*/**/", path: "foo/a"))
+        #expect(TrackOptions.exclusionMatches("*/**/", path: "foo/bar/b"))
+        #expect(TrackOptions.exclusionMatches("**/**/", path: "foo/a"))
+        #expect(!TrackOptions.exclusionMatches("a/b/**/", path: "a/b/i"))
+        #expect(TrackOptions.exclusionMatches("a/b/**/", path: "a/b/c/h"))
+        #expect(TrackOptions.exclusionMatches("foo/", path: "foo/a"))
+        #expect(TrackOptions.exclusionMatches("**/", path: "foo/a"))
+        #expect(!TrackOptions.exclusionMatches("**/", path: "root.txt"))
+        #expect(TrackOptions.exclusionMatches("assets/**", path: "assets/model.bin"))
+        #expect(TrackOptions.exclusionMatches("foo/**/bar/", path: "foo/bar/b"))
+        #expect(!TrackOptions.exclusionMatches("foo/**/bar/**/", path: "foo/bar/b"))
+    }
+
     @Test func trackSlashGlobDoesNotTouchNestedFiles() async throws {
         defer { try? FileManager.default.removeItem(at: host.root) }
         try await withRepository("SlashGlob") {
