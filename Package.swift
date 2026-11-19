@@ -59,8 +59,13 @@ let androidDroppedTargets: Set<String> = [
     "GitHubTests", "SSHKitTests", "GitKitSSHTests",
     // GitLFSKitTests links swift-crypto's BoringSSL C++ target too (through
     // GitLFSKit's `Crypto` dependency), so it's dropped for the same reason.
-    // `GitLFSKit` itself stays on Android.
+    // `GitLFSKit` itself stays on Android. Its manifest dependencies are unchanged.
+    // GitLFSTestSupport is the in-process LFS server (NIOHTTP1, issue #199):
+    // a test-only target, not a library product. GitLFSTestSupportTests links
+    // that server and swift-crypto. Both are dropped with GitLFSKitTests.
     "GitLFSKitTests",
+    "GitLFSTestSupport",
+    "GitLFSTestSupportTests",
 ]
 
 func androidFiltered(products list: [Product]) -> [Product] {
@@ -1186,9 +1191,34 @@ let package = Package(
             ],
             path: "Sources/GitLFSKit/Lib"
         ),
+        // In-process Git LFS server for tests (issue #199). Not a library product.
+        // NIOHTTP1, NIOCore, and NIOPosix are linked here. GitLFSKit is unchanged.
+        // GitLFSKitTests depends on it so a later suite can import the server.
+        // GitCommandTests stays unwired until that suite lands.
+        .target(
+            name: "GitLFSTestSupport",
+            dependencies: [
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+            ],
+            path: "Tests/GitLFSTestSupport"
+        ),
         .testTarget(
             name: "GitLFSKitTests",
-            dependencies: ["GitLFSKit", "SwiftGit", .product(name: "ShellKit", package: "ShellKit")]
+            dependencies: [
+                "GitLFSKit",
+                "GitLFSTestSupport",
+                "SwiftGit",
+                .product(name: "ShellKit", package: "ShellKit"),
+            ]
+        ),
+        .testTarget(
+            name: "GitLFSTestSupportTests",
+            dependencies: [
+                "GitLFSTestSupport",
+                .product(name: "Crypto", package: "swift-crypto"),
+            ]
         ),
 
         // MARK: RipgrepKit umbrella
