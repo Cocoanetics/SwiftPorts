@@ -52,7 +52,7 @@ struct Attributes {
         guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) else { return [] }
         let ending = text.contains("\r\n") ? "\r\n" : "\n"
         var paths: [AttributePath] = []
-        for raw in text.components(separatedBy: "\n") {
+        for raw in TrackOptions.lines(text) {
             let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty || line.hasPrefix("#") { continue }
             let pattern: String

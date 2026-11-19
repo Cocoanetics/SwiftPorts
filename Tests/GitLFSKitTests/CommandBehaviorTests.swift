@@ -119,6 +119,29 @@ struct CommandBehaviorTests {
         }
     }
 
+    @Test func crlfAttributeRulesAreReadAndPreserved() async throws {
+        defer { try? FileManager.default.removeItem(at: host.root) }
+        try await withRepository("CRLFAttributes") {
+            let path = Shell.currentDirectory.appendingPathComponent(".gitattributes")
+            let initial = "# comment\r\n*.bin filter=lfs diff=lfs merge=lfs -text\r\n"
+            try initial.write(to: path, atomically: false, encoding: .utf8)
+            let client = GitClient()
+
+            let listing = try await TrackOptions().track([], client: client)
+            #expect(listing.stdout == "Listing tracked patterns\n    *.bin (.gitattributes)\n"
+                + "Listing excluded patterns\n")
+            let tracked = try await TrackOptions().track(["*.dat"], client: client)
+            #expect(tracked.stdout == "Tracking \"*.dat\"\n")
+            #expect(try String(contentsOf: path, encoding: .utf8)
+                == initial + "*.dat filter=lfs diff=lfs merge=lfs -text\r\n")
+
+            let untracked = try await TrackOptions().untrack(["*.bin"], client: client)
+            #expect(untracked.stdout == "Untracking \"*.bin\"\n")
+            #expect(try String(contentsOf: path, encoding: .utf8)
+                == "# comment\n*.dat filter=lfs diff=lfs merge=lfs -text\n")
+        }
+    }
+
     @Test func trackHookSuppressionAcceptsEveryTruthySpelling() async throws {
         defer { try? FileManager.default.removeItem(at: host.root) }
         for value in ["TRUE", "yes", "ON", "t", "1"] {

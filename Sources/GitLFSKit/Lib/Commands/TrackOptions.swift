@@ -92,7 +92,10 @@ public struct TrackOptions: Sendable {
     }
 
     static func lines(_ text: String) -> [String] {
-        var lines = text.components(separatedBy: "\n")
+        // Match Go's bufio.Scanner: split LF bytes, including inside CRLF.
+        // Foundation's string separator handling differs across platforms here.
+        var lines = text.utf8.split(separator: 0x0A, omittingEmptySubsequences: false)
+            .map { String(decoding: $0, as: UTF8.self) }
         if lines.last == "" { lines.removeLast() }
         return lines.map { $0.hasSuffix("\r") ? String($0.dropLast()) : $0 }
     }
