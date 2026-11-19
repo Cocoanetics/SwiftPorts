@@ -137,3 +137,6 @@ launch the system Git's man viewer.
   and config values. Only environment-specific absolute paths and the agreed
   version identity are normalized. Config entries are sorted because upstream
   installs them by iterating Go maps. Skipped when git-lfs is unavailable.
+  CI installs the checksum-verified 3.7.1 reference on macOS and Linux. For local
+  command-oracle runs, put Git LFS 3.7.1 on `PATH`; newer releases change exact
+  help and diagnostic text.

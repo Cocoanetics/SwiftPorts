@@ -72,6 +72,8 @@ jobs:
           fi
       - name: Build (macOS)
         run: swift build --build-tests -v
+      - name: Install Git LFS 3.7.1 oracle
+        run: bash Scripts/install-git-lfs-oracle.sh
       - name: Test (macOS)
         run: swift test -v --skip-build --no-parallel
         # No standalone-binary smoke here (the Linux job carries it,
@@ -186,6 +188,8 @@ jobs:
       # the native engine these lanes used under 6.3.
       - name: Build (Linux)
         run: swift build --build-system native --build-tests -v
+      - name: Install Git LFS 3.7.1 oracle
+        run: bash Scripts/install-git-lfs-oracle.sh
       - name: Test (Linux)
         run: swift test --build-system native -v --skip-build --no-parallel
       - name: Smoke-test standalone argv handling (Linux)
