@@ -13,6 +13,8 @@ public enum LFSTestServerError: Error, Equatable {
 /// `application/vnd.git-lfs+json`. Download actions are `GET`, upload actions
 /// are `PUT`, and verify actions are `POST` of `{"oid","size"}`. Verify
 /// returns 200 only when the stored bytes hash to that oid and have that size.
+/// A digest mismatch removes those bytes; ``store(_:oid:)`` is what marks an
+/// object as already present.
 /// ``requests()`` records every response. ``inject(_:)`` arms the faults a
 /// transfer suite needs: 401, per-object 404 / 410 / 422, 429 with `Retry-After`,
 /// 5xx, an already-past `expires_at`, and a body whose size or SHA-256 is wrong.

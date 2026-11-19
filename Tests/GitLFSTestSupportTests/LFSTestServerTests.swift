@@ -81,6 +81,17 @@ struct LFSTestServerTests {
             #expect(entry.method == "POST")
             #expect(entry.status == 422)
             #expect(entry.responseBody == verified.body)
+            #expect(server.bytes(for: oid) == nil)
+
+            let again = try await LFSWireClient.postBatch(
+                server, operation: "upload", objects: [(oid: oid, size: bytes.count)]
+            )
+            let retry = try #require(try LFSWireClient.document(again).object(oid))
+            #expect(retry.error == nil)
+            #expect(retry.actions?["upload"] != nil)
+            let got = try await LFSWireClient.get(upload)
+            #expect(got.status == 404)
+            #expect(got.body != corrupt)
         }
     }
 

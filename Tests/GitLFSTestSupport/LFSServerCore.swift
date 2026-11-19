@@ -137,11 +137,13 @@ private struct LFSServerState {
         guard let stored = objects[oid] else {
             return .json(status: 404, message: objectMessage(404), fault: nil)
         }
-        guard stored.count == request.size else {
+        // A digest mismatch is not an object the server has. Drop it so the next
+        // upload batch still offers an upload action. store(_:oid:) is unchanged.
+        guard sha256Hex(stored) == oid else {
+            objects.removeValue(forKey: oid)
             return .json(status: 422, message: objectMessage(422), fault: nil)
         }
-        // The object id is the SHA-256 of the bytes. Same-length corruption still fails.
-        guard sha256Hex(stored) == oid else {
+        guard stored.count == request.size else {
             return .json(status: 422, message: objectMessage(422), fault: nil)
         }
         return .empty()
