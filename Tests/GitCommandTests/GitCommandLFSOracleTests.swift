@@ -117,5 +117,104 @@ struct GitCommandLFSOracleTests {
             #expect((attributes[.modificationDate] as? Date ?? old) > old)
         }
     }
+
+    /// `folder2/*` in git-lfs `TestGetTrackedFiles` includes `folder2/folder3/deep.txt`
+    /// because the pattern matches the parent directory. `assets/*.bin` does not:
+    /// `sub` is not `*.bin`, so the descendant stays untouched.
+    @Test func trackParentDirectoryMatchesTouchIndexedDescendants() async throws {
+        let fixture = try LFSCommandFixture()
+        defer { fixture.cleanup() }
+        let tracked = [
+            "assets/model.bin", "assets/readme.txt", "assets/sub/model.bin", "assets/sub/deep/model.bin"
+        ]
+        let untouched = ["other/model.bin"]
+        for path in tracked + untouched {
+            try fixture.write(path, "payload")
+        }
+        let old = Date(timeIntervalSince1970: 1_000_000)
+        for repo in [fixture.ours, fixture.theirs] {
+            #expect(try fixture.system(["add", "."], in: repo).status == 0)
+        }
+        func stamp() throws {
+            for repo in [fixture.ours, fixture.theirs] {
+                for path in tracked + untouched {
+                    try FileManager.default.setAttributes(
+                        [.modificationDate: old], ofItemAtPath: repo.appendingPathComponent(path).path)
+                }
+            }
+        }
+        func modified(_ path: String, in repo: URL) throws -> Date {
+            let attributes = try FileManager.default.attributesOfItem(
+                atPath: repo.appendingPathComponent(path).path)
+            return attributes[.modificationDate] as? Date ?? .distantPast
+        }
+        func expectDates(_ advanced: [String], held: [String]) throws {
+            for repo in [fixture.ours, fixture.theirs] {
+                for path in advanced {
+                    #expect(try modified(path, in: repo) > old, "advanced \(path)")
+                }
+                for path in held {
+                    #expect(try modified(path, in: repo) <= old, "held \(path)")
+                }
+            }
+        }
+
+        try stamp()
+        let negative = try await fixture.compare(["track", "--dry-run", "--verbose", "assets/*.bin"])
+        #expect(negative.stdout.contains("Found 1 files previously added to Git matching pattern: assets/*.bin"))
+        #expect(negative.stdout.contains("Touching \"assets/model.bin\""))
+        #expect(!negative.stdout.contains("assets/sub"))
+        try expectDates([], held: tracked + untouched)
+        try fixture.compareFiles()
+
+        let dryRun = try await fixture.compare(["track", "--dry-run", "--verbose", "assets/*"])
+        #expect(dryRun.stdout.contains("Found 4 files previously added to Git matching pattern: assets/*"))
+        #expect(dryRun.stdout.contains("Touching \"assets/sub/model.bin\""))
+        #expect(dryRun.stdout.contains("Touching \"assets/sub/deep/model.bin\""))
+        #expect(!dryRun.stdout.contains("other/model.bin"))
+        try expectDates([], held: tracked + untouched)
+
+        try await fixture.compare(["track", "--verbose", "assets/*"])
+        try fixture.compareFiles()
+        try expectDates(tracked, held: untouched)
+
+        // From inside assets/, the same root pattern is reported relative to
+        // the working directory and still touches the indexed descendants.
+        try stamp()
+        let nestedDry = try await fixture.compare(
+            ["track", "--dry-run", "--verbose", "assets/*"], subdirectory: "assets")
+        #expect(nestedDry.stdout.contains("Found 4 files previously added to Git matching pattern: assets/*"))
+        #expect(nestedDry.stdout.contains("Touching \"sub/model.bin\""))
+        #expect(nestedDry.stdout.contains("Touching \"sub/deep/model.bin\""))
+        #expect(!nestedDry.stdout.contains("Touching \"assets/"))
+        try expectDates([], held: tracked + untouched)
+        try await fixture.compare(["track", "--verbose", "assets/*"], subdirectory: "assets")
+        try fixture.compareFiles([".gitattributes", "assets/.gitattributes"])
+        try expectDates(tracked, held: untouched)
+    }
+
+    /// `foo/**/` matches a directory inside `foo`, not `foo` itself. git-lfs
+    /// touches `foo/bar/b` and leaves the direct child `foo/a` alone.
+    /// `foo/**` still includes that direct child.
+    @Test func trackDirectoryGlobRequiresChildDirectory() async throws {
+        let fixture = try LFSCommandFixture()
+        defer { fixture.cleanup() }
+        for path in [
+            "foo/a", "foo/bar/b", "foo/baz/qux/d", "other/e", "a/b/i", "a/b/c/h", "root.txt"
+        ] {
+            try fixture.write(path, "payload")
+        }
+        for repo in [fixture.ours, fixture.theirs] {
+            #expect(try fixture.system(["add", "."], in: repo).status == 0)
+        }
+        let dryRun = try await fixture.compare(["track", "--dry-run", "--verbose", "foo/**/"])
+        #expect(dryRun.stdout.contains("Touching \"foo/bar/b\""))
+        #expect(dryRun.stdout.contains("Touching \"foo/baz/qux/d\""))
+        #expect(!dryRun.stdout.contains("Touching \"foo/a\""))
+        for pattern in ["foo/**", "foo/**/**/", "*/**/", "**/", "foo/bar/**/", "foo/**/bar/", "a/b/**/"] {
+            try await fixture.compare(["track", "--dry-run", "--verbose", pattern])
+        }
+        try await fixture.compare(["track", "--dry-run", "--verbose", "foo/**/"], subdirectory: "foo")
+    }
 }
 #endif

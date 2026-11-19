@@ -96,29 +96,61 @@ extension TrackOptions {
         return result
     }
 
+    /// Index paths are relative to the worktree root. `git ls-files -x`
+    /// matches the pattern against those paths and prints names relative to
+    /// the shell directory, so a command run inside `assets/` still applies
+    /// `assets/*` to `assets/sub/model.bin` and reports `sub/model.bin`.
     private func matchingFiles(_ pattern: String, indexed: [String], prefix: String) -> [String] {
         indexed.compactMap { file in
             guard file.hasPrefix(prefix) else { return nil }
-            let relative = String(file.dropFirst(prefix.count))
-            return Self.exclusionMatches(pattern, path: relative) ? relative : nil
+            guard Self.exclusionMatches(pattern, path: file) else { return nil }
+            return String(file.dropFirst(prefix.count))
         }
     }
 
-    /// `git ls-files -x`: a slash-free pattern matches the basename in any
-    /// directory, and `*` / `?` in a slash pattern do not cross `/`. A `**`
-    /// path component may. On Windows `\` is a separator; on Unix it is literal.
+    /// `git ls-files -x`. A slash-free pattern matches any path component, so
+    /// a matching directory includes its descendants. A pattern with a slash
+    /// matches a parent directory the same way: `assets/*` matches `assets/sub`
+    /// and therefore `assets/sub/model.bin`. `*` and `?` do not cross `/`. A
+    /// `**` component may. A directory-only pattern that ends in `**`
+    /// (`foo/**/`) matches a child directory, not the directory written
+    /// immediately before that `**`: `foo/a` stays out and `foo/bar/b` is in.
+    /// A leading `/` anchors the match at the root of the path. On Windows
+    /// `\` is a separator; on Unix it is literal.
     static func exclusionMatches(_ pattern: String, path: String) -> Bool {
         var specs: [String: OpaquePointer] = [:]
         defer { specs.values.forEach { git_pathspec_free($0) } }
         let gitPattern = normalizedSeparator(pattern)
         let anchored = gitPattern.hasPrefix("/")
-        let body = anchored ? String(gitPattern.dropFirst()) : gitPattern
+        var body = anchored ? String(gitPattern.dropFirst()) : gitPattern
+        let directoryOnly = body.hasSuffix("/")
+        if directoryOnly { body.removeLast() }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         if !anchored && !body.contains("/") {
-            return componentMatches(body, pathBasename(path), specs: &specs)
+            let candidates = directoryOnly ? parts.dropLast() : ArraySlice(parts)
+            return candidates.contains { componentMatches(body, $0, specs: &specs) }
         }
-        let patternParts = body.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        let pathParts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        return partsMatch(patternParts[...], pathParts[...], specs: &specs)
+        // `prep_exclude` accepts a file when the pattern matches the file or
+        // any parent directory. A trailing slash matches directories only.
+        let limit = directoryOnly ? parts.count - 1 : parts.count
+        guard limit > 0 else { return false }
+        for count in 1...limit where pathMatches(
+            body, parts: parts.prefix(count), directoryOnly: directoryOnly, specs: &specs
+        ) {
+            return true
+        }
+        return false
+    }
+
+    private static func pathMatches(
+        _ pattern: String, parts: ArraySlice<String>, directoryOnly: Bool,
+        specs: inout [String: OpaquePointer]
+    ) -> Bool {
+        let patternParts = pattern.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let terminalGlobMustAdvance = directoryOnly && patternParts.last == "**"
+        return partsMatch(
+            patternParts[...], parts, terminalGlobMustAdvance: terminalGlobMustAdvance, specs: &specs
+        )
     }
 
     private static func normalizedSeparator(_ pattern: String) -> String {
@@ -130,17 +162,26 @@ extension TrackOptions {
     }
 
     private static func partsMatch(
-        _ pattern: ArraySlice<String>, _ path: ArraySlice<String>, specs: inout [String: OpaquePointer]
+        _ pattern: ArraySlice<String>, _ path: ArraySlice<String>, terminalGlobMustAdvance: Bool,
+        specs: inout [String: OpaquePointer]
     ) -> Bool {
         guard let part = pattern.first else { return path.isEmpty }
         let rest = pattern.dropFirst()
         if part == "**" {
-            if partsMatch(rest, path, specs: &specs) { return true }
+            // The final `**` of `foo/**/` has to consume a child directory.
+            // Once it has, a later empty match can finish the pattern.
+            let mustAdvance = terminalGlobMustAdvance && rest.isEmpty
+            if !mustAdvance, partsMatch(
+                rest, path, terminalGlobMustAdvance: terminalGlobMustAdvance, specs: &specs
+            ) { return true }
             guard !path.isEmpty else { return false }
-            return partsMatch(pattern, path.dropFirst(), specs: &specs)
+            let stillRequired = terminalGlobMustAdvance && !rest.isEmpty
+            return partsMatch(
+                pattern, path.dropFirst(), terminalGlobMustAdvance: stillRequired, specs: &specs
+            )
         }
         guard let component = path.first, componentMatches(part, component, specs: &specs) else { return false }
-        return partsMatch(rest, path.dropFirst(), specs: &specs)
+        return partsMatch(rest, path.dropFirst(), terminalGlobMustAdvance: terminalGlobMustAdvance, specs: &specs)
     }
 
     private static func componentMatches(
