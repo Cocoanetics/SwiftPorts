@@ -18,13 +18,15 @@ public struct TrackOptions: Sendable {
     public func track(_ patterns: [String], client: SwiftGit.GitClient) async throws -> LFSCommandResult {
         do {
             let repo = try await LFSRepository.open(client, workTree: true)
-            if !["1", "true"].contains(Shell.env("GIT_LFS_TRACK_NO_INSTALL_HOOKS") ?? "") {
+            let noInstallHooks = ["true", "1", "on", "yes", "t"]
+                .contains((Shell.env("GIT_LFS_TRACK_NO_INSTALL_HOOKS") ?? "").lowercased())
+            if !noInstallHooks {
                 for hook in Hook.loadHooks(directory: try await repo.hookDirectory(client)) {
                     try? await hook.install()
                 }
             }
             var reader = Attributes()
-            let known = try await reader.paths(repo, client: client)
+            let known = try await reader.paths(repo, client: client, includeExternal: patterns.isEmpty)
             if patterns.isEmpty { return listing(known) }
             if json { return LFSCommandResult(stderr: "--json option can't be combined with arguments\n", status: 2) }
             return try await edit(patterns, known: known, repo: repo, client: client)

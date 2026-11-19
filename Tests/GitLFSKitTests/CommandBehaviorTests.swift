@@ -8,6 +8,22 @@ import SwiftGit
 struct CommandBehaviorTests {
     let host = IsolatedLFSHost()
 
+    private func withRepository<T: Sendable>(
+        _ name: String,
+        environment extra: [String: String] = [:],
+        body: () async throws -> T
+    ) async throws -> T {
+        let repo = host.root.appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        let variables = host.variables.merging(extra) { _, new in new }
+        let shell = Shell(environment: Environment(variables: variables, workingDirectory: repo.path))
+        shell.sandbox = host.sandbox
+        return try await shell.withCurrent {
+            try await GitClient(workingDirectory: repo).initRepository(initialBranch: "main")
+            return try await body()
+        }
+    }
+
     @Test func pointerChecks() async throws {
         defer { try? FileManager.default.removeItem(at: host.root) }
         try await host.run {
@@ -79,5 +95,38 @@ struct CommandBehaviorTests {
             return try await options.run()
         }
         #expect(result.status == 0)
+    }
+
+    @Test func trackWritesLocalRuleWhenExternalRuleMatches() async throws {
+        defer { try? FileManager.default.removeItem(at: host.root) }
+        try await withRepository("ExternalAttributes") {
+            let external = host.root.appendingPathComponent("external-attributes")
+            try "*.bin filter=lfs diff=lfs merge=lfs -text\n"
+                .write(to: external, atomically: false, encoding: .utf8)
+            let client = GitClient()
+            try await client.configSet("core.attributesfile", external.path)
+
+            let listing = try await TrackOptions().track([], client: client)
+            #expect(listing.stdout.contains("*.bin"))
+            #expect(listing.stdout.contains("external-attributes"))
+
+            let result = try await TrackOptions().track(["*.bin"], client: client)
+            #expect(result.stdout == "Tracking \"*.bin\"\n")
+            #expect(try String(contentsOf: Shell.currentDirectory.appendingPathComponent(".gitattributes"),
+                               encoding: .utf8) == "*.bin filter=lfs diff=lfs merge=lfs -text\n")
+        }
+    }
+
+    @Test func trackHookSuppressionAcceptsEveryTruthySpelling() async throws {
+        defer { try? FileManager.default.removeItem(at: host.root) }
+        for value in ["TRUE", "yes", "ON", "t", "1"] {
+            try await withRepository("NoHooks-\(value)", environment: ["GIT_LFS_TRACK_NO_INSTALL_HOOKS": value]) {
+                let client = GitClient()
+                let result = try await TrackOptions().track([], client: client)
+                #expect(result.status == 0)
+                #expect(!FileManager.default.fileExists(
+                    atPath: Shell.currentDirectory.appendingPathComponent(".git/hooks/pre-push").path))
+            }
+        }
     }
 }

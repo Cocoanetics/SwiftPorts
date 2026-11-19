@@ -6,7 +6,9 @@ import SwiftGit
 struct Attributes {
     var macros: [String: [String]] = ["binary": ["-diff", "-merge", "-text"]]
 
-    mutating func paths(_ repo: LFSRepository, client: SwiftGit.GitClient) async throws -> [AttributePath] {
+    mutating func paths(
+        _ repo: LFSRepository, client: SwiftGit.GitClient, includeExternal: Bool = true
+    ) async throws -> [AttributePath] {
         guard let root = repo.workingDirectory else { return [] }
         var external: [AttributePath] = []
         let system = Shell.env("GIT_ATTR_SYSTEM") ?? (Shell.env("PREFIX") ?? "") + "/etc/gitattributes"
@@ -40,7 +42,7 @@ struct Attributes {
             local += try await read(file.url, source: file.source, prefix: directory,
                                     readMacros: file.source == ".gitattributes" || file.source == infoSource)
         }
-        return local + globalPaths + external
+        return includeExternal ? local + globalPaths + external : local
     }
 
     private mutating func read(
