@@ -103,13 +103,14 @@ struct LFSBatchTests {
 
     private func run(
         config: [(key: String, value: String)] = [("http.extraheader", "X-LFS-Test: alpha")],
+        remotes: [(name: String, url: String)] = [("origin", "https://example.com/repo.git")],
         provider: CredentialProvider? = nil,
         _ body: (LFSClient) async throws -> Void
     ) async throws {
         let host = IsolatedLFSHost()
         try await host.run {
             let made = try await LFSFixture.make(
-                host, "batch", remotes: [("origin", "https://example.com/repo.git")], config: config)
+                host, "batch", remotes: remotes, config: config)
             let lfs = await LFSClient(
                 git: made.client, credentials: provider, configuration: LFSBatchURLProtocol.configuration())
             try await body(lfs)
@@ -410,6 +411,70 @@ struct LFSBatchTests {
             let request = try #require(LFSBatchURLProtocol.requests().first)
             #expect(request.url?.absoluteString == expected)
             #expect(response.endpoint.url == endpoint)
+        }
+    }
+
+    @Test("a repository with no endpoint throws missing protocol and does not POST")
+    func missingProtocolDoesNotCrash() async throws {
+        LFSBatchURLProtocol.install { _ in (200, Data(#"{"objects":[]}"#.utf8)) }
+        defer { LFSBatchURLProtocol.reset() }
+        #expect(LFSClient.batchURL("")?.scheme == nil)
+        try await run(config: [], remotes: []) { lfs in
+            do {
+                _ = try await lfs.batch(operation: "download", objects: [LFSBatchObject(oid: oid, size: 1)])
+                Issue.record("expected a missing protocol")
+            } catch let error as LFSClientError {
+                #expect(error.description == "missing protocol: \"\"")
+            }
+            #expect(LFSBatchURLProtocol.requests().isEmpty)
+        }
+    }
+
+    @Test("an action that stays expired fails once the retry budget is spent")
+    func failsWhenExpirationRetriesAreExhausted() async throws {
+        let body = """
+        {"objects":[{"oid":"\(oid)","size":12,"actions":{"download":{
+        "href":"https://cdn.example/old","expires_at":"2000-01-01T00:00:00Z"}}}]}
+        """
+        LFSBatchURLProtocol.install { _ in (200, Data(body.utf8)) }
+        defer { LFSBatchURLProtocol.reset() }
+        try await run { lfs in
+            let object = LFSBatchObject(oid: oid, size: 12, name: "blob.bin")
+            do {
+                _ = try await lfs.batch(operation: "download", objects: [object])
+                Issue.record("expected an expiration failure")
+            } catch let error as LFSClientError {
+                let at = try #require(LFSTimestamp.parse("2000-01-01T00:00:00Z"))
+                let when = LFSTimestamp.rfc822(at)
+                #expect(error.description == "[blob.bin] LFS: action \"download\" expires at \(when)")
+            }
+            #expect(LFSBatchURLProtocol.requests().count == 9)
+        }
+    }
+
+    @Test("Go's zero expires_at is no expiration and is not re-batched")
+    func zeroExpiresAtIsNotExpired() async throws {
+        let actions = [
+            #"{"expires_at":"0001-01-01T00:00:00Z"}"#,
+            #"{"expires_at":"0001-01-01T00:00:00Z","expires_in":0}"#,
+            #"{"expires_at":"0001-01-01T00:00:00Z","expires_in":3600}"#
+        ]
+        for action in actions {
+            let fields = String(action.dropFirst())
+            let prefix = "{\"objects\":[{\"oid\":\"\(oid)\",\"size\":12,"
+            let href = "\"actions\":{\"download\":{\"href\":\"https://cdn.example/obj\","
+            let body = prefix + href + fields + "}}]}"
+            LFSBatchURLProtocol.install { _ in (200, Data(body.utf8)) }
+            defer { LFSBatchURLProtocol.reset() }
+            try await run { lfs in
+                let response = try await lfs.batch(
+                    operation: "download", objects: [LFSBatchObject(oid: oid, size: 12)])
+                #expect(LFSBatchURLProtocol.requests().count == 1)
+                let decoded = try #require(response.objects.first?.actions["download"])
+                #expect(decoded.expiresAt == nil)
+                #expect(!decoded.isExpired())
+                if action.contains("3600") { #expect(decoded.expiresIn == 3600) }
+            }
         }
     }
 }

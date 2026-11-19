@@ -460,13 +460,30 @@ enum LFSTimestamp {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.string(from: date)
     }
+
+    /// Go's zero `time.Time`. JSON emits this instant, and `IsZero` means no expiration.
+    static func isGoZero(_ date: Date) -> Bool {
+        date == parse("0001-01-01T00:00:00Z")
+    }
+
+    /// `time.RFC822` in the local zone (`02 Jan 06 15:04 MST`).
+    static func rfc822(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "dd MMM yy HH:mm z"
+        return formatter.string(from: date)
+    }
 }
 
 extension LFSClient {
     /// `tqClient.Batch`. `POST <endpoint>/objects/batch`. An empty object list
     /// does not hit the network. An action that is expired, or expires within
     /// 5 seconds, is retriable: the same batch is posted again, up to eight
-    /// retries. There is no worker pool here.
+    /// retries. There is no worker pool here. Once those retries are spent,
+    /// the call fails with the transfer queue's exhaustion error instead of
+    /// handing back the expired action.
     public func batch(
         operation: String,
         objects: [LFSBatchObject],
@@ -483,6 +500,13 @@ extension LFSClient {
             operation: operation, objects: objects, transfers: names, ref: ref)
         guard let url = Self.batchURL(endpoint.url) else {
             throw LFSClientError("invalid URL: \(endpoint.url)")
+        }
+        if url.scheme?.isEmpty != false {
+            // `HTTPRequest` reaches HTTPTypes' `httpRequestComponents`, which
+            // fatalErrors on a schemeless URL. `NewRequest` returns first.
+            try Self.requireHTTP(endpoint)
+            let fragment = endpoint.url.split(separator: "?", maxSplits: 1).first.map(String.init) ?? endpoint.url
+            throw LFSClientError("missing protocol: \(fragment.goQuoted)")
         }
         var http = HTTPRequest(method: .post, url: url)
         http.headerFields[.accept] = LFSMediaType.json
@@ -509,7 +533,28 @@ extension LFSClient {
             last = decoded
             if !decoded.expiresSoon(operation) { return decoded }
         }
-        return last
+        throw Self.expirationFailure(last, operation: operation, requested: objects)
+    }
+
+    /// The queue's report once `ActionExpiredErr` has used `defaultMaxRetries`.
+    /// `errors.Errorf("[%v] %v", name, NewRetriableError(ActionExpiredErr))`
+    /// prints `[name] LFS: action %q expires at <RFC822 local>`.
+    static func expirationFailure(
+        _ response: LFSBatchResponse, operation: String, requested: [LFSBatchObject]
+    ) -> LFSClientError {
+        var names: [String: String] = [:]
+        for object in requested where names[object.oid] == nil {
+            names[object.oid] = object.name
+        }
+        var lines: [String] = []
+        for object in response.objects {
+            guard let action = object.action(named: operation),
+                  let at = action.expiration(), action.isExpired() else { continue }
+            let name = names[object.oid] ?? object.name
+            let detail = "LFS: action \(operation.goQuoted) expires at \(LFSTimestamp.rfc822(at))"
+            lines.append("[\(name)] \(detail)")
+        }
+        return LFSClientError(lines.joined(separator: "\n"))
     }
 
     private func batchRemote(_ remote: String?, operation: String) async -> String {
@@ -630,7 +675,8 @@ private struct WireAction: Decodable {
                 throw DecodingError.dataCorruptedError(
                     forKey: .expiresAt, in: container, debugDescription: text)
             }
-            expiresAt = date
+            // Go's zero time means no expiration (`time.Time.IsZero`).
+            expiresAt = LFSTimestamp.isGoZero(date) ? nil : date
         }
     }
 
