@@ -162,6 +162,12 @@ struct EndpointResolutionTests {
             user: "git", host: "example.com", port: "2222",
             path: "foo/bar.git", userAndHost: "git@example.com"),
         EndpointRow(
+            name: "scp alias without a user keeps its relative path",
+            remotes: [("origin", "alias:foo/bar.git")],
+            url: "https://alias/foo/bar.git/info/lfs",
+            user: "", host: "alias", port: "",
+            path: "foo/bar.git", userAndHost: "alias"),
+        EndpointRow(
             name: "file:// is not given /info/lfs",
             remotes: [("origin", "file:///tmp/not-a-repo")],
             url: "file:///tmp/not-a-repo"),
