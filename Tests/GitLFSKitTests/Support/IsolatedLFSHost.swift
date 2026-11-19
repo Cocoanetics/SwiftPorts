@@ -16,7 +16,11 @@ struct IsolatedLFSHost: Sendable {
     /// A short random name, so paths under the root (worktree metadata
     /// included) stay within Windows' `MAX_PATH`, which libgit2 enforces there.
     static func shortName(_ prefix: String) -> String {
-        "\(prefix)-\(UUID().uuidString.prefix(8))"
+        // Callers also pass descriptive endpoint-table labels, including URLs.
+        // Keep those labels from introducing Windows-invalid path characters.
+        let safePrefix = prefix.replacingOccurrences(
+            of: "[^A-Za-z0-9_-]", with: "-", options: .regularExpression).prefix(24)
+        return "\(safePrefix)-\(UUID().uuidString.prefix(8))"
     }
 
     /// Makes the directories and an empty global config under a fresh
