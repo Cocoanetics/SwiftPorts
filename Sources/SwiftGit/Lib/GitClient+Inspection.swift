@@ -17,6 +17,12 @@ extension GitClient {
         try await withRepository { try $0.localBranches() }
     }
 
+    /// Remote-tracking branches (`git branch -r`), sorted by name.
+    /// `origin/HEAD` is included. Pass a remote to keep only that remote.
+    public func remoteBranches(remote: String? = nil) async throws -> [RemoteBranch] {
+        try await withRepository { try $0.remoteBranches(remote: remote) }
+    }
+
     /// List configured remote names, sorted alphabetically.
     public func remoteList() async throws -> [String] {
         try await withRepository { try $0.remoteList() }
