@@ -13,11 +13,13 @@ public struct LFSClientError: Error, Equatable, CustomStringConvertible, Sendabl
     public init(_ description: String) { self.description = description }
 }
 
-/// Body of an authenticated LFS request. `.file` is streamed from disk:
-/// object bytes are not copied into a `Data` buffer.
-public enum LFSRequestBody: Sendable {
+/// Body of an authenticated LFS request. `.file` and `.stream` are not copied
+/// into a `Data` buffer. `.stream` is `URLRequest.httpBodyStream`, which
+/// `URLSession` reads once.
+public enum LFSRequestBody: @unchecked Sendable {
     case data(Data)
     case file(URL)
+    case stream(InputStream)
 }
 
 /// Sends an LFS request the way `lfsapi.Client.DoWithAuth` does: `http.<url>.extraHeader`
@@ -105,9 +107,16 @@ public final class LFSClient: @unchecked Sendable {
         guard let http = request.httpRequest else {
             throw LFSClientError("invalid URL: \(request.url?.absoluteString ?? "")")
         }
-        let body = request.httpBody.map { LFSRequestBody.data($0) }
+        let body = Self.requestBody(request)
         let (data, _) = try await send(http, body: body, operation: operation, remote: remote)
         return data
+    }
+
+    /// Prefer `httpBody`. When it is absent, forward `httpBodyStream`.
+    private static func requestBody(_ request: URLRequest) -> LFSRequestBody? {
+        if let payload = request.httpBody { return .data(payload) }
+        if let stream = request.httpBodyStream { return .stream(stream) }
+        return nil
     }
 
     /// Performs one attempt. The payload stays with this call: concurrent
@@ -163,6 +172,9 @@ public final class LFSClient: @unchecked Sendable {
             (data, response) = try await session.upload(for: urlRequest, fromFile: file)
         case .data(let payload):
             urlRequest.httpBody = payload
+            (data, response) = try await session.data(for: urlRequest)
+        case .stream(let stream):
+            urlRequest.httpBodyStream = stream
             (data, response) = try await session.data(for: urlRequest)
         case nil:
             (data, response) = try await session.data(for: urlRequest)

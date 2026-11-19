@@ -278,4 +278,42 @@ struct LFSCredentialTests {
         #expect(requests.count == 1)
         #expect(requests[0].value(forHTTPHeaderField: "Authorization") == providerHeader)
     }
+
+    @Test("data(for:) uploads httpBody and httpBodyStream")
+    func uploadsRequestBody() async throws {
+        let payload = Data("{\"operation\":\"download\"}".utf8)
+        let seen = TestBox([Data]())
+        LFSMockURLProtocol.install { request in
+            seen.withLock { $0.append(Self.bytes(request)) }
+            return (200, Data("{}".utf8))
+        }
+        defer { LFSMockURLProtocol.reset() }
+        try await host.run {
+            let (_, lfs) = try await client()
+            var streamed = URLRequest(url: batch)
+            streamed.httpMethod = "POST"
+            streamed.httpBodyStream = InputStream(data: payload)
+            #expect(try await lfs.data(for: streamed) == Data("{}".utf8))
+            var buffered = URLRequest(url: batch)
+            buffered.httpMethod = "POST"
+            buffered.httpBody = payload
+            #expect(try await lfs.data(for: buffered) == Data("{}".utf8))
+        }
+        #expect(seen.withLock { $0 } == [payload, payload])
+    }
+
+    private static func bytes(_ request: URLRequest) -> Data {
+        if let body = request.httpBody, !body.isEmpty { return body }
+        guard let stream = request.httpBodyStream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 256)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            data.append(contentsOf: buffer.prefix(count))
+        }
+        return data
+    }
 }

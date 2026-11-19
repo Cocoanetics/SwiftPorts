@@ -496,7 +496,8 @@ extension LFSClient {
                 http, body: .data(payload), operation: operation, remote: remote)
             var decoded = try Self.decodeBatch(data, response: response, url: url)
             if !decoded.hashAlgorithm.isEmpty, decoded.hashAlgorithm != "sha256" {
-                throw LFSClientError("batch response: unsupported hash algorithm")
+                let rejected = decoded.hashAlgorithm.goQuoted
+                throw LFSClientError("batch response: unsupported hash algorithm: \(rejected)")
             }
             if response.status.code != 200 {
                 let target = Self.withoutQuery(url)
@@ -516,9 +517,16 @@ extension LFSClient {
         return operation == "upload" ? finder.uploadRemote() : await finder.downloadRemote()
     }
 
+    /// `objects/batch` joined onto the endpoint path, with the query left in place.
     static func batchURL(_ endpoint: String) -> URL? {
-        let joined = endpoint.hasSuffix("/") ? endpoint + "objects/batch" : endpoint + "/objects/batch"
-        return URL(string: joined)
+        guard var components = URLComponents(string: endpoint) else { return nil }
+        let path = components.percentEncodedPath
+        if path.hasSuffix("/") {
+            components.percentEncodedPath = path + "objects/batch"
+        } else {
+            components.percentEncodedPath = path + "/objects/batch"
+        }
+        return components.url
     }
 
     static func withoutQuery(_ url: URL) -> String {

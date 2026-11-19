@@ -230,7 +230,7 @@ struct LFSBatchTests {
                 _ = try await lfs.batch(operation: "download", objects: [LFSBatchObject(oid: oid, size: 1)])
                 Issue.record("expected an unsupported hash algorithm")
             } catch let error as LFSClientError {
-                #expect(error.description == "batch response: unsupported hash algorithm")
+                #expect(error.description == "batch response: unsupported hash algorithm: \"sha512\"")
             }
         }
     }
@@ -377,6 +377,39 @@ struct LFSBatchTests {
             #expect(requests[1].value(forHTTPHeaderField: "Authorization") == wanted)
             #expect(requests[0].value(forHTTPHeaderField: "Accept") == LFSMediaType.json)
             #expect(requests[1].value(forHTTPHeaderField: "User-Agent") == "git-lfs")
+        }
+    }
+
+    @Test("batchURL appends the path and keeps an endpoint query")
+    func batchURLKeepsTheQuery() {
+        let cases = [
+            ("https://host/info/lfs?token=x", "https://host/info/lfs/objects/batch?token=x"),
+            ("https://host/info/lfs/?token=x", "https://host/info/lfs/objects/batch?token=x"),
+            ("https://example.com/repo.git/info/lfs", "https://example.com/repo.git/info/lfs/objects/batch"),
+            ("https://example.com/repo.git/info/lfs/", "https://example.com/repo.git/info/lfs/objects/batch"),
+            ("https://user:secret@host/info/lfs?token=a%2Fb",
+             "https://user:secret@host/info/lfs/objects/batch?token=a%2Fb")
+        ]
+        for (endpoint, expected) in cases {
+            #expect(LFSClient.batchURL(endpoint)?.absoluteString == expected)
+        }
+    }
+
+    @Test("a configured endpoint query is still a query on the batch POST")
+    func postsBatchWithEndpointQuery() async throws {
+        let endpoint = "https://example.com/repo.git/info/lfs?token=x"
+        let expected = "https://example.com/repo.git/info/lfs/objects/batch?token=x"
+        LFSBatchURLProtocol.install { _ in (200, Data(#"{"objects":[]}"#.utf8)) }
+        defer { LFSBatchURLProtocol.reset() }
+        try await run(config: [
+            ("http.extraheader", "X-LFS-Test: alpha"),
+            ("lfs.url", endpoint)
+        ]) { lfs in
+            let response = try await lfs.batch(
+                operation: "download", objects: [LFSBatchObject(oid: oid, size: 1)])
+            let request = try #require(LFSBatchURLProtocol.requests().first)
+            #expect(request.url?.absoluteString == expected)
+            #expect(response.endpoint.url == endpoint)
         }
     }
 }
