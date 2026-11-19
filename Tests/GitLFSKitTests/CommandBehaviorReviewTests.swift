@@ -151,7 +151,38 @@ struct CommandBehaviorReviewTests {
             }
         }
         #expect(try String(contentsOf: outside, encoding: .utf8) == original)
-        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == outside.path)
+        #expect(try symlinkNames(outside, from: link))
+    }
+
+    /// Absolute symlink targets on Windows come back as DOS paths (`D:\...`),
+    /// while `URL.path` uses forward slashes. An NT `\??\` prefix or a
+    /// leading `/D:` is the same path. Unix stores the destination unchanged.
+    private func symlinkNames(_ target: URL, from link: URL) throws -> Bool {
+        let stored = try FileManager.default.destinationOfSymbolicLink(atPath: link.path)
+        return Self.samePathSpelling(stored, target.path)
+    }
+
+    private static func samePathSpelling(_ lhs: String, _ rhs: String) -> Bool {
+        func normalize(_ path: String) -> String {
+            var text = path.replacingOccurrences(of: "\\", with: "/")
+            for prefix in ["/??/", "//?/"] where text.hasPrefix(prefix) {
+                text.removeFirst(prefix.count)
+                break
+            }
+            if text.count >= 4 {
+                let second = text.index(after: text.startIndex)
+                let third = text.index(after: second)
+                if text[text.startIndex] == "/", text[third] == ":", text[second].isLetter {
+                    text.removeFirst()
+                }
+            }
+            #if os(Windows)
+            return text.lowercased()
+            #else
+            return text
+            #endif
+        }
+        return normalize(lhs) == normalize(rhs)
     }
 
 #if !os(Windows)
