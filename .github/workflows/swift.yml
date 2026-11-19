@@ -70,6 +70,8 @@ jobs:
           else
             echo "warning: macOS libswiftCompatibilitySpan.dylib not found under the toolchain"
           fi
+      - name: Install Git LFS 3.7.1 oracle
+        run: bash Scripts/install-git-lfs-oracle.sh
       - name: Build (macOS)
         run: swift build --build-tests -v
       - name: Test (macOS)
@@ -172,7 +174,7 @@ jobs:
             -e 's|http://security\.ubuntu\.com/ubuntu|https://azure.archive.ubuntu.com/ubuntu|g' \
             /etc/apt/sources.list
           apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update
-          apt-get -o Acquire::Retries=3 install -y libssl-dev pkg-config ca-certificates \
+          apt-get -o Acquire::Retries=3 install -y curl libssl-dev pkg-config ca-certificates \
                              zlib1g-dev libbz2-dev liblzma-dev \
                              libzstd-dev liblz4-dev libsecret-1-dev
       - name: Verify Swift version
@@ -185,6 +187,8 @@ jobs:
       # first CI run crashed the GitHub/GitLab test runners in URLSession.init
       # on Linux and failed to link zstd (undefined ZSTD_*) on Windows. Stay on
       # the native engine these lanes used under 6.3.
+      - name: Install Git LFS 3.7.1 oracle
+        run: bash Scripts/install-git-lfs-oracle.sh
       - name: Build (Linux)
         run: swift build --build-system native --build-tests -v
       - name: Test (Linux)

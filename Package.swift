@@ -1177,6 +1177,7 @@ let package = Package(
             name: "GitLFSKit",
             dependencies: [
                 "SwiftGit",
+                .product(name: "CGitKit", package: "GitKit"),
                 "SSHKit",
                 .product(name: "ShellKit", package: "ShellKit"),
                 .product(name: "Crypto", package: "swift-crypto"),
