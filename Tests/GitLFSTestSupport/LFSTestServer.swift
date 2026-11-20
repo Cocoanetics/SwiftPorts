@@ -17,7 +17,8 @@ public enum LFSTestServerError: Error, Equatable {
 /// object as already present.
 /// ``requests()`` records every response. ``inject(_:)`` arms the faults a
 /// transfer suite needs: 401, per-object 404 / 410 / 422, 429 with `Retry-After`,
-/// 5xx, an already-past `expires_at`, and a body whose size or SHA-256 is wrong.
+/// 5xx, a 5xx that stays armed, an already-past `expires_at`, and a body whose
+/// size or SHA-256 is wrong.
 /// An object passed to ``store(_:oid:)`` is a batch object with no `upload` action.
 public final class LFSTestServer: @unchecked Sendable {
     /// LFS API root, `http://127.0.0.1:<port>`. Clients POST `<endpoint>/objects/batch`.

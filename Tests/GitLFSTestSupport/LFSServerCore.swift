@@ -28,6 +28,9 @@ private struct LFSServerState {
 
     private mutating func route(method: String, uri: String, body: Data) -> LFSWireResponse {
         if let fault = statusFault {
+            if case .repeatingServerError = fault {
+                return statusResponse(fault)
+            }
             statusFault = nil
             return statusResponse(fault)
         }
@@ -160,6 +163,8 @@ private struct LFSServerState {
             )
         case .serverError(let code):
             return .json(status: code, message: "Server error", fault: fault.logToken)
+        case .repeatingServerError:
+            return .json(status: 500, message: "Server error", fault: fault.logToken)
         default:
             return .json(status: 500, message: "Server error", fault: "500")
         }
