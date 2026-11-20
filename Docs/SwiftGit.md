@@ -49,6 +49,7 @@ let client = GitClient(
 | `indexedPaths()` | `git ls-files` |
 | `status()` → `StatusReport` | `git status` (verbose / `-s` / `--porcelain` / `-sb`) |
 | `log(_:)` → `[LogEntry]` | `git log` with start / exclude / pathspec / count |
+| `revList(starts:excludes:)` → `[String]` | `git rev-list` full commit ids in the default walk order (`log()` keeps its own order) |
 | `diff(_:format:paths:contextLines:)` | `git diff` (patch / stat / shortstat / numstat / raw / name-only / name-status), supports `<a>..<b>` ranges |
 | `diffIndex(ref:cached:)` → `[DiffIndexEntry]` | `git diff-index [-M] [--cached] <ref>`: full ids, modes, source and destination paths, status. Renames at 50%, copies off. Unborn `HEAD` is the empty tree |
 | `mergeBase(_:_:)` | `git merge-base <a> <b>` |
