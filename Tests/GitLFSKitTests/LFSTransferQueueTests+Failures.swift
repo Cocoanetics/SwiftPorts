@@ -41,16 +41,51 @@ extension LFSTransferQueueTests {
         }
     }
 
-    @Test("batch HTTP failure is not retried by the queue")
+    @Test("batch HTTP failure is retried per object and exhaustion returns the last error")
     func batchFailure() async throws {
+        let attempts = TransferTestLock(0)
         LFSTransferURLProtocol.install { _ in
-            LFSTransferReply(status: 500, body: Data(#"{"message":"batch failed"}"#.utf8))
+            let count = attempts.withLock { $0 += 1; return $0 }
+            return LFSTransferReply(status: 500, body: Data(#"{"message":"batch failed \#(count)"}"#.utf8))
+        }
+        try await run(config: [("lfs.transfer.maxretries", "1")]) { client, store, _ in
+            let clock = LFSTransferClock()
+            await #expect(throws: LFSClientError("batch failed 2")) {
+                try await queue(client, store, clock: clock).transfer([LFSBatchObject(oid: oid, size: 12)])
+            }
+            #expect(attempts.withLock { $0 } == 2)
+            #expect(clock.delays == [0.25])
+        }
+    }
+
+    @Test("an unknown OID in a batch response is reported")
+    func unknownOID() async throws {
+        let unknown = String(repeating: "a", count: 64)
+        LFSTransferURLProtocol.install { _ in
+            LFSTransferReply(body: Data(#"{"objects":[{"oid":"\#(unknown)","size":12}]}"#.utf8))
         }
         try await run { client, store, _ in
-            await #expect(throws: LFSClientError("batch failed")) {
+            await #expect(throws: LFSClientError("[\(unknown)] The server returned an unknown OID.")) {
                 try await queue(client, store).transfer([LFSBatchObject(oid: oid, size: 12)])
             }
             #expect(LFSTransferURLProtocol.requests.count == 1)
+        }
+    }
+
+    @Test("an upload whose file size changed is rejected before PUT")
+    func corruptUpload() async throws {
+        LFSTransferURLProtocol.install { request in
+            request.url?.lastPathComponent == "batch"
+                ? .batch(request, operation: "upload") : LFSTransferReply()
+        }
+        try await run { client, store, directory in
+            let path = directory.appendingPathComponent("upload")
+            try data.write(to: path)
+            await #expect(throws: LFSClientError("corrupt object: file (\(oid))")) {
+                try await queue(client, store, .upload).transfer([
+                    LFSBatchObject(oid: oid, size: 11, name: "file", path: path.path)])
+            }
+            #expect(LFSTransferURLProtocol.requests.map(\.httpMethod) == ["POST"])
         }
     }
 

@@ -67,18 +67,30 @@ public final class LFSTransferQueue: Sendable {
                                                   ref: LFSBatchRef(name: refName), remote: remote)
             } catch {
                 try Task.checkCancellation()
-                failures.append(String(describing: error))
+                let message = String(describing: error)
+                var retries: [LFSTransferPending] = []
+                for item in slice {
+                    if let retry = scheduledRetry(item) { retries.append(retry) }
+                    else { failures.append(message) }
+                }
+                pending = retries + pending
                 continue
             }
             let originals = Dictionary(uniqueKeysWithValues: slice.map { ($0.object.oid, $0) })
             var jobs: [LFSTransferPending] = []
             for var object in response.objects {
-                guard var item = originals[object.oid] else { continue }
+                if let error = object.errorText {
+                    failures.append(error)
+                    continue
+                }
+                guard var item = originals[object.oid] else {
+                    failures.append("[\(object.oid)] The server returned an unknown OID.")
+                    continue
+                }
                 object.name = item.object.name
                 object.path = item.object.path
                 item.object = object
-                if let error = object.errorText { failures.append(error) }
-                else if object.action(named: direction.rawValue) != nil { jobs.append(item) }
+                if object.action(named: direction.rawValue) != nil { jobs.append(item) }
             }
             jobs.sort { $0.object.size > $1.object.size }
             let workers = LFSTransferWorkers(jobs, authenticated: authenticated)
@@ -86,21 +98,28 @@ public final class LFSTransferQueue: Sendable {
             authenticated = workers.authenticated
             try Task.checkCancellation()
             var retries: [LFSTransferPending] = []
-            for (var item, error) in results {
+            for (item, error) in results {
                 guard let error else { continue }
                 if error.unsupportedContentType { unsupported = true; continue }
-                if error.retry, item.retries < settings.maxRetries {
-                    item.retries += 1
-                    let delay = error.delay ?? LFSRetryPolicy.delay(
-                        count: item.retries, maximum: settings.maxRetryDelay)
-                    item.ready = environment.now().addingTimeInterval(delay)
-                    retries.append(item)
+                if error.retry, let retry = scheduledRetry(item, delay: error.delay) {
+                    retries.append(retry)
                 } else { failures.append(error.message) }
             }
             pending = retries + pending
         }
         if unsupported { environment.stderr(Self.contentTypeInfo) }
         if !failures.isEmpty { throw LFSClientError(failures.joined(separator: "\n")) }
+    }
+
+    private func scheduledRetry(
+        _ pending: LFSTransferPending, delay: TimeInterval? = nil
+    ) -> LFSTransferPending? {
+        var pending = pending
+        guard pending.retries < settings.maxRetries else { return nil }
+        pending.retries += 1
+        let delay = delay ?? LFSRetryPolicy.delay(count: pending.retries, maximum: settings.maxRetryDelay)
+        pending.ready = environment.now().addingTimeInterval(delay)
+        return pending
     }
 
     private func run(_ workers: LFSTransferWorkers) async -> [(LFSTransferPending, LFSTransferError?)] {

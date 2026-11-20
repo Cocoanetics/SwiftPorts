@@ -73,10 +73,14 @@ extension LFSTransferQueueTests {
         try await run(config: [("lfs.transfer.batchSize", "2"), ("lfs.concurrenttransfers", "1")]) {
             client, store, directory in
             let path = directory.appendingPathComponent("upload")
+            let largePath = directory.appendingPathComponent("large")
+            let smallPath = directory.appendingPathComponent("small")
             try data.write(to: path)
+            try Data(repeating: 0, count: 20).write(to: largePath)
+            try Data(repeating: 0, count: 3).write(to: smallPath)
             let first = LFSBatchObject(oid: oid, size: 12, name: "first", path: path.path)
-            let second = LFSBatchObject(oid: String(repeating: "b", count: 64), size: 20, path: path.path)
-            let third = LFSBatchObject(oid: String(repeating: "c", count: 64), size: 3, path: path.path)
+            let second = LFSBatchObject(oid: String(repeating: "b", count: 64), size: 20, path: largePath.path)
+            let third = LFSBatchObject(oid: String(repeating: "c", count: 64), size: 3, path: smallPath.path)
             try await queue(client, store, .upload).transfer([
                 first, second, LFSBatchObject(oid: oid, size: 80, path: "/missing"), third])
             #expect(sizes.withLock { $0 } == [20, 12, 3])

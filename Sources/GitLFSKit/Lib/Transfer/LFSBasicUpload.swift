@@ -14,6 +14,12 @@ extension LFSTransferQueue {
         try await Shell.authorize(file)
         let handle = try FileHandle(forReadingFrom: file)
         do {
+            let size = try handle.seekToEnd()
+            guard size == UInt64(object.size) else {
+                throw LFSTransferError(
+                    message: "corrupt object: \(object.name) (\(object.oid))", retry: false)
+            }
+            try handle.seek(toOffset: 0)
             if request.headerFields[.contentType]?.isEmpty != false {
                 let detect = client.finder.urlConfig.bool(
                     prefix: "lfs", url: request.url?.absoluteString ?? action.href, key: "contenttype", fallback: true)
