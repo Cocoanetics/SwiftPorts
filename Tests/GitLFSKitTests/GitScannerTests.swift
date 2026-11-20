@@ -1,0 +1,270 @@
+import Foundation
+import Testing
+import CGitKit
+@testable import SwiftGit
+import GitLFSKit
+
+@Suite("GitScanner")
+struct GitScannerTests {
+    private static let first = Pointer(oid: String(repeating: "a", count: 64), size: 12)
+    private static let second = Pointer(oid: String(repeating: "b", count: 64), size: 34)
+
+    private func withRepo(_ body: (URL, GitClient) async throws -> Void) async throws {
+        let host = IsolatedLFSHost()
+        defer { try? FileManager.default.removeItem(at: host.root) }
+        try await host.run {
+            let (dir, client) = try await LFSFixture.make(host, "scan")
+            try await body(dir, client)
+        }
+    }
+
+    private func write(_ text: String, _ path: String, in dir: URL) throws {
+        let url = dir.appendingPathComponent(path)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: url)
+    }
+
+    @discardableResult
+    private func commit(_ client: GitClient, _ message: String = "pointers") async throws -> String {
+        try await client.add(paths: [])
+        return try await client.commit(message: message, author: nil, allowEmpty: false)
+    }
+
+    /// Add a gitlink directly to the test index, without a subprocess or
+    /// a live submodule checkout.
+    private func addGitlink(_ client: GitClient, target: String) async throws {
+        try await client.withRepository { repository in
+            let repo = try #require(GitClient.handle(of: repository))
+            var index: OpaquePointer?
+            #expect(git_repository_index(&index, repo) == 0)
+            defer { git_index_free(index) }
+            var entry = git_index_entry()
+            entry.mode = 0o160000
+            #expect(git_oid_fromstr(&entry.id, target) == 0)
+            "module".withCString { path in
+                entry.path = path
+                #expect(git_index_add(index, &entry) == 0)
+            }
+            #expect(git_index_write(index) == 0)
+        }
+    }
+
+    @Test("depth-first tree order preserves every path sharing a blob")
+    func treeOrderAndMultiplicity() async throws {
+        try await withRepo { dir, client in
+            for path in ["a/nested/one.dat", "a/two.dat", "b/three.dat", "z.dat"] {
+                try write(Self.first.encoded, path, in: dir)
+            }
+            try await commit(client)
+            let pointers = try await GitScanner(client: client).scanTree("HEAD")
+            #expect(pointers.map(\.name) == ["a/nested/one.dat", "a/two.dat", "b/three.dat", "z.dat"])
+            #expect(Set(pointers.map(\.oid)).count == 1)
+            #expect(pointers.allSatisfy { $0.oid.count == 40 && $0.pointer == Self.first })
+            #expect(pointers.allSatisfy { $0.status.isEmpty && $0.sourceName.isEmpty })
+            let filtered = try await GitScanner(client: client, filter: FilepathFilter(exclude: ["a"]))
+                .scanTree()
+            #expect(filtered.map(\.name) == ["b/three.dat", "z.dat"])
+        }
+    }
+
+    @Test("malformed pointers are skipped, empty pointers and 1023 bytes survive")
+    func decodingAndCutoff() async throws {
+        try await withRepo { dir, client in
+            for (index, rejection) in PointerRejection.all.enumerated() {
+                try write(rejection.text, "bad-\(index)", in: dir)
+            }
+            try write("", "empty", in: dir)
+            for size in [1023, 1024, 1025] {
+                let text = Self.first.encoded
+                    + String(repeating: " ", count: size - Self.first.encoded.utf8.count)
+                // All three decode if read, so the scanner must gate on metadata.
+                #expect(try Pointer.decode(Data(text.utf8)).oid == Self.first.oid)
+                try write(text, "padded-\(size)", in: dir)
+            }
+            try await commit(client)
+            let pointers = try await GitScanner(client: client).scanTree()
+            #expect(pointers.map(\.name) == ["empty", "padded-1023"])
+            #expect(pointers.first?.pointer == .empty)
+            #expect(pointers.last?.pointer.oid == Self.first.oid)
+            #expect(pointers.last?.pointer.canonical == false)
+        }
+    }
+
+    @Test("cached destinations override the ref, independent of working files")
+    func indexOverride() async throws {
+        try await withRepo { dir, client in
+            try write(Self.first.encoded, "changed", in: dir)
+            try write(Self.first.encoded, "unchanged", in: dir)
+            try await commit(client)
+            try write(Self.second.encoded, "changed", in: dir)
+            try write(Self.second.encoded, "added", in: dir)
+            try await client.add(paths: ["changed", "added"])
+            try write("a downloaded working file", "changed", in: dir)
+            try FileManager.default.removeItem(at: dir.appendingPathComponent("unchanged"))
+            let pointers = try await GitScanner(client: client).scanIndex(ref: "HEAD", workingDirectory: dir)
+            #expect(pointers.map(\.name) == ["added", "changed", "unchanged"])
+            #expect(pointers.map(\.pointer.oid) == [Self.second.oid, Self.second.oid, Self.first.oid])
+            #expect(pointers.map(\.status) == ["A", "M", ""])
+            #expect(pointers.map(\.sourceName) == ["added", "changed", ""])
+        }
+    }
+
+    @Test("staged deletions and non-pointer replacements retain the ref pointer")
+    func stagedDelete() async throws {
+        try await withRepo { dir, client in
+            try write(Self.first.encoded, "deleted", in: dir)
+            try write(Self.first.encoded, "replaced", in: dir)
+            try await commit(client)
+            try await client.remove(paths: ["deleted"])
+            try write("ordinary git data", "replaced", in: dir)
+            try await client.add(paths: ["replaced"])
+            let pointers = try await GitScanner(client: client).scanIndex()
+            #expect(pointers.map(\.name) == ["deleted", "replaced"])
+            #expect(pointers.allSatisfy { $0.pointer == Self.first && $0.status.isEmpty })
+        }
+    }
+
+    @Test("rename destination carries source name and diff status")
+    func renameFields() async throws {
+        try await withRepo { dir, client in
+            try write(Self.first.encoded, "old", in: dir)
+            try await commit(client)
+            try await client.move(from: "old", to: "new")
+            let pointers = try await GitScanner(client: client).scanIndex()
+            #expect(pointers.map(\.name) == ["new", "old"])
+            #expect(pointers.first?.sourceName == "old")
+            #expect(pointers.first?.status == "R")
+            #expect(pointers.first?.oid == pointers.last?.oid)
+        }
+    }
+
+    @Test("unborn HEAD is empty, with staged additions available to index scans")
+    func unborn() async throws {
+        try await withRepo { dir, client in
+            let scanner = GitScanner(client: client)
+            #expect(try await scanner.scanIndex().isEmpty)
+            #expect(try await scanner.scanAll().isEmpty)
+            #expect(try await scanner.scanRefs(include: ["HEAD"]).isEmpty)
+            try write(Self.first.encoded, "added", in: dir)
+            try await client.add(paths: ["added"])
+            let pointers = try await scanner.scanIndex()
+            #expect(pointers.map(\.name) == ["added"])
+            #expect(pointers.first?.status == "A")
+        }
+    }
+
+    @Test("bad revisions and repository errors propagate")
+    func invalidRefs() async throws {
+        try await withRepo { dir, client in
+            try write(Self.first.encoded, "file", in: dir)
+            try await commit(client)
+            let scanner = GitScanner(client: client)
+            await #expect(throws: (any Error).self) { try await scanner.scanTree("missing-ref") }
+            await #expect(throws: (any Error).self) { try await scanner.scanIndex(ref: "missing-ref") }
+            await #expect(throws: (any Error).self) { try await scanner.scanRefs(include: ["missing-ref"]) }
+            await #expect(throws: (any Error).self) {
+                try await scanner.scanRefs(include: ["HEAD"], exclude: ["missing-ref"])
+            }
+            let notRepo = GitScanner(client: GitClient(workingDirectory: dir.appendingPathComponent("absent")))
+            await #expect(throws: (any Error).self) { try await notRepo.scanAll() }
+        }
+    }
+
+    @Test("missing Git blobs throw rather than being mistaken for invalid pointers")
+    func missingBlob() async throws {
+        try await withRepo { dir, client in
+            try write(Self.first.encoded, "file", in: dir)
+            try await commit(client)
+            let oid = try await client.resolveOID("HEAD:file")
+            let object = dir.appendingPathComponent(".git/objects/\(oid.prefix(2))/\(oid.dropFirst(2))")
+            try FileManager.default.moveItem(at: object, to: dir.appendingPathComponent("saved-object"))
+            let scanner = GitScanner(client: client)
+            await #expect(throws: (any Error).self) { try await scanner.scanTree() }
+            await #expect(throws: (any Error).self) { try await scanner.scanIndex() }
+            await #expect(throws: (any Error).self) { try await scanner.scanRefs(include: ["HEAD"]) }
+        }
+    }
+
+    @Test("gitlinks are skipped in both trees and cached diffs")
+    func gitlinks() async throws {
+        try await withRepo { dir, client in
+            try write(Self.first.encoded, "file", in: dir)
+            let target = try await commit(client)
+            try await addGitlink(client, target: target)
+            let scanner = GitScanner(client: client)
+            #expect(try await scanner.scanIndex().map(\.name) == ["file"])
+            try await client.commit(message: "gitlink", author: nil, allowEmpty: false)
+            #expect(try await scanner.scanTree().map(\.name) == ["file"])
+        }
+    }
+
+    @Test("history retains deleted pointer versions in rev-list order")
+    func historicalVersions() async throws {
+        try await withRepo { dir, client in
+            try write(Self.first.encoded, "file", in: dir)
+            try await commit(client)
+            try write(Self.second.encoded, "file", in: dir)
+            try await commit(client, "modify")
+            try await client.remove(paths: ["file"])
+            try await commit(client, "delete")
+            let pointers = try await GitScanner(client: client).scanRefs(include: ["HEAD"])
+            #expect(pointers.map(\.name) == ["file", "file"])
+            #expect(pointers.map(\.pointer) == [Self.second, Self.first])
+            #expect(Set(pointers.map(\.oid)).count == 2)
+        }
+    }
+
+    @Test("ranges exclude shared blobs reachable from excluded ancestors")
+    func excludedObjectClosure() async throws {
+        try await withRepo { dir, client in
+            try write(Self.first.encoded, "original", in: dir)
+            let ancestor = try await commit(client)
+            try await client.remove(paths: ["original"])
+            let excluded = try await commit(client, "delete")
+            try write(Self.first.encoded, "resurrected", in: dir)
+            try write(Self.second.encoded, "new", in: dir)
+            try await commit(client, "reintroduce shared blob")
+            let scanner = GitScanner(client: client)
+            let range = try await scanner.scanRefs(include: ["HEAD"], exclude: [excluded])
+            #expect(range.map(\.name) == ["new"])
+            #expect(range.first?.pointer == Self.second)
+            let history = try await scanner.scanRefs(include: ["HEAD"])
+            #expect(history.map(\.name) == ["new", "resurrected"])
+            #expect(try await scanner.scanRefs(include: [ancestor]).map(\.name) == ["original"])
+        }
+    }
+
+    @Test("a filtered first path consumes the OID for the whole history walk")
+    func filteredNamesConsumeOID() async throws {
+        try await withRepo { dir, client in
+            try write(Self.first.encoded, "z-allowed", in: dir)
+            try await commit(client)
+            try write(Self.first.encoded, "a-rejected", in: dir)
+            try await commit(client, "copy")
+            let scanner = GitScanner(client: client, filter: FilepathFilter(include: ["z-allowed"]))
+            #expect(try await scanner.scanRefs(include: ["HEAD"]).isEmpty)
+            #expect(try await scanner.scanTree().map(\.name) == ["z-allowed"])
+        }
+    }
+
+    @Test("scanAll combines branch, tag and detached HEAD in one walk")
+    func allReferences() async throws {
+        try await withRepo { dir, client in
+            try write(Self.first.encoded, "old", in: dir)
+            let old = try await commit(client)
+            try await client.tagCreate(name: "old-tag", target: old)
+            try await client.remove(paths: ["old"])
+            try await commit(client, "delete")
+            try await client.checkout(ref: old)
+            try write(Self.second.encoded, "detached", in: dir)
+            try await commit(client, "detached")
+            let starts = try await client.references().map(\.targetSHA) + ["HEAD"]
+            let scanner = GitScanner(client: client)
+            let expected = try await scanner.scanRefs(include: starts)
+            let all = try await scanner.scanAll()
+            #expect(all == expected)
+            #expect(Set(all.map(\.pointer.oid)) == [Self.first.oid, Self.second.oid])
+            #expect(all.count == 2)
+        }
+    }
+}
