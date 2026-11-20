@@ -14,8 +14,9 @@ extension GitClient {
 
     /// Full commit ids in default `git rev-list` order.
     ///
-    /// `starts` are the tips; an empty list walks `HEAD`. `excludes` hide
-    /// those commits and their ancestors (`git rev-list <starts> --not
+    /// `starts` are the tips. `git rev-list` requires at least one, so an
+    /// empty list throws instead of walking `HEAD`. `excludes` hide those
+    /// commits and their ancestors (`git rev-list <starts> --not
     /// <excludes>`). An unborn `HEAD` contributes nothing. Tags peel to
     /// the commit they name.
     ///
@@ -25,13 +26,20 @@ extension GitClient {
     /// its children can therefore appear before that child, once another
     /// child has already been listed. ``log(_:)`` does not use this order.
     public func revList(starts: [String], excludes: [String] = []) async throws -> [String] {
-        try await withRepository { repository in
+        // `git rev-list` with no `<commit>` prints usage and exits 129.
+        // Substituting `HEAD` would walk every reachable commit.
+        guard !starts.isEmpty else {
+            throw Libgit2Error(
+                code: -1, klass: Int32(GIT_ERROR_INVALID.rawValue),
+                message: "rev-list requires at least one start revision")
+        }
+        return try await withRepository { repository in
             guard let repo = Self.handle(of: repository) else {
                 throw Libgit2Error(
                     code: -1, klass: Int32(GIT_ERROR_REPOSITORY.rawValue),
                     message: "cannot reach GitKit's repository handle to walk revisions")
             }
-            let tips = try Self.revListTips(starts.isEmpty ? ["HEAD"] : starts, repo: repo)
+            let tips = try Self.revListTips(starts, repo: repo)
             guard !tips.isEmpty else { return [] }
 
             var walker: OpaquePointer?

@@ -23,7 +23,6 @@ struct GitClientRevListTests {
         let client = GitClient(workingDirectory: dir)
         let listed = try await client.revList(starts: ["HEAD"], excludes: [])
         #expect(try gitRevList(["HEAD"], in: dir) == listed)
-        #expect(try await client.revList(starts: [], excludes: []) == listed)
         // The tip is older than its parent. A pure date sort would emit the
         // parent first; the revision walk still emits the child first.
         let subjects = try subjects(of: listed, in: dir)
@@ -76,6 +75,16 @@ struct GitClientRevListTests {
         #expect(try subjects(of: range, in: dir) == ["three"])
         let fromTag = try await client.revList(starts: ["v1"], excludes: [])
         #expect(try await client.revList(starts: ["HEAD"], excludes: []) == fromTag)
+    }
+
+    @Test("an empty start list is rejected, as git rev-list with no commit is")
+    func emptyStartsAreRejected() async throws {
+        let dir = try makeRepo()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try commit("root", date: "2020-01-01T00:00:00Z", file: "f.txt", body: "1\n", in: dir)
+        await #expect(throws: Libgit2Error.self) {
+            try await GitClient(workingDirectory: dir).revList(starts: [])
+        }
     }
 
     @Test("an unborn HEAD yields no commits")
