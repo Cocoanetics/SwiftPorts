@@ -17,6 +17,14 @@ struct LFSOracle: Sendable {
         (try? LFSOracle().run(["lfs", "version"], in: FileManager.default.temporaryDirectory).status) == 0
     }()
 
+    /// Whether the exact reference release used by the raw env oracle runs.
+    static let isVersion371Available: Bool = {
+        guard let result = try? LFSOracle().run(
+            ["lfs", "version"], in: FileManager.default.temporaryDirectory), result.status == 0 else { return false }
+        let output = String(decoding: result.out, as: UTF8.self)
+        return output.split(whereSeparator: { $0.isWhitespace }).first == "git-lfs/3.7.1"
+    }()
+
     /// `git <args>` in `dir`, with `input` on stdin: its stdout bytes,
     /// stderr text and exit status.
     @discardableResult

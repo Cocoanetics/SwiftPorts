@@ -194,18 +194,23 @@ enum LFSEndpointDerivation {
     }
 
     private static func slashClean(_ path: String, separator: Character) -> String {
+        let rooted = path.hasPrefix(String(separator))
         var stack: [String] = []
         for part in path.split(separator: separator, omittingEmptySubsequences: true) {
             if part == "." { continue }
             if part == ".." {
-                if !stack.isEmpty { stack.removeLast() }
+                if let last = stack.last, last != ".." {
+                    stack.removeLast()
+                } else if !rooted {
+                    stack.append("..")
+                }
                 continue
             }
             stack.append(String(part))
         }
         let joined = stack.joined(separator: String(separator))
-        if path.hasPrefix(String(separator)) { return String(separator) + joined }
-        return joined.isEmpty ? String(separator) : joined
+        if rooted { return String(separator) + joined }
+        return joined.isEmpty ? "." : joined
     }
 
     private static func isASCIILetter(_ character: Character) -> Bool {
