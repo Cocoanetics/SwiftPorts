@@ -29,7 +29,9 @@ public struct LsFilesOptions: Sendable {
                                    storage: try await client.configGet("lfs.storage"))
             var seen = Set<[UInt8]>()
             var items: [LsFilesObject] = []
-            if refs.isEmpty && !all && !deleted {
+            // No positional arguments: upstream scans the index before --all,
+            // --deleted, or the HEAD tree. An explicit ref skips the index.
+            if refs.isEmpty {
                 do {
                     // The shared scanner also returns HEAD's tree. Keep just
                     // the changed destinations for this upstream ScanIndex pass.
@@ -52,11 +54,19 @@ public struct LsFilesOptions: Sendable {
                 } else if refs.isEmpty, try await !client.canResolveRef("HEAD") {
                     pointers = [] // The unborn HEAD's empty tree.
                 } else {
-                    pointers = try await scanner.scanTree(refs.first ?? "HEAD")
+                    let ref = refs.first ?? "HEAD"
+                    // Classify here. A later missing blob also says "not found",
+                    // and that must stay the scan error rather than a fake ref.
+                    guard try await client.canResolveRef(ref) else {
+                        throw LFSFailure(Self.unresolvedTree(ref))
+                    }
+                    pointers = try await scanner.scanTree(ref)
                 }
                 try await render(pointers, repo: repo, store: store,
                                  deduplicate: !all && refs.count < 2,
                                  seen: &seen, items: &items, output: &result.stdout)
+            } catch let failure as LFSFailure {
+                throw failure
             } catch {
                 let kind = all ? "history" : "tree"
                 throw LFSFailure("Could not scan for Git LFS \(kind): \(error.localizedDescription)")
@@ -73,6 +83,14 @@ public struct LsFilesOptions: Sendable {
             result.fail(error.localizedDescription)
         }
         return result
+    }
+
+    /// git-lfs wraps `git ls-tree`'s stderr. That text already ends in a newline,
+    /// and `commands.Error` adds another, so the message keeps one trailing newline
+    /// for ``LFSFailure`` to finish. Only a failed rev-parse uses this text.
+    private static func unresolvedTree(_ ref: String) -> String {
+        "Could not scan for Git LFS tree: error in `git ls-tree`: "
+            + "exit status 128 fatal: Not a valid object name \(ref)\n"
     }
 
     /// `tools.CleanPaths`: trim whitespace, then a single trailing separator.
