@@ -153,14 +153,8 @@ public struct GitScanner: Sendable {
         _ oid: String, name: String, sourceName: String = "", status: String = ""
     ) async throws -> WrappedPointer? {
         guard filter.allows(name) else { return nil }
-        guard let size = try await client.blobSize(ofOID: oid),
-              size < Pointer.blobSizeCutoff else { return nil }
-        let data = try await client.catFileBlob(oid)
-        do {
-            return WrappedPointer(pointer: try Pointer.decode(data), oid: oid,
-                                  name: name, sourceName: sourceName, status: status)
-        } catch is PointerError {
-            return nil
-        }
+        guard let pointer = try await PointerScanner(client: client).readPointer(oid) else { return nil }
+        return WrappedPointer(pointer: pointer, oid: oid,
+                              name: name, sourceName: sourceName, status: status)
     }
 }
