@@ -1,5 +1,9 @@
 import Crypto
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+import GitLFSTestSupport
 import HTTPTypes
 import SwiftGit
 import Testing
@@ -17,6 +21,7 @@ struct LFSTransferQueueTests {
     func run(
         config: [(String, String)] = [],
         provider: CredentialProvider? = nil,
+        sessionConfiguration: URLSessionConfiguration = LFSTransferURLProtocol.configuration,
         _ body: (LFSClient, LocalStore, URL) async throws -> Void
     ) async throws {
         defer { LFSTransferURLProtocol.reset() }
@@ -25,7 +30,7 @@ struct LFSTransferQueueTests {
             let made = try await LFSFixture.make(host, "transfer",
                 remotes: [("origin", "https://example.com/repo.git")], config: config)
             let client = await LFSClient(git: made.client, credentials: provider,
-                                         configuration: LFSTransferURLProtocol.configuration)
+                                         configuration: sessionConfiguration)
             try await body(client, LocalStore(gitStorageDirectory: made.directory.appendingPathComponent(".git")),
                            made.directory)
         }
@@ -137,24 +142,30 @@ struct LFSTransferQueueTests {
 
     @Test("PUT streams the file then POSTs verify with the LFS media type")
     func uploadAndVerify() async throws {
-        LFSTransferURLProtocol.install { request in
-            if request.url?.lastPathComponent == "batch" { return .batch(request, operation: "upload", verify: true) }
-            if request.httpMethod == "PUT" {
-                #expect(request.value(forHTTPHeaderField: "Content-Length") == "12")
-                #expect(request.value(forHTTPHeaderField: "Content-Type") == "text/plain; charset=utf-8")
-                #expect(request.httpBody == data)
-            } else {
-                #expect(request.value(forHTTPHeaderField: "Content-Type") == LFSMediaType.json)
-                #expect(request.value(forHTTPHeaderField: "Accept") == LFSMediaType.json)
-                #expect(request.httpBody == Data(#"{"oid":"\#(oid)","size":12}"#.utf8))
+        try await LFSTestServer.withServer { server in
+            try await run(
+                config: [("lfs.url", server.endpoint.absoluteString)],
+                sessionConfiguration: .ephemeral
+            ) { client, store, directory in
+                let file = directory.appendingPathComponent("file")
+                try data.write(to: file)
+                try await queue(client, store, .upload).transfer([
+                    LFSBatchObject(oid: oid, size: 12, path: file.path)
+                ])
             }
-            return LFSTransferReply()
-        }
-        try await run { client, store, directory in
-            let file = directory.appendingPathComponent("file")
-            try data.write(to: file)
-            try await queue(client, store, .upload).transfer([LFSBatchObject(oid: oid, size: 12, path: file.path)])
-            #expect(LFSTransferURLProtocol.requests.map(\.httpMethod) == ["POST", "PUT", "POST"])
+
+            let requests = server.requests()
+            #expect(requests.map(\.method) == ["POST", "PUT", "POST"])
+            let upload = try #require(requests.first { $0.method == "PUT" })
+            #expect(upload.requestHeaders["content-length"] == "12")
+            #expect(upload.requestHeaders["content-type"] == "text/plain; charset=utf-8")
+            #expect(upload.requestBody == data)
+            #expect(server.bytes(for: oid) == data)
+
+            let verify = try #require(requests.last)
+            #expect(verify.requestHeaders["content-type"] == LFSMediaType.json)
+            #expect(verify.requestHeaders["accept"] == LFSMediaType.json)
+            #expect(verify.requestBody == Data(#"{"oid":"\#(oid)","size":12}"#.utf8))
         }
     }
 

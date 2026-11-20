@@ -15,7 +15,19 @@ final class LFSTransferURLProtocol: URLProtocol {
     override static func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        let request = Self.withBody(request)
+        var request = request
+        if request.httpBody == nil, let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count <= 0 { break }
+                data.append(contentsOf: buffer.prefix(count))
+            }
+            request.httpBody = data
+        }
         let handler = Self.state.withLock { value -> Handler? in
             value?.1.append(request)
             return value?.0
@@ -52,30 +64,6 @@ final class LFSTransferURLProtocol: URLProtocol {
     }
 
     override func stopLoading() { loading.withLock { $0?.cancel() } }
-
-    /// `URLSession` moves file uploads onto `httpBodyStream` before the
-    /// protocol sees them on FoundationNetworking. Snapshot those bytes so
-    /// every transfer test can inspect `httpBody` consistently.
-    private static func withBody(_ request: URLRequest) -> URLRequest {
-        var copy = request
-        if let body = copy.httpBody, !body.isEmpty { return copy }
-        copy.httpBody = bodyData(request)
-        return copy
-    }
-
-    private static func bodyData(_ request: URLRequest) -> Data {
-        guard let stream = request.httpBodyStream else { return Data() }
-        stream.open()
-        defer { stream.close() }
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
-            let count = stream.read(&buffer, maxLength: buffer.count)
-            if count <= 0 { break }
-            data.append(contentsOf: buffer.prefix(count))
-        }
-        return data
-    }
 
     static var configuration: URLSessionConfiguration {
         let config = URLSessionConfiguration.ephemeral
