@@ -1,16 +1,6 @@
 import Foundation
 import ShellKit
-#if canImport(Darwin)
-import Darwin.crt_externs
-#elseif canImport(Glibc)
-import Glibc
-#elseif canImport(Musl)
-import Musl
-#elseif os(Android)
-import Android
-#elseif os(Windows)
-import ucrt
-#endif
+import CGitLFSEnvironment
 
 enum LFSEnvironment {
     /// Preserve os.Environ order for inherited names, but take every value from
@@ -19,13 +9,7 @@ enum LFSEnvironment {
         let variables = Shell.current.environment.variables
         var names: [String] = []
         var seen = Set<String>()
-        #if canImport(Darwin)
-        let block = _NSGetEnviron().pointee
-        #elseif os(Windows)
-        let block = __p__environ().pointee
-        #else
-        let block: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>? = environ
-        #endif
+        let block = swiftports_lfs_environ()
         var index = 0
         while let pointer = block?[index] {
             let entry = String(cString: pointer)
