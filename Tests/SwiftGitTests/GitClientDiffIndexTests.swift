@@ -347,6 +347,30 @@ struct GitClientDiffIndexRefreshTests {
         #expect(try runGit(["ls-files", "-s"], in: clientDir) == blobs)
     }
 
+    @Test("a touch newer than the index is refreshed")
+    func laterTouch() async throws {
+        let origin = try makeRepo()
+        let indexFile = origin.appendingPathComponent(".git/index")
+        try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: indexFile.path)
+        let touched = Date(timeIntervalSince1970: 1_600_000_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: touched], ofItemAtPath: origin.appendingPathComponent("a.txt").path)
+        let clientDir = try copyRepo(origin)
+        let oracle = try copyRepo(origin)
+        defer { [origin, clientDir, oracle].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let client = GitClient(workingDirectory: clientDir)
+        let blobs = try runGit(["ls-files", "-s"], in: clientDir)
+        let plain = try await client.diffIndex(ref: "HEAD", cached: false)
+        #expect(try parse(gitDiffIndex(cached: false, ref: "HEAD", in: oracle)) == plain)
+        #expect(plain.contains { $0.destinationPath == "a.txt" && $0.status == "M" && $0.newOID == zeros })
+        let refreshed = try await client.diffIndex(ref: "HEAD", cached: false, refresh: true)
+        #expect(try parse(refreshedDiff(in: oracle)) == refreshed)
+        #expect(refreshed.contains { $0.destinationPath == "a.txt" } == false)
+        #expect(try await client.diffIndex(ref: "HEAD", cached: false) == refreshed)
+        #expect(try parse(gitDiffIndex(cached: false, ref: "HEAD", in: clientDir)) == refreshed)
+        #expect(try runGit(["ls-files", "-s"], in: clientDir) == blobs)
+    }
+
     @Test("a same-size edit stays a zero-id modification when refresh is on")
     func sameSizeEdit() async throws {
         let origin = try makeRepo()

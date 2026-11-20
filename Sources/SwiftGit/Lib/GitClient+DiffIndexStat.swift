@@ -71,12 +71,6 @@ enum DiffIndexStat {
         var refresh: Bool
         var trustFileMode: Bool
         var trustCtime: Bool
-        var stamp: Stamp?
-    }
-
-    private struct Stamp {
-        var seconds: Int32
-        var nanoseconds: UInt32
     }
 
     fileprivate struct WorktreeStat {
@@ -109,8 +103,7 @@ enum DiffIndexStat {
         let rules = Rules(
             refresh: refresh,
             trustFileMode: flag("core.filemode", repo: repo, default: defaultFileMode),
-            trustCtime: flag("core.trustctime", repo: repo, default: true),
-            stamp: stamp(of: index))
+            trustCtime: flag("core.trustctime", repo: repo, default: true))
         var poked: [String: UInt32] = [:]
         var refreshed = false
         do {
@@ -151,8 +144,7 @@ enum DiffIndexStat {
         let rules = Rules(
             refresh: true,
             trustFileMode: flag("core.filemode", repo: repo, default: defaultFileMode),
-            trustCtime: true,
-            stamp: nil)
+            trustCtime: true)
         let count = git_diff_num_deltas(diff)
         for offset in 0..<count {
             guard let pointer = git_diff_get_delta(diff, offset) else { continue }
@@ -200,7 +192,9 @@ enum DiffIndexStat {
         guard let location = worktreePath(repo, path), let file = DiffIndexWorktree.fileStat(location) else { return }
         guard modesMatch(index: entry.mode, work: file.mode, trustFileMode: rules.trustFileMode) else { return }
         guard file.size == UInt64(entry.file_size) else { return }
-        guard !isRacy(file, rules.stamp) else { return }
+        // A file newer than the index is the ordinary `touch` case.
+        // Refresh still rewrites its stat when the raw bytes match, and
+        // the default path still pokes it so the diff keeps the zero id.
         guard statDiffers(entry, file, trustCtime: rules.trustCtime) else { return }
         if rules.refresh {
             guard let oid = rawOID(file, at: location) else { return }
@@ -379,24 +373,6 @@ enum DiffIndexStat {
         }
         if entry.ino != file.ino || entry.uid != file.uid || entry.gid != file.gid { return true }
         return false
-    }
-
-    /// Work-tree mtime at or after the index file's mtime. Both git and
-    /// libgit2 then hash a content match and hide it; poking would not.
-    private static func isRacy(_ file: WorktreeStat, _ stamp: Stamp?) -> Bool {
-        guard let stamp, stamp.seconds != 0 else { return false }
-        let mtime = Int32(truncatingIfNeeded: file.mtimeSeconds)
-        if stamp.seconds < mtime { return true }
-        if stamp.seconds > mtime { return false }
-        return stamp.nanoseconds <= file.mtimeNanoseconds
-    }
-
-    private static func stamp(of index: OpaquePointer?) -> Stamp? {
-        guard let path = git_index_path(index) else { return nil }
-        guard let file = DiffIndexWorktree.fileStat(String(cString: path)) else { return nil }
-        return Stamp(
-            seconds: Int32(truncatingIfNeeded: file.mtimeSeconds),
-            nanoseconds: file.mtimeNanoseconds)
     }
 
     private static func rawOID(_ file: WorktreeStat, at path: String) -> git_oid? {
