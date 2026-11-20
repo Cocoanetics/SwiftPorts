@@ -137,8 +137,9 @@ def test():
         "xcrun", "simctl", "create", "ci-iphone", "iPhone 16", runtime, capture=True,
     )
     print(f"Testing iOS SDK {sdk}, runtime {runtime}, simulator {udid}", flush=True)
-    run("xcrun", "simctl", "boot", udid)
-    run("xcrun", "simctl", "bootstatus", udid, "-b", timeout=SIMULATOR_BOOT_TIMEOUT)
+    # bootstatus hangs indefinitely on the affected image even after boot exits
+    # successfully. Xcode can discover a registered device while it finishes booting.
+    run("xcrun", "simctl", "boot", udid, timeout=SIMULATOR_BOOT_TIMEOUT)
 
     # Keep all Xcode products outside the checkout, including destination probes.
     build_root = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "SwiftPorts-iOS"
@@ -157,6 +158,7 @@ def test():
         raise RuntimeError(f"SDK {sdk} simulator {udid} is absent from eligible scheme destinations")
     destination = ("-destination", f"platform=iOS Simulator,id={udid}", "-destination-timeout", "60")
     run(*common, *destination, "build-for-testing", timeout=1500)
+    # This is also the readiness gate for a simulator still finishing its boot.
     # Bound silent launch/stalls to five minutes, while active suites can run
     # longer. Keep a separate overall cap even if tests continually make progress.
     run(*common, *destination, "-parallel-testing-enabled", "NO",
