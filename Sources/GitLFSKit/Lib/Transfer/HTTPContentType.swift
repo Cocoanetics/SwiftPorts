@@ -17,13 +17,9 @@ enum HTTPContentType {
             }
         }
         if text.starts(with: Array("<?xml".utf8)) { return "text/xml; charset=utf-8" }
-        for (pattern, type) in signatures {
-            if matches(bytes, pattern) { return type }
-        }
+        for (pattern, type) in signatures where matches(bytes, pattern) { return type }
         if isMP4(bytes) { return "video/mp4" }
-        for (pattern, type) in trailingSignatures {
-            if matches(bytes, pattern) { return type }
-        }
+        for (pattern, type) in trailingSignatures where matches(bytes, pattern) { return type }
         if text.contains(where: { $0 <= 8 || $0 == 11 || (14...26).contains($0) || (28...31).contains($0) }) {
             return "application/octet-stream"
         }

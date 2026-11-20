@@ -17,6 +17,7 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
     private var written: Int64 = 0
     private var failure: Error?
     private var accepted = false
+    private var uploadFile: URL?
 
     init(stream: LFSTransferStream) { self.stream = stream }
 
@@ -30,7 +31,16 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
                 var request = request
                 let task: URLSessionTask
                 switch body {
-                case .file(let url): task = session.uploadTask(with: request, fromFile: url)
+                case .file(let url):
+                    uploadFile = url
+                    if request.value(forHTTPHeaderField: "Transfer-Encoding") == "chunked" {
+                        // fromFile supplies a length even when the action asks
+                        // for chunked encoding. A fresh disk stream preserves it.
+                        request.httpBodyStream = InputStream(url: url)
+                        task = session.uploadTask(withStreamedRequest: request)
+                    } else {
+                        task = session.uploadTask(with: request, fromFile: url)
+                    }
                 case .data(let data):
                     request.httpBody = data
                     task = session.dataTask(with: request)
@@ -115,6 +125,13 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
         totalBytesSent: Int64, totalBytesExpectedToSend: Int64
     ) {
         stream.progress?(totalBytesSent, bytesSent)
+    }
+
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask,
+        needNewBodyStream completionHandler: @escaping (InputStream?) -> Void
+    ) {
+        completionHandler(uploadFile.flatMap { InputStream(url: $0) })
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {

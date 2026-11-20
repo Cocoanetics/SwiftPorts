@@ -1,0 +1,121 @@
+import Foundation
+import Testing
+@testable import GitLFSKit
+
+extension LFSTransferQueueTests {
+    @Test("a failed verify uses at least three attempts and returns its last error", arguments: [false, true])
+    func verifyExhaustion(authenticated: Bool) async throws {
+        let verifies = TransferTestLock(0)
+        LFSTransferURLProtocol.install { request in
+            if request.url?.lastPathComponent == "batch" {
+                return .batch(request, operation: "upload", verify: true, authenticated: authenticated)
+            }
+            if request.httpMethod == "PUT" { return LFSTransferReply() }
+            let count = verifies.withLock { $0 += 1; return $0 }
+            return LFSTransferReply(status: 500, body: Data(#"{"message":"verify \#(count)"}"#.utf8))
+        }
+        try await run(config: [("lfs.transfer.maxverifies", "1")]) { client, store, directory in
+            let path = directory.appendingPathComponent("upload")
+            try data.write(to: path)
+            await #expect(throws: LFSClientError("verify 3")) {
+                try await queue(client, store, .upload).transfer([LFSBatchObject(oid: oid, size: 12, path: path.path)])
+            }
+            #expect(verifies.withLock { $0 } == 3)
+            #expect(LFSTransferURLProtocol.requests.filter { $0.httpMethod == "PUT" }.count == 1)
+        }
+    }
+
+    @Test("eight retries means nine attempts and capped backoff")
+    func defaultRetries() async throws {
+        LFSTransferURLProtocol.install { request in
+            if request.url?.lastPathComponent == "batch" { return .batch(request) }
+            return LFSTransferReply(status: 503, body: Data(#"{"message":"last failure"}"#.utf8))
+        }
+        try await run { client, store, _ in
+            let clock = LFSTransferClock()
+            await #expect(throws: LFSClientError("last failure")) {
+                try await queue(client, store, clock: clock).transfer([LFSBatchObject(oid: oid, size: 12)])
+            }
+            #expect(clock.delays == [0.25, 0.5, 1, 2, 4, 8, 10, 10])
+            #expect(LFSTransferURLProtocol.requests.count == 18)
+        }
+    }
+
+    @Test("batch HTTP failure is not retried by the queue")
+    func batchFailure() async throws {
+        LFSTransferURLProtocol.install { _ in
+            LFSTransferReply(status: 500, body: Data(#"{"message":"batch failed"}"#.utf8))
+        }
+        try await run { client, store, _ in
+            await #expect(throws: LFSClientError("batch failed")) {
+                try await queue(client, store).transfer([LFSBatchObject(oid: oid, size: 12)])
+            }
+            #expect(LFSTransferURLProtocol.requests.count == 1)
+        }
+    }
+
+    @Test("object errors do not cancel other objects and are not retried")
+    func objectError() async throws {
+        let failedOID = String(repeating: "f", count: 64)
+        LFSTransferURLProtocol.install { request in
+            guard request.url?.lastPathComponent == "batch" else { return LFSTransferReply(body: data) }
+            let failed = #"{"oid":"\#(failedOID)","size":30,"error":{"code":404,"message":"gone"}}"#
+            let valid = #"{"oid":"\#(oid)","size":12,"actions":{"download":{"href":"https://example.com/object"}}}"#
+            return LFSTransferReply(body: Data("{\"objects\":[\(failed),\(valid)]}".utf8))
+        }
+        try await run { client, store, _ in
+            await #expect(throws: LFSClientError("[\(failedOID)] gone: [404] gone")) {
+                try await queue(client, store).transfer([
+                    LFSBatchObject(oid: failedOID, size: 30), LFSBatchObject(oid: oid, size: 12)])
+            }
+            let stored = try Data(contentsOf: store.objectPathname(oid))
+            #expect(stored == data)
+            #expect(LFSTransferURLProtocol.requests.count == 2)
+        }
+    }
+
+    @Test("a transport failure retains downloaded bytes for the next ranged attempt")
+    func interruptedDownload() async throws {
+        let attempts = TransferTestLock(0)
+        let written = LFSTransferSignal()
+        LFSTransferURLProtocol.install { request in
+            if request.url?.lastPathComponent == "batch" { return .batch(request) }
+            let count = attempts.withLock { $0 += 1; return $0 }
+            if count == 1 {
+                return LFSTransferReply(body: data.prefix(4), failure: URLError(.networkConnectionLost),
+                                        afterBody: { await written.wait() })
+            }
+            #expect(request.value(forHTTPHeaderField: "Range") == "bytes=4-11")
+            return LFSTransferReply(status: 206, headers: ["Content-Range": "bytes 4-11/12"], body: data.dropFirst(4))
+        }
+        try await run { client, store, _ in
+            let clock = LFSTransferClock()
+            let transfer = LFSTransferQueue(client: client, store: store, direction: .download,
+                remote: "", refName: "", progress: { _, _, _, read, _ in
+                    if read == 4 { Task { await written.signal() } }
+                }, environment: clock.environment)
+            try await transfer.transfer([LFSBatchObject(oid: oid, size: 12)])
+            #expect(try Data(contentsOf: store.objectPathname(oid)) == data)
+        }
+    }
+
+    @Test("chunked upload omits Content-Length")
+    func chunkedUpload() async throws {
+        LFSTransferURLProtocol.install { request in
+            if request.url?.lastPathComponent == "batch" {
+                return .batch(request, operation: "upload", headers: ["Transfer-Encoding": "chunked"])
+            }
+            #expect(request.value(forHTTPHeaderField: "Content-Length") == nil)
+            // URLSession owns Transfer-Encoding and strips it before URLProtocol.
+            // The unknown-length disk stream must retain the actual file bytes.
+            #expect(request.httpBody == data)
+            return LFSTransferReply()
+        }
+        try await run { client, store, directory in
+            let path = directory.appendingPathComponent("upload")
+            try data.write(to: path)
+            try await queue(client, store, .upload).transfer([LFSBatchObject(oid: oid, size: 12, path: path.path)])
+            #expect(LFSTransferURLProtocol.requests.count == 2)
+        }
+    }
+}
