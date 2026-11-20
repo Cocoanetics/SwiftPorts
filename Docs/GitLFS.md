@@ -105,10 +105,12 @@ in the SDK's `Commands/` directory:
   and touches matching indexed files. Supports `--lockable`, `--not-lockable`,
   `--dry-run`, `--verbose`, `--no-excluded`, `--filename`, and `--no-modify-attrs`.
 - `ls-files`: `LsFilesOptions` selects the index and HEAD, a ref tree, a
-  two-ref range, all refs, or history with deleted files. Supports long OIDs,
-  sizes, names only, debug and JSON output, and explicit include/exclude
-  filters. Checkout markers compare the working file's size; JSON reports
-  downloaded objects independently through `LocalStore`.
+  two-ref range, all refs, or history with deleted files. With no positional
+  arguments the index is scanned before `--all`, `--deleted`, or the HEAD
+  tree; an explicit ref skips the index. Supports long OIDs, sizes, names
+  only, debug and JSON output, and explicit include/exclude filters. Checkout
+  markers compare the working file's size; JSON reports downloaded objects
+  independently through `LocalStore`. Scanning rules are below.
 
 All filesystem paths go through `Shell.authorize`; production code does not
 launch a system Git or git-lfs process. The hooks are scripts for real Git to
@@ -119,6 +121,54 @@ Bare `git lfs` prints upstream's complete usage text, preceded by the port's
 version, and succeeds. Unsupported subcommands receive git-lfs's diagnostic
 and exit status 127. `git lfs --help` uses embedded usage text; it does not
 launch the system Git's man viewer.
+
+## Scanning (`GitScanner`, #205)
+
+`GitScanner` walks one repository through the in-process `GitClient`.
+`FilepathFilter` decides which paths are candidates before a blob is decoded.
+An empty include list allows every path; any matching exclude rejects the
+path. Patterns use git-lfs wildmatch `Contents` mode: matching a directory
+also matches its children, a trailing slash is dropped, and `!` and `#` stay
+literal rather than gitignore syntax. Matching is case-insensitive on Darwin
+and Windows. `lfs.fetchinclude` and `lfs.fetchexclude` are a different
+setting; `ls-files` does not read them.
+
+A blob is a pointer only when it is smaller than `Pointer.blobSizeCutoff`
+(1024 bytes) and `Pointer.decode` accepts it. Larger blobs and malformed
+pointer text are skipped. A decoded size of zero is still returned by the
+scanner and dropped when `ls-files` renders a line.
+
+`scanTree` walks one tree depth-first and keeps every matching path, including
+paths that share a blob. `scanIndex` emits cached diff destinations that
+decode as pointers, then the ref tree for names that diff did not replace.
+Staged deletions stay in that following tree walk. An unborn `HEAD` is an
+empty tree. `scanRefs` walks included commits in rev-list order and drops
+every blob OID reachable from the excluded commits, including a blob whose
+path the filter hid. `scanAll` visits direct tree and blob refs first, then
+one history walk of the remaining commits, and deduplicates by blob OID.
+
+`ls-files` with no positional arguments always scans the index first, then
+`--all` (`scanAll`), `--deleted` (defaulting to `HEAD`), or the `HEAD` tree.
+`--all` wins over `--deleted`. An explicit ref skips the index and scans that
+tree. Two arguments `A B` include `B` and exclude `A`. A single argument
+`A..B` is that tree name, not a range. `--all` with a ref, `--deleted` with
+two refs, and a bare `--all` after `--` fail with status 2. Name
+deduplication is off for `--all` and for a two-ref range, and on otherwise.
+Checkout is whether the worktree file at the repository root, after following
+symlinks, has the pointer's size. `LocalStore` answers only the debug and
+JSON download field. An empty JSON result is `{"files": null}`. Paths stay
+repository-relative from a subdirectory cwd. A bare repository has no
+worktree, so checkout is false.
+
+`GitCommandLFSLsFilesOracleTests` compares system `git lfs ls-files` and
+`GitCommand` on one repository, the same working directory, and the same
+isolated `HOME`, `XDG_CONFIG_HOME`, `GIT_CONFIG_GLOBAL`, and
+`GIT_CONFIG_SYSTEM`. `LFSSamePathOracle` snapshots and restores local config,
+the index, and worktree metadata between the two reads. Stdout, stderr, and
+status match exactly: nothing is sorted, rewritten, or reformatted. The only
+normalization replaces a `git-lfs/<digits…>` line and a `git version` line,
+and only when a command prints one. The suite skips when `git lfs version`
+fails. It does not call `LFSCommandFixture.compare`.
 
 ## Environment report (`git lfs env`, #207)
 
@@ -287,3 +337,7 @@ the assertion through #187's batch client/server remains open for that work.
   A `URLProtocol` recorder asserts the request's overridden URL and headers.
 - `LFSEndpointOracleTests` (macOS / Linux) — `Endpoint=` / `Endpoint (<remote>)=`
   from `git lfs env` against `environmentEndpoints()`, skipped without `git-lfs`.
+- `GitCommandLFSLsFilesOracleTests` (macOS / Linux) — `ls-files` stdout, stderr,
+  and status against system git-lfs on one repository
+  (`Support/LFSSamePathOracle.swift`). Only a `git-lfs/` version line and a
+  `git version` line are normalized. Skipped when `git lfs version` fails.
