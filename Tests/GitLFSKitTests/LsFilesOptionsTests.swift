@@ -85,7 +85,7 @@ struct LsFilesOptionsTests {
         }
     }
 
-    @Test func historyModesIgnoreTheIndex() async throws {
+    @Test func noArgumentsScanTheIndexBeforeHistory() async throws {
         try await withRepo { dir, client in
             try write(Self.first, in: dir)
             try await commit(client)
@@ -94,19 +94,26 @@ struct LsFilesOptionsTests {
             var options = LsFilesOptions()
             options.json = true
             options.all = true
-            #expect(try files(await options.lsFiles([], client: client)).map(\.oid) == [Self.first.oid])
+            // --all does not dedupe names, so the staged pointer precedes history.
+            #expect(try files(await options.lsFiles([], client: client)).map(\.oid)
+                    == [Self.second.oid, Self.first.oid])
             options.all = false
             options.deleted = true
-            #expect(try files(await options.lsFiles([], client: client)).map(\.oid) == [Self.first.oid])
+            // --deleted dedupes by name, and the index is visited first.
+            #expect(try files(await options.lsFiles([], client: client)).map(\.oid) == [Self.second.oid])
 
             try Data("invalid index".utf8).write(to: dir.appendingPathComponent(".git/index"))
             options.all = true
-            #expect(try files(await options.lsFiles([], client: client)).map(\.oid) == [Self.first.oid])
-            options.all = false
-            #expect(try files(await options.lsFiles([], client: client)).map(\.oid) == [Self.first.oid])
             options.deleted = false
-            let result = try await options.lsFiles([], client: client)
-            #expect(result.status == 2 && result.stderr.hasPrefix("Could not scan for Git LFS index: "))
+            let all = try await options.lsFiles([], client: client)
+            #expect(all.status == 2 && all.stderr.hasPrefix("Could not scan for Git LFS index: "))
+            options.deleted = true
+            let deleted = try await options.lsFiles([], client: client)
+            #expect(deleted.status == 2 && deleted.stderr.hasPrefix("Could not scan for Git LFS index: "))
+            options.all = false
+            options.deleted = false
+            let current = try await options.lsFiles([], client: client)
+            #expect(current.status == 2 && current.stderr.hasPrefix("Could not scan for Git LFS index: "))
         }
     }
 
@@ -178,7 +185,9 @@ struct LsFilesOptionsTests {
             #expect(range.status == 2 && range.stderr == "Cannot use --deleted with reference range\n")
             options.deleted = false
             let missing = try await options.lsFiles(["missing-ref"], client: client)
-            #expect(missing.status == 2 && missing.stderr.hasPrefix("Could not scan for Git LFS tree: "))
+            #expect(missing.status == 2)
+            #expect(missing.stderr == "Could not scan for Git LFS tree: error in `git ls-tree`: "
+                    + "exit status 128 fatal: Not a valid object name missing-ref\n\n")
             let literalAll = try await options.lsFiles(["--all"], client: client)
             #expect(literalAll.status == 2 && literalAll.stderr == "Did you mean `git lfs ls-files --all --` ?\n")
         }

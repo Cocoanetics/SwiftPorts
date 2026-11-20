@@ -29,7 +29,9 @@ public struct LsFilesOptions: Sendable {
                                    storage: try await client.configGet("lfs.storage"))
             var seen = Set<[UInt8]>()
             var items: [LsFilesObject] = []
-            if refs.isEmpty && !all && !deleted {
+            // No positional arguments: upstream scans the index before --all,
+            // --deleted, or the HEAD tree. An explicit ref skips the index.
+            if refs.isEmpty {
                 do {
                     // The shared scanner also returns HEAD's tree. Keep just
                     // the changed destinations for this upstream ScanIndex pass.
@@ -59,7 +61,8 @@ public struct LsFilesOptions: Sendable {
                                  seen: &seen, items: &items, output: &result.stdout)
             } catch {
                 let kind = all ? "history" : "tree"
-                throw LFSFailure("Could not scan for Git LFS \(kind): \(error.localizedDescription)")
+                let ref = (!all && !deleted && refs.count < 2) ? (refs.first ?? "HEAD") : nil
+                throw LFSFailure(Self.scanFailure(kind, error: error, ref: ref))
             }
             if json {
                 let files = items.isEmpty ? "null" : "[\n" + items.map(\.json).joined(separator: ",\n") + "\n ]"
@@ -73,6 +76,25 @@ public struct LsFilesOptions: Sendable {
             result.fail(error.localizedDescription)
         }
         return result
+    }
+
+    /// git-lfs wraps `git ls-tree`'s stderr. That text already ends in a newline,
+    /// and `commands.Error` adds another, so the message keeps one trailing newline
+    /// for ``LFSFailure`` to finish.
+    private static func scanFailure(_ kind: String, error: Error, ref: String?) -> String {
+        let detail: String
+        if let ref, isUnresolvedRevision(error) {
+            detail = "error in `git ls-tree`: exit status 128 fatal: Not a valid object name \(ref)\n"
+        } else {
+            detail = error.localizedDescription
+        }
+        return "Could not scan for Git LFS \(kind): \(detail)"
+    }
+
+    private static func isUnresolvedRevision(_ error: Error) -> Bool {
+        let text = error.localizedDescription.lowercased()
+        return text.contains("not found") || text.contains("revspec") || text.contains("failed to parse")
+            || text.contains("invalid pattern") || text.contains("not valid")
     }
 
     /// `tools.CleanPaths`: trim whitespace, then a single trailing separator.
