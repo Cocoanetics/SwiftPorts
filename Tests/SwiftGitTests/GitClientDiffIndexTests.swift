@@ -310,7 +310,7 @@ struct GitClientDiffIndexTests {
 
 @Suite("GitClient.diffIndex refresh")
 struct GitClientDiffIndexRefreshTests {
-    private let zeros = String(repeating: "0", count: 40)
+    let zeros = String(repeating: "0", count: 40)
     private let past = Date(timeIntervalSince1970: 1_577_833_200)
 
     @Test("a stat-only touch is reported until refresh, then it stays gone")
@@ -562,7 +562,7 @@ struct GitClientDiffIndexRefreshTests {
     }
 
     /// Skip `maintenance.lock`. Git unlinks it while `copyItem` walks the tree.
-    private func copyRepo(_ source: URL, to dest: URL? = nil) throws -> URL {
+    func copyRepo(_ source: URL, to dest: URL? = nil) throws -> URL {
         let dest = dest ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("DiffIndexRefresh-\(UUID().uuidString)")
         let fm = FileManager.default
@@ -578,7 +578,7 @@ struct GitClientDiffIndexRefreshTests {
         return dest
     }
 
-    private func refreshedDiff(ref: String = "HEAD", in dir: URL) throws -> String {
+    func refreshedDiff(ref: String = "HEAD", in dir: URL) throws -> String {
         _ = try runGit(["update-index", "--refresh"], in: dir, allowsFailure: true)
         return try gitDiffIndex(cached: false, ref: ref, in: dir)
     }
@@ -596,7 +596,7 @@ struct GitClientDiffIndexRefreshTests {
             })
     }
 
-    private func makeRepo() throws -> URL {
+    func makeRepo() throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("DiffIndexRefresh-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -624,7 +624,7 @@ struct GitClientDiffIndexRefreshTests {
         return dir
     }
 
-    private func gitDiffIndex(cached: Bool, ref: String, in dir: URL) throws -> String {
+    func gitDiffIndex(cached: Bool, ref: String, in dir: URL) throws -> String {
         var args = ["diff-index", "-M", "--abbrev=40"]
         if cached { args.append("--cached") }
         args.append(ref)
@@ -636,7 +636,7 @@ struct GitClientDiffIndexRefreshTests {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func parse(_ output: String) throws -> [DiffIndexEntry] {
+    func parse(_ output: String) throws -> [DiffIndexEntry] {
         try output.split(separator: "\n", omittingEmptySubsequences: true).map { line in
             let raw = line.hasPrefix(":") ? line.dropFirst() : line[...]
             let fields = raw.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
@@ -659,7 +659,7 @@ struct GitClientDiffIndexRefreshTests {
     }
 
     @discardableResult
-    private func runGit(
+    func runGit(
         _ args: [String], in dir: URL, input: Data? = nil, allowsFailure: Bool = false
     ) throws -> String {
         let process = Process()

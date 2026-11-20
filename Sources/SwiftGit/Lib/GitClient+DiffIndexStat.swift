@@ -19,7 +19,9 @@ import WinSDK
 /// matches. `git diff-index` does not hash it, so the file stays, with a
 /// zero new id. Poking the in-memory index size onto a different non-zero
 /// value forces the size-mismatch path, which reports the file and does
-/// not hash. The poke is undone before anything is written.
+/// not hash. A racily-clean smudge stores `file_size` 0 for a non-empty
+/// file and is the same case: libgit2 would hash it. The poke is undone
+/// before anything is written.
 ///
 /// `refresh` instead rewrites stat metadata when the raw work-tree bytes
 /// match the stage-zero blob, then writes the index once. `GIT_DIFF_UPDATE_INDEX`
@@ -191,11 +193,14 @@ enum DiffIndexStat {
         guard let entry = git_index_get_bypath(index, path, 0)?.pointee else { return }
         guard let location = worktreePath(repo, path), let file = DiffIndexWorktree.fileStat(location) else { return }
         guard modesMatch(index: entry.mode, work: file.mode, trustFileMode: rules.trustFileMode) else { return }
-        guard file.size == UInt64(entry.file_size) else { return }
-        // A file newer than the index is the ordinary `touch` case.
-        // Refresh still rewrites its stat when the raw bytes match, and
-        // the default path still pokes it so the diff keeps the zero id.
-        guard statDiffers(entry, file, trustCtime: rules.trustCtime) else { return }
+        // Size 0 on a non-empty file is the racily-clean smudge, not a
+        // content change. A newer mtime is ordinary stat dirt and is not
+        // special: both are refreshed or poked below.
+        let smudged = entry.file_size == 0 && file.size != 0
+        if !smudged {
+            guard file.size == UInt64(entry.file_size) else { return }
+            guard statDiffers(entry, file, trustCtime: rules.trustCtime) else { return }
+        }
         if rules.refresh {
             guard let oid = rawOID(file, at: location) else { return }
             if oidEqual(oid, entry.id) {
@@ -204,7 +209,7 @@ enum DiffIndexStat {
                 return
             }
         }
-        poke(index, path: path, poked: &poked)
+        poke(index, path: path, workSize: file.size, poked: &poked)
     }
 
     private static func correctOne(
@@ -348,11 +353,14 @@ enum DiffIndexStat {
     }
 
     /// Remember the real size and store a different non-zero one so the
-    /// work-tree comparison does not hash the file.
-    private static func poke(_ index: OpaquePointer?, path: String, poked: inout [String: UInt32]) {
+    /// work-tree comparison does not hash the file. The stand-in must
+    /// not equal the work tree, or a smudged one-byte file looks clean.
+    private static func poke(
+        _ index: OpaquePointer?, path: String, workSize: UInt64, poked: inout [String: UInt32]
+    ) {
         guard poked[path] == nil, let entry = git_index_get_bypath(index, path, 0) else { return }
         let original = entry.pointee.file_size
-        UnsafeMutablePointer(mutating: entry).pointee.file_size = original == 1 ? 2 : 1
+        UnsafeMutablePointer(mutating: entry).pointee.file_size = workSize == 1 ? 2 : 1
         poked[path] = original
     }
 
