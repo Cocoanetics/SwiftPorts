@@ -2,12 +2,29 @@ import Foundation
 
 /// git-lfs 3.7.1 `tools/humanize.FormatBytes` (decimal units).
 enum ByteFormat {
+    private static let suffixes = ["B", "KB", "MB", "GB", "TB", "PB"]
+
     static func formatBytes(_ size: UInt64) -> String {
         let exponent = size == 0 ? 0 : floor(log(Double(size)) / log(1000))
-        let unit = pow(1000, exponent)
-        let suffix = ["B", "KB", "MB", "GB", "TB", "PB"][Int(exponent)]
+        return formatBytesUnit(size, unit: pow(1000, exponent)) + " " + suffixes[Int(exponent)]
+    }
+
+    /// `humanize.FormatByteRate(s, time.Second)`.
+    static func formatByteRate(_ bytesPerSecond: UInt64) -> String {
+        let rate = Double(bytesPerSecond)
+        var exponent = 0.0
+        if rate != 0 {
+            exponent = floor(log(rate) / log(1000))
+            if exponent <= 0 { exponent = 0 }
+        }
+        let rounded = UInt64(min(ceil(rate), Double(UInt64.max)))
+        return formatBytesUnit(rounded, unit: pow(1000, exponent)) + " " + suffixes[Int(exponent)] + "/s"
+    }
+
+    /// `humanize.FormatBytesUnit`: the quantity in `unit`, to the nearest tenth.
+    private static func formatBytesUnit(_ size: UInt64, unit: Double) -> String {
         let rounded = size < 10 ? Double(size) : floor(Double(size) / unit * 10 + 0.5) / 10
         let format = rounded < 10 && unit > 1 ? "%.1f" : "%.0f"
-        return String(format: format, locale: Locale(identifier: "en_US_POSIX"), rounded) + " " + suffix
+        return String(format: format, locale: Locale(identifier: "en_US_POSIX"), rounded)
     }
 }
