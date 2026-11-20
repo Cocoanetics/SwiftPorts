@@ -25,6 +25,34 @@ extension LFSTransferQueueTests {
         }
     }
 
+    @Test("a final verify 429 retries the object after Retry-After", arguments: [false, true])
+    func verifyRetryAfter(authenticated: Bool) async throws {
+        let verifies = TransferTestLock(0)
+        LFSTransferURLProtocol.install { request in
+            if request.url?.lastPathComponent == "batch" {
+                return .batch(request, operation: "upload", verify: true, authenticated: authenticated)
+            }
+            if request.httpMethod == "PUT" { return LFSTransferReply() }
+            let count = verifies.withLock { $0 += 1; return $0 }
+            if count <= 3 {
+                return LFSTransferReply(
+                    status: 429, headers: ["Retry-After": "7"],
+                    body: Data(#"{"message":"rate limited"}"#.utf8))
+            }
+            return LFSTransferReply()
+        }
+        try await run { client, store, directory in
+            let path = directory.appendingPathComponent("upload")
+            try data.write(to: path)
+            let clock = LFSTransferClock()
+            try await queue(client, store, .upload, clock: clock).transfer([
+                LFSBatchObject(oid: oid, size: 12, path: path.path)])
+            #expect(clock.delays == [7])
+            #expect(verifies.withLock { $0 } == 4)
+            #expect(LFSTransferURLProtocol.requests.filter { $0.httpMethod == "PUT" }.count == 2)
+        }
+    }
+
     @Test("eight retries means nine attempts and capped backoff")
     func defaultRetries() async throws {
         LFSTransferURLProtocol.install { request in

@@ -11,15 +11,24 @@ import FoundationNetworking
 public struct LFSClientError: Error, Equatable, CustomStringConvertible, Sendable {
     public let description: String
     let retryInTransferQueue: Bool
+    let transferResult: LFSTransferHTTPResult?
 
     public init(_ description: String) {
         self.description = description
         retryInTransferQueue = true
+        transferResult = nil
     }
 
     init(_ description: String, retryInTransferQueue: Bool) {
         self.description = description
         self.retryInTransferQueue = retryInTransferQueue
+        transferResult = nil
+    }
+
+    init(_ description: String, transferResult: LFSTransferHTTPResult) {
+        self.description = description
+        retryInTransferQueue = true
+        self.transferResult = transferResult
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
@@ -202,6 +211,8 @@ public final class LFSClient: @unchecked Sendable {
             &request, access: access, endpoint: endpoint, operation: operation, remote: remote)
         request.headerFields[.userAgent] = "git-lfs"
         let (data, http) = try await execute(request, body: body)
+        let result = LFSTransferHTTPResult(
+            response: http, body: data, accepted: (200..<300).contains(http.statusCode))
         if (200..<300).contains(http.statusCode) {
             if case .helper(let filled) = applied { context.approve(filled) }
             return (data, http)
@@ -210,9 +221,11 @@ public final class LFSClient: @unchecked Sendable {
             return (data, http)
         }
         let message = Self.httpMessage(status: http.statusCode, body: data, url: request.url)
-        guard http.statusCode == 401 else { throw LFSClientError(message) }
+        guard http.statusCode == 401 else {
+            throw LFSClientError(message, transferResult: result)
+        }
         if applied.stopsRetry, request.headerFields[.authorization] != nil {
-            throw LFSClientError("Authentication required: \(message)")
+            throw LFSClientError("Authentication required: \(message)", transferResult: result)
         }
         if case .helper(let filled) = applied {
             request.headerFields[.authorization] = nil

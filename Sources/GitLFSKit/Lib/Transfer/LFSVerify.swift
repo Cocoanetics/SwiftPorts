@@ -28,7 +28,7 @@ extension LFSTransferQueue {
                     let result = try await client.transfer(
                         request, body: .data(body), operation: "upload", remote: remote, authenticated: true)
                     if result.status >= 400 {
-                        throw LFSClientError(LFSClient.httpMessage(status: result.status, body: result.body, url: url))
+                        throw verifyError(result, url: url)
                     }
                 } else {
                     try await client.send(request, body: .data(body), operation: "upload", remote: remote)
@@ -36,8 +36,19 @@ extension LFSTransferQueue {
                 return
             } catch {
                 try Task.checkCancellation()
-                if attempt == settings.maxVerifies { throw error }
+                if attempt == settings.maxVerifies {
+                    if let error = error as? LFSClientError, let result = error.transferResult {
+                        throw verifyError(result, url: url)
+                    }
+                    throw error
+                }
             }
         }
+    }
+
+    private func verifyError(_ result: LFSTransferHTTPResult, url: URL) -> LFSTransferError {
+        var error = LFSTransferError(result, url: url, now: environment.now())
+        error.retry = result.status == 429
+        return error
     }
 }
