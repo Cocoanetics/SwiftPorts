@@ -2,6 +2,7 @@ import Foundation
 import ArgumentParser
 import GitCommand
 import GitKitSSH
+import GitLFSKit
 import ShellKit
 
 @main
@@ -21,6 +22,7 @@ struct Entry {
 
     static func main() async {
         do {
+            try GitLFSKit.installFilter()
             if ProcessInfo.processInfo.environment[inProcessSSHEnvVar] == "1" {
                 try GitKitSSH.install()
             }

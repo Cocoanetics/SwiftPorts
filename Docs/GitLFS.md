@@ -80,6 +80,29 @@ where it is. Every path is authorized through `Shell.authorize`.
 `SwiftGit.GitClient.commonDir()` was added for this; it mirrors
 `git rev-parse --git-common-dir` and nothing more.
 
+## Filter registration (#230, part 1 of #192)
+
+Hosts opt in once, before SwiftGit operations, with
+`try GitLFSKit.installFilter()`; `try GitLFSKit.uninstallFilter()` removes
+the process-wide `lfs` registration. The `git` executable installs it before
+dispatch. Constructing a client or running `git lfs install` does not register
+it: that command continues to write filter configuration and hooks.
+
+The default attribute is `filter=lfs`. A configured, nonempty
+`filter.lfs.process` enables both directions; otherwise `filter.lfs.clean`
+and `filter.lfs.smudge` enable their respective directions. Streams currently
+pass bytes through synchronously. Streaming clean and queue-backed smudge
+are #231; parity coverage is #232. #192 remains incomplete until those land.
+
+Callback filesystem/network work uses ForgeKit's internal `BlockingBridge`.
+SwiftGit supplies a revocable operation context with the calling shell,
+credentials, environment configuration and include authorization. Its metadata
+client opens separate handles at the filter source's git directory, including
+clone destinations and linked worktrees, without taking another isolation turn.
+It permits config, metadata, raw-blob and ref access, and rejects git mutations
+and access after the outer operation returns. Borrowed input and downstream
+filter output never cross the async bridge.
+
 ## Commands (`git lfs`, #189)
 
 `GitCommand` depends on `GitLFSKit` and registers `lfs`. Its ArgumentParser

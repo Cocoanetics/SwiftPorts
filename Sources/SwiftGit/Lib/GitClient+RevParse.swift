@@ -46,7 +46,7 @@ extension GitClient {
         // We rely on `withRepository` succeeding plus a non-nil
         // workdir to distinguish bare from non-bare.
         do {
-            return try await withFilterMetadataRepository { try $0.toplevel() != nil }
+            return try await withFilterMetadataRepository { try $0.isInsideWorkTree() }
         } catch {
             return false
         }
