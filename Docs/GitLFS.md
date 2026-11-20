@@ -104,6 +104,11 @@ in the SDK's `Commands/` directory:
   preserves track's line endings and untrack's LF rewrite, escapes patterns,
   and touches matching indexed files. Supports `--lockable`, `--not-lockable`,
   `--dry-run`, `--verbose`, `--no-excluded`, `--filename`, and `--no-modify-attrs`.
+- `ls-files`: `LsFilesOptions` selects the index and HEAD, a ref tree, a
+  two-ref range, all refs, or history with deleted files. Supports long OIDs,
+  sizes, names only, debug and JSON output, and explicit include/exclude
+  filters. Checkout markers compare the working file's size; JSON reports
+  downloaded objects independently through `LocalStore`.
 
 All filesystem paths go through `Shell.authorize`; production code does not
 launch a system Git or git-lfs process. The hooks are scripts for real Git to

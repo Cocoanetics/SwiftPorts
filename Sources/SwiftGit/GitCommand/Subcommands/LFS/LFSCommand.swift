@@ -7,7 +7,7 @@ struct LFSCommand: AsyncParsableCommand {
         commandName: "lfs",
         abstract: "Git Large File Storage.",
         subcommands: [LFSVersionCommand.self, LFSPointerCommand.self, LFSInstall.self,
-                      LFSUninstall.self, LFSTrack.self, LFSUntrack.self],
+                      LFSUninstall.self, LFSTrack.self, LFSUntrack.self, LFSLsFiles.self],
         helpNames: [])
 
     @Flag(name: [.customShort("v"), .long]) var version = false
