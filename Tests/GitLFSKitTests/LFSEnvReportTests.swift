@@ -8,6 +8,15 @@ import ShellKit
 struct LFSEnvReportTests {
     let host = IsolatedLFSHost()
 
+    /// Go's filepath.Join uses the host separator, including for relative paths.
+    private func nativePath(_ path: String) -> String {
+        #if os(Windows)
+        path.replacingOccurrences(of: "/", with: "\\")
+        #else
+        path
+        #endif
+    }
+
     @Test func integers() {
         for text in [" 8", "8 ", "8k", "1.0", "0x10", "", "--1", "١", "999999999999999999999"] {
             #expect(LFSConfiguration.integer(text, fallback: 7) == 7, "\(text)")
@@ -23,16 +32,18 @@ struct LFSEnvReportTests {
             let made = try await LFSFixture.make(host, "env-defaults")
             let result = await LFSEnv.run(client: made.client)
             let root = LFSRepositoryPaths.canonical(made.directory.path)
+            let git = nativePath(root + "/.git")
+            let storage = nativePath(git + "/lfs")
             let expected = """
             \(LFSVersion.string)
             \(PortVersion.gitLine)
 
             LocalWorkingDir=\(root)
-            LocalGitDir=\(root)/.git
-            LocalGitStorageDir=\(root)/.git
-            LocalMediaDir=\(root)/.git/lfs/objects
+            LocalGitDir=\(git)
+            LocalGitStorageDir=\(git)
+            LocalMediaDir=\(nativePath(storage + "/objects"))
             LocalReferenceDirs=
-            TempDir=\(root)/.git/lfs/tmp
+            TempDir=\(nativePath(storage + "/tmp"))
             ConcurrentTransfers=8
             TusTransfers=false
             BasicTransfersOnly=false
@@ -45,7 +56,7 @@ struct LFSEnvReportTests {
             PruneVerifyRemoteAlways=false
             PruneVerifyUnreachableAlways=false
             PruneRemoteName=origin
-            LfsStorageDir=\(root)/.git/lfs
+            LfsStorageDir=\(storage)
             AccessDownload=none
             AccessUpload=none
             DownloadTransfers=basic,lfs-standalone-file,ssh
@@ -130,12 +141,12 @@ struct LFSEnvReportTests {
         try await host.run {
             let made = try await LFSFixture.make(host, "env-paths", commit: true)
             let common = LFSRepositoryPaths.canonical(made.directory.appendingPathComponent(".git").path)
-            for storage in ["../store", host.root.appendingPathComponent("absolute").path] {
+            let absolute = host.root.appendingPathComponent("absolute").path
+            let relative = nativePath(LFSRepositoryPaths.canonical(made.directory.path) + "/store")
+            for (storage, expected) in [("../store", relative), (absolute, absolute)] {
                 try await made.client.configSet("lfs.storage", storage)
                 let config = await LFSConfiguration.load(made.client)
                 let paths = await LFSRepositoryPaths.load(made.client, configuration: config)
-                let expected = storage.hasPrefix("/") ? storage
-                    : LFSRepositoryPaths.canonical(made.directory.path) + "/store"
                 #expect(paths.storage == expected)
                 #expect(paths.git == common && paths.common == common)
             }
@@ -145,13 +156,18 @@ struct LFSEnvReportTests {
             let config = await LFSConfiguration.load(worktree)
             let paths = await LFSRepositoryPaths.load(worktree, configuration: config)
             #expect(paths.working == LFSRepositoryPaths.canonical(linked.path))
-            #expect(paths.git == common + "/worktrees/linked")
+            #expect(paths.git == nativePath(common + "/worktrees/linked"))
             #expect(paths.common == common)
+            let insideGit = GitClient(workingDirectory: made.directory.appendingPathComponent(".git/objects"))
+            let insidePaths = await LFSRepositoryPaths.load(
+                insideGit, configuration: await LFSConfiguration.load(insideGit))
+            #expect(insidePaths.working.isEmpty)
+            #expect(insidePaths.git == common)
             let outside = await LFSEnv.run(client: GitClient(workingDirectory: host.home))
             #expect(outside.status == 0)
             #expect(outside.stdout.contains(
-                "LocalWorkingDir=\nLocalGitDir=\nLocalGitStorageDir=\nLocalMediaDir=lfs/objects\n"))
-            #expect(outside.stdout.contains("TempDir=lfs/tmp\n"))
+                "LocalWorkingDir=\nLocalGitDir=\nLocalGitStorageDir=\nLocalMediaDir=\(nativePath("lfs/objects"))\n"))
+            #expect(outside.stdout.contains("TempDir=\(nativePath("lfs/tmp"))\n"))
         }
     }
 
@@ -168,9 +184,10 @@ struct LFSEnvReportTests {
             try Data("\n# ignored\n\(objectPath.goQuoted)\n/missing/objects\n".utf8).write(to: alternates)
             let config = await LFSConfiguration.load(made.client)
             let paths = await LFSRepositoryPaths.load(made.client, configuration: config)
-            #expect(paths.references == [media.path, media.path])
+            let referencePath = nativePath(media.path)
+            #expect(paths.references == [referencePath, referencePath])
             let report = await LFSEnv.run(client: made.client)
-            #expect(report.stdout.contains("LocalReferenceDirs=\(media.path), \(media.path)\n"))
+            #expect(report.stdout.contains("LocalReferenceDirs=\(referencePath), \(referencePath)\n"))
             #expect(report.stdout.contains("GIT_ALTERNATE_OBJECT_DIRECTORIES=\(objectPath)\n"))
             Shell.current.environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = nil
             let bare = GitClient(workingDirectory: host.root.appendingPathComponent("bare"))
@@ -179,7 +196,7 @@ struct LFSEnvReportTests {
             #expect(barePaths.working.isEmpty)
             #expect(barePaths.git == LFSRepositoryPaths.canonical(bare.workingDirectory.path))
             #expect(barePaths.common == barePaths.git)
-            #expect(barePaths.storage == barePaths.git + "/lfs")
+            #expect(barePaths.storage == nativePath(barePaths.git + "/lfs"))
         }
     }
 

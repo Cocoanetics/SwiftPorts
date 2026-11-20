@@ -25,7 +25,7 @@ struct LFSRepositoryPaths {
         let git = canonical(try? await client.gitDir())
         let common = canonical(try? await client.commonDir())
         let cwd = canonical(client.workingDirectory.path)
-        let inGitDirectory = !git.isEmpty && (cwd == git || cwd.hasPrefix(git + "/"))
+        let inGitDirectory = !git.isEmpty && (cwd == git || cwd.hasPrefix(git + pathSeparator))
         let working = inGitDirectory ? "" : canonical(try? await client.toplevel())
         let storage: String
         let media: String
@@ -61,7 +61,19 @@ struct LFSRepositoryPaths {
     }
 
     private static func clean(_ path: String) -> String {
+        #if os(Windows)
+        return LFSEndpointDerivation.clean(path.replacingOccurrences(of: "/", with: "\\"))
+        #else
         LFSEndpointDerivation.clean(path)
+        #endif
+    }
+
+    private static var pathSeparator: String {
+        #if os(Windows)
+        "\\"
+        #else
+        "/"
+        #endif
     }
 
     private static func referenceDirectories(common: String, cwd: URL) async -> [String] {
