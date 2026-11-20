@@ -41,6 +41,9 @@ extension GitClient {
     /// at git's default 50% similarity, with copies left off. An unborn
     /// `HEAD` is the empty tree, so every indexed path is an addition.
     /// A side git has not hashed (a dirty work-tree file) is 40 zeros.
+    /// A change between a regular file, a symlink, and a gitlink is one
+    /// `T` record. Without `--cached`, an unmerged path is that work-tree
+    /// comparison (`M`, `A`, `D`, or `T`); `U` is only the cached form.
     public func diffIndex(ref: String = "HEAD", cached: Bool) async throws -> [DiffIndexEntry] {
         try await withRepository { repository in
             guard let repo = Self.handle(of: repository) else {
@@ -52,11 +55,16 @@ extension GitClient {
             defer { git_tree_free(tree) }
             var opts = git_diff_options()
             try Self.check(git_diff_options_init(&opts, UInt32(GIT_DIFF_OPTIONS_VERSION)))
+            // libgit2 splits a file/symlink/gitlink change into D + A
+            // unless this is set. `git diff-index` prints one T.
+            opts.flags |= UInt32(GIT_DIFF_INCLUDE_TYPECHANGE.rawValue)
             var diff: OpaquePointer?
             if cached {
                 try Self.check(git_diff_tree_to_index(&diff, repo, tree, nil, &opts))
+                try Self.normalizeCachedDiffIndex(diff, tree: tree)
             } else {
                 try Self.check(git_diff_tree_to_workdir_with_index(&diff, repo, tree, &opts))
+                try Self.normalizeUncachedDiffIndex(diff, tree: tree)
             }
             defer { git_diff_free(diff) }
             try Self.detectDiffIndexRenames(diff)
@@ -88,6 +96,170 @@ extension GitClient {
         find.flags = UInt32(GIT_DIFF_FIND_RENAMES.rawValue)
         find.rename_threshold = 50
         try check(git_diff_find_similar(diff, &find))
+    }
+
+    /// A file recorded in the tree `diffIndex` compares against.
+    private struct DiffIndexTreeFile {
+        var mode: UInt16
+        var id: git_oid
+    }
+
+    /// `git diff-index --cached` prints an unmerged path as `U` with an
+    /// empty new side. libgit2 does that when the path is also in the
+    /// tree; a path that is not (a modify/delete against this tree) keeps
+    /// the conflict stage as the new file.
+    private static func normalizeCachedDiffIndex(_ diff: OpaquePointer?, tree: OpaquePointer?) throws {
+        let count = git_diff_num_deltas(diff)
+        for index in 0..<count {
+            guard let pointer = git_diff_get_delta(diff, index) else { continue }
+            let delta = UnsafeMutablePointer(mutating: pointer)
+            guard delta.pointee.status == GIT_DELTA_CONFLICTED else { continue }
+            var record = delta.pointee
+            guard let path = record.new_file.path ?? record.old_file.path else { continue }
+            if let old = try treeFile(tree, path: path) {
+                record.old_file = treeSide(record.old_file, file: old)
+            } else {
+                record.old_file = absentSide(record.old_file)
+            }
+            record.new_file = absentSide(record.new_file)
+            record.nfiles = 1
+            delta.pointee = record
+        }
+    }
+
+    /// Make an uncached diff match `git diff-index` (no `--cached`).
+    ///
+    /// `git_diff_tree_to_workdir_with_index` merges a tree-to-index diff
+    /// with an index-to-workdir diff. That merge keeps a conflict delta
+    /// as the index recorded it, so the old side is empty, and it can
+    /// leave a work-tree file labelled with the index's type-change
+    /// status. Rename detection runs after this, so a deletion or
+    /// addition created here is visible to `-M`.
+    private static func normalizeUncachedDiffIndex(_ diff: OpaquePointer?, tree: OpaquePointer?) throws {
+        let count = git_diff_num_deltas(diff)
+        for index in 0..<count {
+            guard let pointer = git_diff_get_delta(diff, index) else { continue }
+            let delta = UnsafeMutablePointer(mutating: pointer)
+            switch delta.pointee.status {
+            case GIT_DELTA_CONFLICTED:
+                try rewriteUnmerged(delta, tree: tree)
+            case GIT_DELTA_TYPECHANGE:
+                relabelMergedTypeChange(delta)
+            default:
+                break
+            }
+        }
+    }
+
+    /// An unmerged index entry compared with the work tree. The old side
+    /// comes from `tree` (empty when the path is not in that tree). The
+    /// new side is the work-tree file, with a zero id: `git diff-index`
+    /// does not hash an unmerged work-tree file. A path in neither side
+    /// is omitted.
+    private static func rewriteUnmerged(
+        _ delta: UnsafeMutablePointer<git_diff_delta>,
+        tree: OpaquePointer?
+    ) throws {
+        var record = delta.pointee
+        guard let path = record.new_file.path ?? record.old_file.path else {
+            record.status = GIT_DELTA_UNMODIFIED
+            delta.pointee = record
+            return
+        }
+        let present = diffSideExists(record.new_file)
+        let old = try treeFile(tree, path: path)
+        if !present {
+            if let old {
+                record.status = GIT_DELTA_DELETED
+                record.nfiles = 1
+                record.old_file = treeSide(record.old_file, file: old)
+                record.new_file = absentSide(record.new_file)
+            } else {
+                record.status = GIT_DELTA_UNMODIFIED
+                record.old_file.mode = 0
+                record.new_file.mode = 0
+            }
+            delta.pointee = record
+            return
+        }
+        record.new_file.id = git_oid()
+        record.new_file.flags &= ~UInt32(GIT_DIFF_FLAG_VALID_ID.rawValue)
+        if let old {
+            record.old_file = treeSide(record.old_file, file: old)
+            record.nfiles = 2
+            record.status = diffModeType(old.mode) == diffModeType(record.new_file.mode)
+                ? GIT_DELTA_MODIFIED : GIT_DELTA_TYPECHANGE
+        } else {
+            record.old_file = absentSide(record.old_file)
+            record.nfiles = 1
+            record.status = GIT_DELTA_ADDED
+        }
+        delta.pointee = record
+    }
+
+    /// The merge copies the tree-to-index status onto the work-tree
+    /// file. A staged symlink whose work tree is a regular file again
+    /// would stay `T` with two file modes; `git diff-index` prints `M`.
+    private static func relabelMergedTypeChange(_ delta: UnsafeMutablePointer<git_diff_delta>) {
+        var record = delta.pointee
+        let oldPresent = diffSideExists(record.old_file)
+        let newPresent = diffSideExists(record.new_file)
+        if oldPresent && newPresent {
+            if diffModeType(record.old_file.mode) == diffModeType(record.new_file.mode) {
+                record.status = GIT_DELTA_MODIFIED
+            }
+        } else if oldPresent {
+            record.status = GIT_DELTA_DELETED
+            record.nfiles = 1
+        } else if newPresent {
+            record.status = GIT_DELTA_ADDED
+            record.nfiles = 1
+        } else {
+            record.status = GIT_DELTA_UNMODIFIED
+        }
+        delta.pointee = record
+    }
+
+    /// `git diff-index` uses `T` only when this changes. 100644 and
+    /// 100755 are the same type.
+    private static func diffModeType(_ mode: UInt16) -> UInt16 {
+        mode & 0o170000
+    }
+
+    private static func diffSideExists(_ file: git_diff_file) -> Bool {
+        file.mode != 0 && file.flags & UInt32(GIT_DIFF_FLAG_EXISTS.rawValue) != 0
+    }
+
+    private static func treeFile(_ tree: OpaquePointer?, path: UnsafePointer<CChar>) throws -> DiffIndexTreeFile? {
+        guard let tree else { return nil }
+        var entry: OpaquePointer?
+        let rc = git_tree_entry_bypath(&entry, tree, path)
+        defer { git_tree_entry_free(entry) }
+        if rc == GIT_ENOTFOUND.rawValue { return nil }
+        try check(rc)
+        guard let found = entry else { return nil }
+        let mode = UInt16(truncatingIfNeeded: git_tree_entry_filemode(found).rawValue)
+        guard let id = git_tree_entry_id(found) else { return nil }
+        return DiffIndexTreeFile(mode: mode, id: id.pointee)
+    }
+
+    private static func treeSide(_ side: git_diff_file, file: DiffIndexTreeFile) -> git_diff_file {
+        var side = side
+        side.mode = file.mode
+        side.id = file.id
+        side.flags |= UInt32(GIT_DIFF_FLAG_VALID_ID.rawValue) | UInt32(GIT_DIFF_FLAG_EXISTS.rawValue)
+        side.id_abbrev = 40
+        return side
+    }
+
+    private static func absentSide(_ side: git_diff_file) -> git_diff_file {
+        var side = side
+        side.mode = 0
+        side.id = git_oid()
+        side.size = 0
+        side.flags = UInt32(GIT_DIFF_FLAG_VALID_ID.rawValue)
+        side.id_abbrev = 40
+        return side
     }
 
     private static func diffIndexEntries(_ diff: OpaquePointer?) -> [DiffIndexEntry] {

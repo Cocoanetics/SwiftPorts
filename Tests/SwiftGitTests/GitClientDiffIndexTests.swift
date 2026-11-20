@@ -89,6 +89,107 @@ struct GitClientDiffIndexTests {
         #expect(entries[0].similarity == nil)
     }
 
+    @Test("a staged file replaced by a symlink is one T record")
+    func typeChange() async throws {
+        let dir = try makeRepo()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("a.txt")
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.createSymbolicLink(atPath: file.path, withDestinationPath: "elsewhere")
+        try runGit(["add", "a.txt"], in: dir)
+
+        let client = GitClient(workingDirectory: dir)
+        let cached = try await client.diffIndex(ref: "HEAD", cached: true)
+        let uncached = try await client.diffIndex(ref: "HEAD", cached: false)
+        #expect(try parse(gitDiffIndex(cached: true, ref: "HEAD", in: dir)) == cached)
+        #expect(try parse(gitDiffIndex(cached: false, ref: "HEAD", in: dir)) == uncached)
+        #expect(cached.count == 1)
+        #expect(cached[0].status == "T")
+        #expect(cached[0].oldMode == 0o100644)
+        #expect(cached[0].newMode == 0o120000)
+        #expect(cached[0].sourcePath == "a.txt")
+        #expect(cached[0].destinationPath == "a.txt")
+        #expect(cached[0].similarity == nil)
+        #expect(cached[0].oldOID != cached[0].newOID)
+        #expect(uncached == cached)
+
+        try FileManager.default.removeItem(at: file)
+        try Data("back\n".utf8).write(to: file)
+        let restored = try await client.diffIndex(ref: "HEAD", cached: false)
+        let cachedAfter = try await client.diffIndex(ref: "HEAD", cached: true)
+        #expect(try parse(gitDiffIndex(cached: false, ref: "HEAD", in: dir)) == restored)
+        #expect(try parse(gitDiffIndex(cached: true, ref: "HEAD", in: dir)) == cachedAfter)
+        #expect(restored.map(\.status) == ["M"])
+        #expect(restored[0].oldMode == 0o100644)
+        #expect(restored[0].newMode == 0o100644)
+        #expect(restored[0].newOID == String(repeating: "0", count: 40))
+        #expect(cachedAfter.map(\.status) == ["T"])
+
+        try FileManager.default.removeItem(at: file)
+        let deleted = try await client.diffIndex(ref: "HEAD", cached: false)
+        #expect(try parse(gitDiffIndex(cached: false, ref: "HEAD", in: dir)) == deleted)
+        #expect(deleted.map(\.status) == ["D"])
+        #expect(deleted[0].newMode == 0)
+    }
+
+    @Test("an unresolved merge compares the tree with the work tree")
+    func unmerged() async throws {
+        let dir = try makeRepo()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data("c\n".utf8).write(to: dir.appendingPathComponent("c.txt"))
+        try runGit(["add", "c.txt"], in: dir)
+        try runGit(["commit", "-m", "c"], in: dir)
+        try runGit(["checkout", "-b", "side"], in: dir)
+        try Data("side-a\n".utf8).write(to: dir.appendingPathComponent("a.txt"))
+        try Data("side-c\n".utf8).write(to: dir.appendingPathComponent("c.txt"))
+        try Data("side-both\n".utf8).write(to: dir.appendingPathComponent("both.txt"))
+        try runGit(["rm", "b.txt"], in: dir)
+        try runGit(["add", "a.txt", "c.txt", "both.txt"], in: dir)
+        try runGit(["commit", "-m", "side"], in: dir)
+        try runGit(["checkout", "main"], in: dir)
+        try Data("main-a\n".utf8).write(to: dir.appendingPathComponent("a.txt"))
+        try Data("main-b\n".utf8).write(to: dir.appendingPathComponent("b.txt"))
+        try Data("main-both\n".utf8).write(to: dir.appendingPathComponent("both.txt"))
+        try runGit(["rm", "c.txt"], in: dir)
+        try runGit(["add", "a.txt", "b.txt", "both.txt"], in: dir)
+        try runGit(["commit", "-m", "main"], in: dir)
+        _ = try runGit(["merge", "side"], in: dir, allowsFailure: true)
+
+        let client = GitClient(workingDirectory: dir)
+        let zeros = String(repeating: "0", count: 40)
+        let uncached = try await client.diffIndex(ref: "HEAD", cached: false)
+        let cached = try await client.diffIndex(ref: "HEAD", cached: true)
+        #expect(try parse(gitDiffIndex(cached: false, ref: "HEAD", in: dir)) == uncached)
+        #expect(try parse(gitDiffIndex(cached: true, ref: "HEAD", in: dir)) == cached)
+        let content = try #require(uncached.first { $0.destinationPath == "a.txt" })
+        #expect(content.status == "M")
+        #expect(content.oldMode == 0o100644)
+        #expect(content.newMode == 0o100644)
+        #expect(content.newOID == zeros)
+        #expect(content.oldOID != zeros)
+        #expect(uncached.first { $0.destinationPath == "c.txt" }?.status == "A")
+        #expect(cached.first { $0.destinationPath == "a.txt" }?.status == "U")
+        #expect(cached.first { $0.destinationPath == "c.txt" }?.status == "U")
+
+        try FileManager.default.removeItem(at: dir.appendingPathComponent("b.txt"))
+        try FileManager.default.removeItem(at: dir.appendingPathComponent("c.txt"))
+        let removed = try await client.diffIndex(ref: "HEAD", cached: false)
+        let removedCached = try await client.diffIndex(ref: "HEAD", cached: true)
+        #expect(try parse(gitDiffIndex(cached: false, ref: "HEAD", in: dir)) == removed)
+        #expect(try parse(gitDiffIndex(cached: true, ref: "HEAD", in: dir)) == removedCached)
+        #expect(removed.first { $0.destinationPath == "b.txt" }?.status == "D")
+        #expect(removed.contains { $0.destinationPath == "c.txt" } == false)
+        #expect(removedCached.first { $0.destinationPath == "c.txt" }?.status == "U")
+
+        let link = dir.appendingPathComponent("a.txt")
+        try FileManager.default.removeItem(at: link)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "elsewhere")
+        let typed = try await client.diffIndex(ref: "HEAD", cached: false)
+        #expect(try parse(gitDiffIndex(cached: false, ref: "HEAD", in: dir)) == typed)
+        #expect(typed.first { $0.destinationPath == "a.txt" }?.status == "T")
+        #expect(typed.first { $0.destinationPath == "a.txt" }?.newMode == 0o120000)
+    }
+
     @Test("unborn HEAD is the empty tree, and a dirty file has a zero new id")
     func unbornHead() async throws {
         let dir = FileManager.default.temporaryDirectory
@@ -170,7 +271,9 @@ struct GitClientDiffIndexTests {
     }
 
     @discardableResult
-    private func runGit(_ args: [String], in dir: URL, input: Data? = nil) throws -> String {
+    private func runGit(
+        _ args: [String], in dir: URL, input: Data? = nil, allowsFailure: Bool = false
+    ) throws -> String {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         p.arguments = ["git"] + args
@@ -190,7 +293,7 @@ struct GitClientDiffIndexTests {
         }
         p.waitUntilExit()
         let outStr = String(decoding: (try? out.fileHandleForReading.readToEnd()) ?? Data(), as: UTF8.self)
-        if p.terminationStatus != 0 {
+        if p.terminationStatus != 0, !allowsFailure {
             let errStr = String(decoding: (try? err.fileHandleForReading.readToEnd()) ?? Data(), as: UTF8.self)
             throw Failure("git \(args.joined(separator: " ")) failed: \(errStr)")
         }
