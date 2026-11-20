@@ -2,7 +2,7 @@
 import Foundation
 import Testing
 
-@Suite("LFS env raw same-path oracle", .enabled(if: LFSOracle.isAvailable))
+@Suite("LFS env raw same-path oracle", .enabled(if: LFSOracle.isVersion371Available))
 struct LFSEnvOracleTests {
     @Test func remotesAndPaths() throws {
         let fixture = try LFSEnvOracleFixture()
