@@ -13,6 +13,9 @@ enum LFSEnvProcess {
     private typealias Actions = posix_spawn_file_actions_t?
     #else
     private typealias Actions = posix_spawn_file_actions_t
+    private typealias AddChdir = @convention(c) (
+        UnsafeMutablePointer<posix_spawn_file_actions_t>, UnsafePointer<CChar>
+    ) -> Int32
     #endif
 
     static func run(
@@ -32,7 +35,15 @@ enum LFSEnvProcess {
         #endif
         try check(posix_spawn_file_actions_init(&actions))
         defer { posix_spawn_file_actions_destroy(&actions) }
+        #if os(Linux)
+        // Glibc exports this GNU extension, but Swift's Glibc module doesn't
+        // declare it. Resolve the C function without changing the parent's cwd.
+        let symbol = try #require(dlsym(nil, "posix_spawn_file_actions_addchdir_np"))
+        let addChdir = unsafeBitCast(symbol, to: AddChdir.self)
+        try check(cwd.path.withCString { addChdir(&actions, $0) })
+        #else
         try check(posix_spawn_file_actions_addchdir_np(&actions, cwd.path))
+        #endif
         try check(posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0))
         try check(posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, out.path, O_WRONLY | O_CREAT, 0o600))
         try check(posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, err.path, O_WRONLY | O_CREAT, 0o600))
