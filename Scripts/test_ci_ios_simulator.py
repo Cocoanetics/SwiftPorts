@@ -52,7 +52,7 @@ class SimulatorTests(unittest.TestCase):
         with patch.object(ci, "run", return_value=runtimes), contextlib.redirect_stdout(io.StringIO()):
             self.assertIsNone(ci.available_runtime("27.0"))
 
-    def simulate(self, *, state="Shutdown", seeded=True, destinations=None, fail=None):
+    def simulate(self, *, destinations=None, fail=None):
         def run(*command, **kwargs):
             if fail and fail in command:
                 raise RuntimeError("Timed out: " + fail)
@@ -62,8 +62,8 @@ class SimulatorTests(unittest.TestCase):
                 return json.dumps({"runtimes": [runtime("27.2"), runtime()]})
             if "devices" in command:
                 return json.dumps({"devices": {
-                    RUNTIME: [{"name": "iPhone 16", "udid": UDID,
-                               "state": state, "isAvailable": True}] if seeded else [],
+                    RUNTIME: [{"name": "iPhone 18 Pro", "udid": "seeded-image-device",
+                               "state": "Shutdown", "isAvailable": True}],
                     runtime("27.2")["identifier"]: [{"name": "iPhone 17", "udid": "wrong",
                                                      "isAvailable": True}],
                 }})
@@ -99,15 +99,11 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(test.kwargs["test_activity_timeout"], 300)
         self.assertIn("platform=iOS Simulator,id=" + UDID, test.args)
 
-    def test_create_only_on_matched_runtime(self):
-        with self.simulate(seeded=False) as run, contextlib.redirect_stdout(io.StringIO()):
+    def test_creates_fresh_device_on_matched_runtime(self):
+        with self.simulate() as run, contextlib.redirect_stdout(io.StringIO()):
             ci.test()
         run.assert_any_call("xcrun", "simctl", "create", "ci-iphone", "iPhone 16", RUNTIME, capture=True)
-
-    def test_booted_device_is_not_booted_twice(self):
-        with self.simulate(state="Booted") as run, contextlib.redirect_stdout(io.StringIO()):
-            ci.test()
-        self.assertFalse(any("boot" in call.args for call in run.call_args_list))
+        self.assertFalse(any("devices" in call.args for call in run.call_args_list))
 
     def test_absent_or_ineligible_destination_stops_before_build(self):
         for destinations in ("{ platform:macOS, id:" + UDID + " }",

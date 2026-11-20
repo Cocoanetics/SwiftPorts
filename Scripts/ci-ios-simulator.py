@@ -131,15 +131,13 @@ def test():
     runtime = available_runtime(sdk)
     if runtime is None:
         raise RuntimeError(f"No available iOS runtime matches selected SDK {sdk}")
-    devices = json.loads(run("xcrun", "simctl", "list", "devices", "available", "--json", capture=True))
-    device = next((device for device in devices["devices"].get(runtime, [])
-                   if device.get("isAvailable") and device["name"].startswith("iPhone")), None)
-    udid = device["udid"] if device else run(
+    # Runner images can contain devices created by a newer Xcode. Create one
+    # with the selected Xcode so stale or incompatible image state is irrelevant.
+    udid = run(
         "xcrun", "simctl", "create", "ci-iphone", "iPhone 16", runtime, capture=True,
     )
     print(f"Testing iOS SDK {sdk}, runtime {runtime}, simulator {udid}", flush=True)
-    if not device or device.get("state") != "Booted":
-        run("xcrun", "simctl", "boot", udid)
+    run("xcrun", "simctl", "boot", udid)
     run("xcrun", "simctl", "bootstatus", udid, "-b", timeout=SIMULATOR_BOOT_TIMEOUT)
 
     # Keep all Xcode products outside the checkout, including destination probes.
