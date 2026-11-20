@@ -100,7 +100,7 @@ swift run sqlite3 ...                     # SQLite shell (vendored amalgamation)
 GitHub Actions workflow at `.github/workflows/swift.yml` runs on push
 to `main` and PRs. Matrix:
 
-- **macOS** — `xcode-27` runner (Xcode 27.1, Swift 6.4), `swift build && swift test`
+- **macOS** — `xcode-27` runner (Xcode 27.0, Swift 6.4), `swift build && swift test`
 - **iOS Simulator** — same runner, `xcodebuild test` against the auto-generated
   `SwiftPorts-Package` umbrella scheme
 - **Linux** — `swift:6.4.2-jammy` container, full `swift build && swift test`

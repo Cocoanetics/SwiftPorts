@@ -27,6 +27,11 @@ def runtime(version="27.1", available=True):
 
 
 class SimulatorTests(unittest.TestCase):
+    def test_xcode_27_0_sdk_ignores_27_1_and_27_2_runtimes(self):
+        self.assertEqual(ci.select_runtime(
+            [runtime("27.2"), runtime("27.1"), runtime("27.0")], "27.0",
+        ), "com.apple.CoreSimulator.SimRuntime.iOS-27-0")
+
     def test_sdk_match_wins_over_newer_runtime(self):
         self.assertEqual(ci.select_runtime([runtime("27.2"), runtime()], "27.1"), RUNTIME)
         self.assertEqual(ci.select_runtime([runtime()], "27.1.0"), RUNTIME)
