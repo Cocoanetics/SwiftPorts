@@ -140,15 +140,13 @@ struct LFSTransferQueueTests {
         }
     }
 
-    @Test("no download action reports that the object was not found")
+    @Test("no download action silently skips the object")
     func noDownloadAction() async throws {
         LFSTransferURLProtocol.install { _ in
             LFSTransferReply(body: Data(#"{"objects":[{"oid":"\#(oid)","size":12}]}"#.utf8))
         }
         try await run { client, store, _ in
-            await #expect(throws: LFSClientError("Object \(oid) not found on the server.")) {
-                try await queue(client, store).transfer([LFSBatchObject(oid: oid, size: 12)])
-            }
+            try await queue(client, store).transfer([LFSBatchObject(oid: oid, size: 12)])
             #expect(LFSTransferURLProtocol.requests.count == 1)
             #expect(!FileManager.default.fileExists(atPath: store.objectPathname(oid).path))
         }

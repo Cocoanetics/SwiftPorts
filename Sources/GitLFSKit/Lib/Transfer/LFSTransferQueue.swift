@@ -99,8 +99,6 @@ public final class LFSTransferQueue: Sendable {
                 item.object = object
                 if object.action(named: direction.rawValue) != nil {
                     jobs.append(item)
-                } else if direction == .download {
-                    failures.append("Object \(object.oid) not found on the server.")
                 }
             }
             for item in slice where !returned.contains(item.object.oid) {
