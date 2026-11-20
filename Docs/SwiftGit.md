@@ -49,6 +49,7 @@ let client = GitClient(
 | `status()` → `StatusReport` | `git status` (verbose / `-s` / `--porcelain` / `-sb`) |
 | `log(_:)` → `[LogEntry]` | `git log` with start / exclude / pathspec / count |
 | `diff(_:format:paths:contextLines:)` | `git diff` (patch / stat / shortstat / numstat / raw / name-only / name-status), supports `<a>..<b>` ranges |
+| `diffIndex(ref:cached:)` → `[DiffIndexEntry]` | `git diff-index [-M] [--cached] <ref>`: full ids, modes, source and destination paths, status. Renames at 50%, copies off. Unborn `HEAD` is the empty tree |
 | `mergeBase(_:_:)` | `git merge-base <a> <b>` |
 | `canResolveRef(_:)` | safe-probe form of `resolveOID` |
 | `blame(path:)` → `[BlameHunk]` | `git blame <path>` |
