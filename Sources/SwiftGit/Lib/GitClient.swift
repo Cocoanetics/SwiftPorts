@@ -33,6 +33,8 @@ public struct GitClient: ForgeKit.GitClient {
     public let credentials: CredentialProvider?
     /// Drop libgit2's progress lines and per-ref summaries — `-q`.
     public var quiet = false
+    /// Set only for the internal, callback-scoped metadata client.
+    var filterContext: GitFilterOperationContext?
 
     public init(
         workingDirectory: URL = Shell.currentDirectory,
@@ -47,11 +49,11 @@ public struct GitClient: ForgeKit.GitClient {
     // MARK: Read
 
     public func remoteURL(named name: String) async throws -> URL? {
-        try await withRepository { try $0.remoteURL(named: name) }
+        try await withFilterMetadataRepository { try $0.remoteURL(named: name) }
     }
 
     public func currentBranch() async throws -> String? {
-        try await withRepository { try $0.currentBranch() }
+        try await withFilterMetadataRepository { try $0.currentBranch() }
     }
 
     public func upstreamBranch(of localBranch: String) async throws -> String? {

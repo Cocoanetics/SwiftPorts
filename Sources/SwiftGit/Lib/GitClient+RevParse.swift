@@ -8,19 +8,19 @@ extension GitClient {
 
     /// Resolve `spec` to a full 40-char SHA — `git rev-parse <spec>`.
     public func resolveOID(_ spec: String) async throws -> String {
-        try await withRepository { try $0.resolveOID(spec) }
+        try await withFilterMetadataRepository { try $0.resolveOID(spec) }
     }
 
     /// Path to the repo's `.git` directory — `git rev-parse --git-dir`.
     public func gitDir() async throws -> String? {
-        try await withRepository { try $0.gitDir() }
+        try await withFilterMetadataRepository { try $0.gitDir() }
     }
 
     /// Path to the directory a linked worktree shares with the main
     /// repository (objects, refs, config) — `git rev-parse --git-common-dir`.
     /// The same as ``gitDir()`` outside a linked worktree.
     public func commonDir() async throws -> String? {
-        try await withRepository { repository in
+        try await withFilterMetadataRepository { repository in
             guard let pointer = Self.handle(of: repository) else { return try repository.gitDir() }
             return git_repository_commondir(pointer).map { String(cString: $0) }
         }
@@ -28,17 +28,17 @@ extension GitClient {
 
     /// Working-tree root — `git rev-parse --show-toplevel`. Nil for bare repos.
     public func toplevel() async throws -> String? {
-        try await withRepository { try $0.toplevel() }
+        try await withFilterMetadataRepository { try $0.toplevel() }
     }
 
     /// Tracked file paths — `git ls-files` with no flags.
     public func indexedPaths() async throws -> [String] {
-        try await withRepository { try $0.indexedPaths() }
+        try await withFilterMetadataRepository { try $0.indexedPaths() }
     }
 
     /// Full index entries (mode, OID, stage, path) — `git ls-files -s`.
     public func indexedEntries() async throws -> [IndexedEntry] {
-        try await withRepository { try $0.indexedEntries() }
+        try await withFilterMetadataRepository { try $0.indexedEntries() }
     }
 
     /// True when `workingDirectory` is inside a non-bare repo.
@@ -46,7 +46,7 @@ extension GitClient {
         // We rely on `withRepository` succeeding plus a non-nil
         // workdir to distinguish bare from non-bare.
         do {
-            return try await withRepository { try $0.isInsideWorkTree() }
+            return try await withFilterMetadataRepository { try $0.toplevel() != nil }
         } catch {
             return false
         }

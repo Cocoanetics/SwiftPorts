@@ -19,7 +19,7 @@ extension GitClient {
             }
         }
         do {
-            return try await withRepository { try $0.configGet(name, scope: scope) }
+            return try await withFilterMetadataRepository { try $0.configGet(name, scope: scope) }
         } catch let error as Libgit2Error where scope == nil && Self.isNoRepository(error) {
             return try await withDefaultConfig(scope: nil, missing: .empty) {
                 try Self.configString(name, in: $0)
@@ -37,7 +37,7 @@ extension GitClient {
             }
             return
         }
-        try await withRepository { repository in
+        try await withFilterMetadataRepository { repository in
             // git's lock failure comes in git's words, for the repository's own file too.
             let file = try Self.localConfigFile(of: repository)
             try self.requireDirectory(of: file.path, named: file.name)
@@ -71,7 +71,7 @@ extension GitClient {
                 try self.unset(key, matching: pattern, in: self.location(of: path), named: path)
             }
         }
-        return try await withRepository { repository in
+        return try await withFilterMetadataRepository { repository in
             let file = try Self.localConfigFile(of: repository)
             return try self.unset(key, matching: pattern, in: file.path, named: file.name)
         }
@@ -129,7 +129,7 @@ extension GitClient {
 
     /// Walk every config entry visible to the repo — matches `git config --list`.
     public func configList() async throws -> [(name: String, value: String)] {
-        try await withRepository { try $0.configList() }
+        try await withFilterMetadataRepository { try $0.configList() }
     }
 
     /// The lines `git config --list` prints, in its order: lowest level
@@ -166,6 +166,20 @@ extension GitClient {
     }
 
     func configEntries(scope: ConfigScope?, missing: MissingConfigFile = .fail) async throws -> [ListedConfigEntry] {
+        if filterContext != nil {
+            guard scope == nil || scope == .local else {
+                throw GitFilterOperationContext.Failure.unsupportedOperation
+            }
+            return try await withFilterMetadataRepository { repository in
+                let repo = Self.handle(of: repository)
+                var config: OpaquePointer?
+                try Self.check(git_repository_config_snapshot(&config, repo))
+                defer { git_config_free(config) }
+                let base = (git_repository_workdir(repo) ?? git_repository_path(repo)).map { String(cString: $0) }
+                return try configEntries(
+                    in: config, level: scope == .local ? GIT_CONFIG_LEVEL_LOCAL : nil, base: base)
+            }
+        }
         if scope == .global || scope == .system {
             return try await withDefaultConfig(scope: scope, missing: missing) {
                 try configEntries(in: $0, withIncludes: false)
@@ -208,7 +222,7 @@ extension GitClient {
     /// repository's own config, each file top to bottom. A key without
     /// a value (`[remote "origin"] push`) gives an empty one.
     public func configGetAll(_ name: String) async throws -> [String] {
-        try await withRepository { _ in try Self.configValues(name, in: workingDirectory) }
+        try await withFilterMetadataRepository { _ in try Self.configValues(name, in: workingDirectory) }
     }
 
     /// Every remote's `remote.<name>.push` values, in the order git reads
