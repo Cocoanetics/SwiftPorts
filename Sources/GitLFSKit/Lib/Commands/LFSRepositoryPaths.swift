@@ -38,7 +38,7 @@ struct LFSRepositoryPaths {
             temporary = clean(storage + "/tmp")
         } else {
             let store = LocalStore(gitStorageDirectory: URL(fileURLWithPath: common), storage: configured)
-            storage = clean(store.storageDirectory.path)
+            storage = (configured as NSString).isAbsolutePath ? configured : clean(store.storageDirectory.path)
             media = clean(store.objectsDirectory.path)
             temporary = clean(store.temporaryDirectory.path)
         }

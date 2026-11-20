@@ -13,6 +13,7 @@ struct GitCommandLFSParsingTests {
     @Test func group() throws {
         #expect(try GitCommand.parseAsRoot(["lfs"]) is LFSCommand)
         #expect(try parse(["lfs", "version"]) is LFSVersionCommand)
+        #expect(try parse(["lfs", "env"]) is LFSEnvCommand)
         let unknown = try #require(GitCommand.parseAsRoot(["lfs", "unknown"]) as? LFSCommand)
         #expect(unknown.arguments == ["unknown"])
     }
