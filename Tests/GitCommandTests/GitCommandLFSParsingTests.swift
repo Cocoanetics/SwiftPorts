@@ -52,5 +52,28 @@ struct GitCommandLFSParsingTests {
         let untrack = try #require(parse(["lfs", "untrack", "--", "-file"]) as? LFSUntrack)
         #expect(untrack.patterns == ["-file"])
     }
+
+    @Test(arguments: [
+        ["-l", "-s", "-n", "-d", "-a", "-j", "-I", "*.bin", "-X", "skip/**"],
+        ["--long", "--size", "--name-only", "--debug", "--all", "--json",
+         "--include=*.bin", "--exclude=skip/**"]
+    ])
+    func lsFilesFlags(_ flags: [String]) throws {
+        let command = try #require(parse(["lfs", "ls-files"] + flags) as? LFSLsFiles)
+        #expect(command.long && command.size && command.nameOnly && command.debug && command.all && command.json)
+        #expect(!command.deleted && command.refs.isEmpty)
+        #expect(command.include == "*.bin" && command.exclude == "skip/**")
+    }
+
+    @Test func lsFilesDeletedAndRefs() throws {
+        let debug = try #require(parse(["lfs", "ls-files", "-d"]) as? LFSLsFiles)
+        #expect(debug.debug && !debug.deleted)
+        let deleted = try #require(parse(["lfs", "ls-files", "--deleted", "HEAD"]) as? LFSLsFiles)
+        #expect(deleted.deleted && !deleted.debug && deleted.refs == ["HEAD"])
+        let literal = try #require(parse(["lfs", "ls-files", "A..B"]) as? LFSLsFiles)
+        #expect(literal.refs == ["A..B"])
+        let range = try #require(parse(["lfs", "ls-files", "A", "B"]) as? LFSLsFiles)
+        #expect(range.refs == ["A", "B"])
+    }
 }
 #endif

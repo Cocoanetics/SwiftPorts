@@ -70,6 +70,8 @@ public struct LsFilesOptions: Sendable {
             result.stderr += error.result.stderr
             result.stdout += error.result.stdout
             result.status = error.result.status
+        } catch {
+            result.fail(error.localizedDescription)
         }
         return result
     }
