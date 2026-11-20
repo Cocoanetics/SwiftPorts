@@ -17,7 +17,11 @@ public enum LFSTestServerError: Error, Equatable {
 /// object as already present.
 /// ``requests()`` records every response. ``inject(_:)`` arms the faults a
 /// transfer suite needs: 401, per-object 404 / 410 / 422, 429 with `Retry-After`,
-/// 5xx, an already-past `expires_at`, and a body whose size or SHA-256 is wrong.
+/// 5xx, a 5xx that stays armed, an already-past `expires_at`, and a body whose
+/// size or SHA-256 is wrong.
+/// ``holdObjectTransfers(untilInFlight:timeout:)`` keeps later object `GET` and
+/// `PUT` responses unfinished until that many of them are in flight. The first
+/// object transfer is answered immediately. Batch and verify requests are not held.
 /// An object passed to ``store(_:oid:)`` is a batch object with no `upload` action.
 public final class LFSTestServer: @unchecked Sendable {
     /// LFS API root, `http://127.0.0.1:<port>`. Clients POST `<endpoint>/objects/batch`.
@@ -106,9 +110,44 @@ public final class LFSTestServer: @unchecked Sendable {
         core.requests()
     }
 
+    /// Keep object `GET` and `PUT` responses unfinished until `count` of them
+    /// are in flight together. The first object transfer is answered in full,
+    /// because a transfer queue does not start its other workers until that
+    /// response has succeeded; the requests those workers then send are the
+    /// ones that have to overlap. Batch and verify requests are not held.
+    /// Held responses are sent once `count` later object transfers overlap.
+    /// If they never do, the hold ends at `timeout` and a serial queue still
+    /// finishes. ``peakObjectTransfers()`` is the most of those later object
+    /// transfers in flight at once since this call.
+    public func holdObjectTransfers(untilInFlight count: Int, timeout: Duration = .seconds(10)) async {
+        let amount = Self.timeAmount(timeout)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.channel.eventLoop.execute {
+                self.core.armObjectHold(count: count, timeout: amount, loop: self.channel.eventLoop)
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Most object `GET`/`PUT` requests open at once since the last
+    /// ``holdObjectTransfers(untilInFlight:timeout:)``.
+    public func peakObjectTransfers() async -> Int {
+        await withCheckedContinuation { continuation in
+            self.channel.eventLoop.execute {
+                continuation.resume(returning: self.core.peakObjectTransfers())
+            }
+        }
+    }
+
     /// Close the listening socket and stop the event-loop threads.
     public func shutdown() async {
         guard claimShutdown() else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.channel.eventLoop.execute {
+                self.core.releaseObjectHold()
+                continuation.resume()
+            }
+        }
         try? await channel.close().get()
         try? await group.shutdownGracefully()
     }
@@ -116,6 +155,12 @@ public final class LFSTestServer: @unchecked Sendable {
     deinit {
         guard claimShutdown() else { return }
         try? group.syncShutdownGracefully()
+    }
+
+    private static func timeAmount(_ duration: Duration) -> TimeAmount {
+        let components = duration.components
+        let nanoseconds = components.seconds * 1_000_000_000 + components.attoseconds / 1_000_000_000
+        return .nanoseconds(nanoseconds)
     }
 
     private func claimShutdown() -> Bool {

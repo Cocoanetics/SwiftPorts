@@ -3,8 +3,8 @@ import Foundation
 /// A fault the in-process server applies to a later request.
 ///
 /// Status faults (``unauthorized``, ``tooManyRequests(_:)``, ``serverError(_:)``)
-/// answer the next request and are then spent. The others stay on one object
-/// until the batch or `GET` they affect.
+/// answer the next request and are then spent. ``repeatingServerError`` keeps
+/// answering. The others stay on one object until the batch or `GET` they affect.
 public enum LFSTestFault: Sendable, Equatable {
     /// The next request is answered `401`.
     case unauthorized
@@ -14,6 +14,8 @@ public enum LFSTestFault: Sendable, Equatable {
     case tooManyRequests(retryAfter: String)
     /// The next request is answered with this 5xx status.
     case serverError(Int)
+    /// Later requests keep being answered `500` with `{"message":"Server error"}`.
+    case repeatingServerError
     /// This object's transfer actions use an `expires_at` already in the past.
     case expired(oid: String)
     /// `GET` returns a body whose length is not the stored object's size.
@@ -34,6 +36,8 @@ public enum LFSTestFault: Sendable, Equatable {
             return "429"
         case .serverError(let code):
             return String(code)
+        case .repeatingServerError:
+            return "500"
         case .expired:
             return "expired"
         case .wrongSize:
@@ -45,7 +49,7 @@ public enum LFSTestFault: Sendable, Equatable {
 
     var oid: String? {
         switch self {
-        case .unauthorized, .tooManyRequests, .serverError:
+        case .unauthorized, .tooManyRequests, .serverError, .repeatingServerError:
             return nil
         case .objectStatus(let oid, _), .expired(let oid), .wrongSize(let oid), .wrongSHA256(let oid):
             return oid
@@ -54,7 +58,7 @@ public enum LFSTestFault: Sendable, Equatable {
 
     var isStatusFault: Bool {
         switch self {
-        case .unauthorized, .tooManyRequests, .serverError:
+        case .unauthorized, .tooManyRequests, .serverError, .repeatingServerError:
             return true
         case .objectStatus, .expired, .wrongSize, .wrongSHA256:
             return false
