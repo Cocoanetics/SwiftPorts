@@ -6,20 +6,25 @@ import Testing
 extension LFSTransferQueueTests {
     @Test("parallel download and upload of several objects")
     func parallelTransfers() async throws {
-        let downloads = (0..<4).map { Data("download \($0)\n".utf8) }
-        let uploads = (0..<4).map { Data("upload \($0)\n".utf8) }
+        // One extra object: the queue completes one transfer before its other
+        // workers start, and those workers must then overlap.
+        let concurrency = 4
+        let downloads = (0..<concurrency + 1).map { Data("download \($0)\n".utf8) }
+        let uploads = (0..<concurrency + 1).map { Data("upload \($0)\n".utf8) }
         try await LFSTestServer.withServer { server in
             for bytes in downloads { server.store(bytes, oid: hash(bytes)) }
             try await run(
                 config: [
                     ("lfs.url", server.endpoint.absoluteString),
-                    ("lfs.concurrenttransfers", "4")
+                    ("lfs.concurrenttransfers", String(concurrency))
                 ],
                 sessionConfiguration: .ephemeral
             ) { client, store, directory in
+                await server.holdObjectTransfers(untilInFlight: concurrency)
                 try await queue(client, store).transfer(downloads.map { bytes in
                     LFSBatchObject(oid: hash(bytes), size: Int64(bytes.count))
                 })
+                #expect(await server.peakObjectTransfers() >= concurrency)
                 for bytes in downloads {
                     let stored = try Data(contentsOf: store.objectPathname(hash(bytes)))
                     #expect(stored == bytes)
@@ -37,9 +42,11 @@ extension LFSTransferQueueTests {
                     try bytes.write(to: file)
                     files.append((bytes, file))
                 }
+                await server.holdObjectTransfers(untilInFlight: concurrency)
                 try await queue(client, store, .upload).transfer(files.map { bytes, file in
                     LFSBatchObject(oid: hash(bytes), size: Int64(bytes.count), path: file.path)
                 })
+                #expect(await server.peakObjectTransfers() >= concurrency)
                 for (bytes, _) in files {
                     #expect(server.bytes(for: hash(bytes)) == bytes)
                 }

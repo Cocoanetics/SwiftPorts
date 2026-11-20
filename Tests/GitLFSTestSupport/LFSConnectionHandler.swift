@@ -30,14 +30,34 @@ final class LFSConnectionHandler: ChannelInboundHandler {
             head = nil
             let payload = body
             body.removeAll(keepingCapacity: true)
-            let response = core.handle(
-                method: request.method.rawValue,
-                uri: request.uri,
-                headers: lowercase(request.headers),
-                body: payload
-            )
-            write(response, context: context, version: request.version)
+            respond(request, body: payload, context: context)
         }
+    }
+
+    /// Later object transfers under an overlap hold stay unanswered until enough
+    /// of them are in flight. The first object transfer is answered immediately
+    /// because the queue does not start its other workers until that one succeeds.
+    private func respond(_ request: HTTPRequestHead, body: Data, context: ChannelHandlerContext) {
+        let method = request.method.rawValue
+        let uri = request.uri
+        let headers = lowercase(request.headers)
+        guard core.beginObjectHold(method: method, uri: uri) == .hold else {
+            write(core.handle(method: method, uri: uri, headers: headers, body: body), context: context,
+                  version: request.version)
+            return
+        }
+        let response = core.handle(method: method, uri: uri, headers: headers, body: body, record: false)
+        let promise = context.eventLoop.makePromise(of: Void.self)
+        let boundContext = context.loopBound
+        let version = request.version
+        let serverCore = core
+        promise.futureResult.whenComplete { _ in
+            let context = boundContext.value
+            guard let handler = context.handler as? LFSConnectionHandler else { return }
+            handler.write(response, context: context, version: version)
+            serverCore.record(method: method, uri: uri, headers: headers, body: body, response: response)
+        }
+        serverCore.parkObjectHold(promise)
     }
 
     private func expectsContinue(_ request: HTTPRequestHead) -> Bool {

@@ -1,5 +1,6 @@
 import Crypto
 import Foundation
+import NIOCore
 
 /// Mutable batch state. Callers hold `LFSServerCore`'s lock.
 private struct LFSServerState {
@@ -10,9 +11,16 @@ private struct LFSServerState {
     var objectFaults: [String: LFSTestFault] = [:]
 
     mutating func handle(
-        method: String, uri: String, headers: [String: String], body: Data
+        method: String, uri: String, headers: [String: String], body: Data, record: Bool = true
     ) -> LFSWireResponse {
         let response = route(method: method, uri: uri, body: body)
+        if record { remember(method: method, uri: uri, headers: headers, body: body, response: response) }
+        return response
+    }
+
+    mutating func remember(
+        method: String, uri: String, headers: [String: String], body: Data, response: LFSWireResponse
+    ) {
         log.append(LFSRecordedRequest(
             method: method,
             path: Self.path(of: uri),
@@ -23,7 +31,12 @@ private struct LFSServerState {
             responseBody: response.body,
             fault: response.fault
         ))
-        return response
+    }
+
+    func isObjectTransfer(method: String, uri: String) -> Bool {
+        guard method == "GET" || method == "PUT" else { return false }
+        let parts = Self.parts(of: uri)
+        return parts.count == 2 && parts[0] == "objects"
     }
 
     private mutating func route(method: String, uri: String, body: Data) -> LFSWireResponse {
@@ -207,9 +220,20 @@ private struct LFSServerState {
     }
 }
 
+/// How an object `GET` or `PUT` should be answered while an overlap hold is armed.
+enum LFSObjectHoldPhase: Equatable {
+    /// Answer immediately. The hold is inactive, this is not an object transfer,
+    /// or this is the first object transfer of the hold.
+    case bypass
+    /// Keep the whole response until the hold releases.
+    case hold
+}
+
 final class LFSServerCore: @unchecked Sendable {
     private let lock = NSLock()
     private var state = LFSServerState()
+    /// Touched only on the server event loop.
+    private var hold = LFSObjectHold()
 
     func setEndpoint(_ endpoint: URL) {
         var text = endpoint.absoluteString
@@ -247,10 +271,104 @@ final class LFSServerCore: @unchecked Sendable {
         return state.log
     }
 
-    func handle(method: String, uri: String, headers: [String: String], body: Data) -> LFSWireResponse {
+    func handle(
+        method: String, uri: String, headers: [String: String], body: Data, record: Bool = true
+    ) -> LFSWireResponse {
         lock.lock()
         defer { lock.unlock() }
-        return state.handle(method: method, uri: uri, headers: headers, body: body)
+        return state.handle(method: method, uri: uri, headers: headers, body: body, record: record)
+    }
+
+    func record(method: String, uri: String, headers: [String: String], body: Data, response: LFSWireResponse) {
+        lock.lock()
+        defer { lock.unlock() }
+        state.remember(method: method, uri: uri, headers: headers, body: body, response: response)
+    }
+
+    /// Arm the overlap hold. Call this on the server event loop.
+    func armObjectHold(count: Int, timeout: TimeAmount, loop: EventLoop) {
+        hold.arm(count: count, timeout: timeout, loop: loop)
+    }
+
+    /// Highest number of object transfers in flight since the last ``armObjectHold``.
+    /// Call this on the server event loop.
+    func peakObjectTransfers() -> Int {
+        hold.peak
+    }
+
+    /// Drop a held response so shutdown can finish. Call this on the server event loop.
+    func releaseObjectHold() {
+        hold.release()
+    }
+
+    /// Count this request toward the overlap hold. Call this on the server event loop.
+    func beginObjectHold(method: String, uri: String) -> LFSObjectHoldPhase {
+        lock.lock()
+        let transfer = state.isObjectTransfer(method: method, uri: uri)
+        lock.unlock()
+        return hold.begin(isObjectTransfer: transfer)
+    }
+
+    /// Park `promise` until enough object transfers overlap, then succeed it.
+    /// Call this on the server event loop.
+    func parkObjectHold(_ promise: EventLoopPromise<Void>) {
+        hold.park(promise)
+    }
+}
+
+/// Object `GET`/`PUT` responses parked until enough of them are in flight.
+///
+/// The event loop is the only thread that touches this value. The first
+/// object transfer is answered in full: the queue does not start its other
+/// workers until that response has succeeded. Later object transfers stay
+/// unanswered until enough of them are in flight together.
+private final class LFSObjectHold: @unchecked Sendable {
+    private var target = 0
+    private var started = 0
+    private var peakCount = 0
+    private var holding = false
+    private var passedFirst = false
+    private var timeoutTask: Scheduled<Void>?
+    private var parked: [EventLoopPromise<Void>] = []
+
+    var peak: Int { peakCount }
+
+    func arm(count: Int, timeout: TimeAmount, loop: EventLoop) {
+        release()
+        target = max(1, count)
+        started = 0
+        peakCount = 0
+        passedFirst = false
+        holding = true
+        timeoutTask = loop.scheduleTask(in: timeout) { [weak self] in
+            self?.release()
+        }
+    }
+
+    func begin(isObjectTransfer: Bool) -> LFSObjectHoldPhase {
+        guard holding, isObjectTransfer else { return .bypass }
+        if !passedFirst {
+            passedFirst = true
+            return .bypass
+        }
+        started += 1
+        peakCount = max(peakCount, started)
+        return .hold
+    }
+
+    func park(_ promise: EventLoopPromise<Void>) {
+        parked.append(promise)
+        if started >= target { release() }
+    }
+
+    func release() {
+        guard holding || !parked.isEmpty else { return }
+        holding = false
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        let pending = parked
+        parked = []
+        for promise in pending { promise.succeed(()) }
     }
 }
 

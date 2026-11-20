@@ -154,6 +154,48 @@ struct LFSTestServerTests {
             #expect(puts.count == count)
         }
     }
+
+    @Test("held object transfers report how many ran at once")
+    func heldTransfersOverlap() async throws {
+        let overlap = 4
+        let payloads = (0..<overlap + 1).map { Data("overlap-\($0)\n".utf8) }
+        try await LFSTestServer.withServer { server in
+            for payload in payloads { server.store(payload, oid: sha256Hex(payload)) }
+            await server.holdObjectTransfers(untilInFlight: overlap, timeout: .seconds(5))
+            let batch = try await LFSWireClient.postBatch(
+                server,
+                operation: "download",
+                objects: payloads.map { (oid: sha256Hex($0), size: $0.count) }
+            )
+            #expect(batch.status == 200)
+            try await fetchAll(try LFSWireClient.document(batch), expected: payloads)
+            #expect(await server.peakObjectTransfers() >= overlap)
+            let gets = server.requests().filter { $0.method == "GET" && $0.status == 200 }
+            #expect(gets.count == payloads.count)
+        }
+    }
+
+    @Test("one object transfer does not satisfy an overlap hold")
+    func heldTransferStaysSerial() async throws {
+        let payloads = [Data("one\n".utf8), Data("two\n".utf8)]
+        try await LFSTestServer.withServer { server in
+            for payload in payloads { server.store(payload, oid: sha256Hex(payload)) }
+            await server.holdObjectTransfers(untilInFlight: 2, timeout: .milliseconds(300))
+            let batch = try await LFSWireClient.postBatch(
+                server,
+                operation: "download",
+                objects: payloads.map { (oid: sha256Hex($0), size: $0.count) }
+            )
+            let document = try LFSWireClient.document(batch)
+            for payload in payloads {
+                let href = try #require(document.object(sha256Hex(payload))?.actions?["download"]?.href)
+                let got = try await LFSWireClient.get(href)
+                #expect(got.status == 200)
+                #expect(got.body == payload)
+            }
+            #expect(await server.peakObjectTransfers() == 1)
+        }
+    }
 }
 
 private struct PendingUpload: Sendable {
