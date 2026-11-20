@@ -1,0 +1,72 @@
+import CGitKit
+import Crypto
+import Foundation
+import GitLFSTestSupport
+@testable import GitLFSKit
+@testable import SwiftGit
+
+/// A throwaway repository whose `lfs.url` is an ``LFSTestServer``, for the
+/// fetch and upload suites. Files are committed as LFS pointers.
+struct LFSServerRepository {
+    let directory: URL
+    let git: GitClient
+    let client: LFSClient
+    let store: LocalStore
+
+    static func oid(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// `config` is in place before the client reads it.
+    static func run(
+        _ server: LFSTestServer, config: [(String, String)] = [],
+        _ body: (LFSServerRepository) async throws -> Void
+    ) async throws {
+        let host = IsolatedLFSHost()
+        defer { try? FileManager.default.removeItem(at: host.root) }
+        try await host.run {
+            let made = try await LFSFixture.make(
+                host, "server", remotes: [("origin", "https://example.com/repo.git")],
+                config: [("lfs.url", server.endpoint.absoluteString)] + config)
+            let client = await LFSClient(git: made.client, configuration: .ephemeral)
+            try await body(LFSServerRepository(
+                directory: made.directory, git: made.client, client: client,
+                store: LocalStore(gitStorageDirectory: made.directory.appendingPathComponent(".git"))))
+        }
+    }
+
+    /// Writes each file as the pointer to its contents and commits them all.
+    @discardableResult
+    func commit(_ files: [(path: String, contents: Data)], message: String = "pointers") async throws -> String {
+        for file in files {
+            let url = directory.appendingPathComponent(file.path)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let pointer = Pointer(oid: Self.oid(file.contents), size: Int64(file.contents.count))
+            try Data(pointer.encoded.utf8).write(to: url)
+        }
+        try await git.add(paths: [])
+        return try await git.commit(message: message, author: nil, allowEmpty: false)
+    }
+
+    /// Puts `contents` in the local object store.
+    func storeLocally(_ contents: Data) async throws {
+        try contents.write(to: try await store.objectPath(Self.oid(contents)))
+    }
+
+    func hasLocally(_ contents: Data) -> Bool {
+        FileManager.default.fileExists(atPath: store.objectPathname(Self.oid(contents)).path)
+    }
+
+    /// Points `name` at `commit`, as a fetch would leave a remote-tracking ref.
+    func setReference(_ name: String, to commit: String) async throws {
+        try await git.withRepository { repository in
+            guard let repo = GitClient.handle(of: repository) else { return }
+            var target = git_oid()
+            _ = git_oid_fromstr(&target, commit)
+            var reference: OpaquePointer?
+            _ = git_reference_create(&reference, repo, name, &target, 1, nil)
+            git_reference_free(reference)
+        }
+    }
+}

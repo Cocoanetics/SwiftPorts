@@ -83,8 +83,7 @@ struct LFSFetchRun {
         let watcher = watcher
         let queue = LFSTransferQueue(
             client: client, store: store, direction: .download, remote: remote,
-            refName: client.pushRemoteRef(
-                client.finder.branch.map { "refs/heads/" + $0 } ?? "HEAD", remote: client.finder.uploadRemote()),
+            refName: client.pushRemoteRef(await LFSClient.currentRef(git), remote: client.finder.uploadRemote()),
             environment: environment, dryRun: dryRun, meter: meter,
             completion: { [byOID] completion in
                 guard case .transferred(let object) = completion else { return }

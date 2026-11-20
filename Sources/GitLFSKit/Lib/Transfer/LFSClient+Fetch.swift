@@ -58,7 +58,7 @@ extension LFSClient {
                 include: include.map(LFSConfiguration.cleanPaths) ?? config.fetchPaths("lfs.fetchinclude"),
                 exclude: exclude.map(LFSConfiguration.cleanPaths) ?? config.fetchPaths("lfs.fetchexclude"))
             let scanner = GitScanner(client: git, filter: filter)
-            let refs = refs.isEmpty ? [finder.branch.map { "refs/heads/" + $0 } ?? "HEAD"] : refs
+            let refs = refs.isEmpty ? [await Self.currentRef(git)] : refs
             for ref in refs {
                 run.result.stderr += "Fetching reference \(ref)\n"
                 guard let pointers = await run.scan(counting: false, { try await scanner.scanTree(ref) })
@@ -74,5 +74,11 @@ extension LFSClient {
         }
         if json { run.result.stdout += run.watcher.dumpJSON() }
         return run.result
+    }
+
+    /// `git.CurrentRef().Refspec()`: the checked-out branch, or `HEAD` when detached.
+    static func currentRef(_ git: GitClient) async -> String {
+        guard let branch = try? await git.currentBranch(), !branch.isEmpty else { return "HEAD" }
+        return "refs/heads/" + branch
     }
 }
