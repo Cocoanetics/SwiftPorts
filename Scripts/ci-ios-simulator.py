@@ -10,6 +10,10 @@ import subprocess
 import sys
 
 
+SIMULATOR_BOOT_TIMEOUT = 300
+DESTINATION_DISCOVERY_TIMEOUT = 300
+
+
 def run(*command, timeout=120, capture=False):
     print("+ " + " ".join(command), flush=True)
     process = subprocess.Popen(
@@ -85,13 +89,15 @@ def test():
     print(f"Testing iOS SDK {sdk}, runtime {runtime}, simulator {udid}", flush=True)
     if not device or device.get("state") != "Booted":
         run("xcrun", "simctl", "boot", udid)
-    run("xcrun", "simctl", "bootstatus", udid, "-b", timeout=180)
+    run("xcrun", "simctl", "bootstatus", udid, "-b", timeout=SIMULATOR_BOOT_TIMEOUT)
 
     # Keep all Xcode products outside the checkout, including destination probes.
     build_root = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "SwiftPorts-iOS"
     common = ("xcodebuild", "-scheme", "SwiftPorts-Package",
               "-derivedDataPath", str(build_root / "DerivedData"))
-    destinations = run(*common, "-showdestinations", capture=True)
+    destinations = run(
+        *common, "-showdestinations", timeout=DESTINATION_DISCOVERY_TIMEOUT, capture=True,
+    )
     print(destinations, flush=True)
     if not any(re.search(r"platform:iOS Simulator\s*[,}]", line)
                and re.search(r"id:" + re.escape(udid) + r"\s*[,}]", line)

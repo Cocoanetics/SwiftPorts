@@ -86,6 +86,8 @@ class SimulatorTests(unittest.TestCase):
         self.assertLess(boot, bootstatus)
         self.assertLess(bootstatus, discovery)
         self.assertLess(discovery, build)
+        self.assertEqual(run.call_args_list[bootstatus].kwargs["timeout"], 300)
+        self.assertEqual(run.call_args_list[discovery].kwargs["timeout"], 300)
         test = run.call_args_list[-1]
         self.assertIn("test-without-building", test.args)
         self.assertEqual(test.kwargs["timeout"], 300)
