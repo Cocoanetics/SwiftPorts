@@ -33,11 +33,14 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
                 switch body {
                 case .file(let url):
                     uploadFile = url
-                    // FoundationNetworking does not expose a fromFile upload
-                    // body to URLProtocol. A fresh disk stream preserves both
-                    // explicit Content-Length and action-requested chunking.
-                    request.httpBodyStream = InputStream(url: url)
-                    task = session.uploadTask(withStreamedRequest: request)
+                    if request.value(forHTTPHeaderField: "Transfer-Encoding") == "chunked" {
+                        // fromFile supplies a length even when the action asks
+                        // for chunked encoding. A fresh disk stream preserves it.
+                        request.httpBodyStream = InputStream(url: url)
+                        task = session.uploadTask(withStreamedRequest: request)
+                    } else {
+                        task = session.uploadTask(with: request, fromFile: url)
+                    }
                 case .data(let data):
                     request.httpBody = data
                     task = session.dataTask(with: request)

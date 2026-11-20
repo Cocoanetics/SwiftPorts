@@ -26,6 +26,9 @@ final class LFSTransferURLProtocol: URLProtocol {
                 if count <= 0 { break }
                 data.append(contentsOf: buffer.prefix(count))
             }
+            // FoundationNetworking keeps the stream authoritative while it is
+            // attached, so clear it before exposing the drained test body.
+            request.httpBodyStream = nil
             request.httpBody = data
         }
         let handler = Self.state.withLock { value -> Handler? in
