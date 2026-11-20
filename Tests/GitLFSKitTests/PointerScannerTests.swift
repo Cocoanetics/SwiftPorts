@@ -3,7 +3,7 @@ import Testing
 import Crypto
 import CGitKit
 import ShellKit
-@testable import SwiftGit
+@_spi(GitLFSKit) @testable import SwiftGit
 @testable import GitLFSKit
 
 @Suite("PointerScanner")
@@ -58,6 +58,19 @@ struct PointerScannerTests {
                                               contentsSHA256: sha256(large)))
             #expect(ordinary.contentsSHA256.count == 64)
             #expect(try await scanner.readPointer(largeOID) == nil)
+
+            var chunkCount = 0
+            var largestChunk = 0
+            var streamedHash = SHA256()
+            try await client.forEachBlobChunk(ofOID: largeOID) {
+                chunkCount += 1
+                largestChunk = max(largestChunk, $0.count)
+                streamedHash.update(bufferPointer: $0)
+            }
+            #expect(chunkCount > 1)
+            #expect(largestChunk <= 64 * 1024)
+            #expect(streamedHash.finalize().map { String(format: "%02x", $0) }.joined()
+                    == sha256(large))
         }
     }
 
