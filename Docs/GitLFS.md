@@ -115,6 +115,55 @@ version, and succeeds. Unsupported subcommands receive git-lfs's diagnostic
 and exit status 127. `git lfs --help` uses embedded usage text; it does not
 launch the system Git's man viewer.
 
+## Environment report (`git lfs env`, #207)
+
+`LFSEnv.run(client:)` returns the 3.7.1 configuration report without network
+or SSH authentication. The thin `LFSEnvCommand` only creates the GitClient and
+emits its result. The SDK remains ArgumentParser-free.
+
+The report starts with `LFSVersion.string`, the shared `PortVersion.gitLine`
+(the first line of `git version`), and a blank line. Endpoints retain config
+order, each immediately followed by its optional `  SSH=user@host:path` line.
+`environmentEndpoints()` is a dictionary projection for existing consumers;
+it is not the env renderer. Download and upload access use their respective
+configured remotes, without download autodetection.
+
+Paths use the working-tree root, worktree Git dir, common Git dir, and
+`LocalStore`'s storage layout. Linked worktrees share storage; relative
+`lfs.storage` is relative to the common dir. Outside a repository the Git and
+working directories are empty, while the default storage paths remain relative
+(`lfs`, `lfs/objects`, `lfs/tmp`), matching `fs.New`. Alternate references list
+existing sibling `lfs/objects` directories, first from
+`GIT_ALTERNATE_OBJECT_DIRECTORIES`, then `objects/info/alternates`. As in 3.7.1,
+relative alternate paths are checked against cwd, including file entries.
+
+The fixed settings block includes fetch/prune options, access modes and sorted
+transfer names. These are readouts of deferred capabilities: no queue, adapter,
+fetch or prune operation is created. Tus is upload-only, custom transfer
+directions restrict their name lists, and basic-only reports just `basic`.
+Skip-download-errors is the OR of the environment and config booleans;
+`lfs.fetchrecentremoterefs` controls `FetchRecentRefsIncludeRemotes`.
+Optional fetch patterns and extension lines precede the `GIT_*` section.
+Inherited variable names follow the process environment block, taking values
+from Shell; Shell-only names follow in its enumeration order. Values are never
+path-normalized. The final three filter values use Go quoting, including `""`
+when absent. Existing unsafe `.lfsconfig` warnings and env's config-clash
+warnings go to stderr.
+
+`LFSEnvReportTests` runs without git-lfs. `LFSEnvOracleTests` uses the pinned
+3.7.1 git-lfs binary and the built git executable at the same repository path, with an
+identical isolated HOME/XDG/config, cwd and ordered `posix_spawn` environment.
+It compares raw ordered stdout, stderr and status, replacing only the two
+version lines. It explicitly checks non-alphabetical `GIT_*` input order and
+never sorts or rewrites output. System Git creates the fixtures; env invokes
+git-lfs directly because system Git may reorder envp before dispatching an
+external command, defeating the explicit input-order check. Oracle remote cases use origin plus at most one
+other remote because upstream enumerates its remaining remotes through a Go
+map; direct tests lock config order for larger lists and non-origin tracking.
+Extensions are also a Go map upstream, so the raw oracle uses one extension.
+Process oracles skip at runtime without git-lfs on macOS/Linux; Android target
+gating is unchanged.
+
 ## Endpoints and credentials (`Endpoint/`, `HTTP/`)
 
 `LFSEndpointFinder` is git-lfs's `lfsapi.EndpointFinder`. `LFSClient` sends

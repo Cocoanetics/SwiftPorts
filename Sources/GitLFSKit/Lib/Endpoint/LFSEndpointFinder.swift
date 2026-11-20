@@ -30,9 +30,13 @@ public final class LFSEndpointFinder: @unchecked Sendable {
     private let lock = NSLock()
     private var urlAccess: [String: String] = [:]
 
-    public init(_ client: GitClient) async {
+    public convenience init(_ client: GitClient) async {
+        await self.init(client, showConfigWarnings: false)
+    }
+
+    init(_ client: GitClient, showConfigWarnings: Bool) async {
         self.client = client
-        let configuration = await LFSConfiguration.load(client)
+        let configuration = await LFSConfiguration.load(client, showWarnings: showConfigWarnings)
         self.configuration = configuration
         aliases = AliasMaps(configuration: configuration)
         urlConfig = LFSURLConfig(configuration: configuration)
@@ -76,17 +80,22 @@ public final class LFSEndpointFinder: @unchecked Sendable {
     /// The default line is printed only when the selected remote is `origin`.
     /// Autodetect does not apply here; `git lfs env` doesn't use it either.
     public func environmentEndpoints() -> [String: String] {
+        Dictionary(uniqueKeysWithValues: environmentReport().map { ($0.key, described($0.endpoint)) })
+    }
+
+    /// Keep config order and SSH metadata until the env report is rendered.
+    func environmentReport() -> [(key: String, endpoint: LFSEndpoint)] {
         let selected = configuredDownloadRemote()
-        var lines: [String: String] = [:]
+        var lines: [(key: String, endpoint: LFSEndpoint)] = []
         if selected == "origin" {
             let endpoint = self.endpoint(operation: "download", remote: "origin")
             if !endpoint.url.isEmpty {
-                lines["Endpoint"] = described(endpoint)
+                lines.append(("Endpoint", endpoint))
             }
         }
         for remote in configuration.remotes {
             if selected == "origin" && remote == "origin" { continue }
-            lines["Endpoint (\(remote))"] = described(self.endpoint(operation: "download", remote: remote))
+            lines.append(("Endpoint (\(remote))", self.endpoint(operation: "download", remote: remote)))
         }
         return lines
     }

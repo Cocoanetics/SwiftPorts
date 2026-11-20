@@ -1178,10 +1178,19 @@ let package = Package(
         ),
 
         // MARK: GitLFSKit (git-lfs SDK)
+        // Accessing C's mutable `environ` global directly is rejected by
+        // Swift 6.4's Android concurrency checks. This function-only shim
+        // preserves the process environment's original order on every host.
+        .target(
+            name: "CGitLFSEnvironment",
+            path: "Sources/GitLFSKit/CGitLFSEnvironment",
+            publicHeadersPath: "include"
+        ),
         // No ArgumentParser dependency; stays in the Android build.
         .target(
             name: "GitLFSKit",
             dependencies: [
+                "CGitLFSEnvironment",
                 "SwiftGit",
                 .product(name: "CGitKit", package: "GitKit"),
                 "SSHKit",
