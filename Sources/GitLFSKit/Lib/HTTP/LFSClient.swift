@@ -10,7 +10,30 @@ import FoundationNetworking
 /// Why an LFS HTTP request failed, in git-lfs's words.
 public struct LFSClientError: Error, Equatable, CustomStringConvertible, Sendable {
     public let description: String
-    public init(_ description: String) { self.description = description }
+    let retryInTransferQueue: Bool
+    let transferResult: LFSTransferHTTPResult?
+
+    public init(_ description: String) {
+        self.description = description
+        retryInTransferQueue = true
+        transferResult = nil
+    }
+
+    init(_ description: String, retryInTransferQueue: Bool) {
+        self.description = description
+        self.retryInTransferQueue = retryInTransferQueue
+        transferResult = nil
+    }
+
+    init(_ description: String, transferResult: LFSTransferHTTPResult) {
+        self.description = description
+        retryInTransferQueue = true
+        self.transferResult = transferResult
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.description == rhs.description
+    }
 }
 
 /// Body of an authenticated LFS request. `.file` and `.stream` are not copied
@@ -112,6 +135,60 @@ public final class LFSClient: @unchecked Sendable {
         return data
     }
 
+    /// Object bytes use `DoWithAuthNoRetry`, followed by at most one retry
+    /// for a 401 that was sent without authorization. Completed HTTP failures
+    /// retain their headers for the basic adapters and retry policy.
+    func transfer(
+        _ original: HTTPRequest, body: LFSRequestBody? = nil,
+        operation: String, remote: String?, authenticated: Bool,
+        accessURL: String? = nil,
+        stream: LFSTransferStream = LFSTransferStream()
+    ) async throws -> LFSTransferHTTPResult {
+        let remote = try await resolvedRemote(remote, operation: operation)
+        let endpoint = finder.endpoint(operation: operation, remote: remote)
+        var request = original
+        let base = endpoint.url.hasSuffix("/") ? endpoint.url : endpoint.url + "/"
+        var resolved = endpoint
+        var sshHeaders: [String: String] = [:]
+        if let url = request.url?.absoluteString, url == endpoint.url || url.hasPrefix(base) {
+            let response = try await ssh.resolve(endpoint, method: request.method.rawValue)
+            if !response.href.isEmpty {
+                resolved.url = response.href
+                request.url = try Self.sshRequestURL(
+                    href: response.href, endpointURL: endpoint.url, requestURL: request.url)
+            }
+            sshHeaders = response.header
+        }
+        try Self.requireHTTP(resolved)
+        try Self.requireHTTP(LFSEndpoint(url: request.url?.absoluteString ?? ""))
+        for attempt in 0...1 {
+            let access = finder.access(for: accessURL ?? endpoint.url)
+            applyExtra(&request, finder.extraHeaders(for: request.url?.absoluteString ?? endpoint.url))
+            for (key, value) in sshHeaders {
+                if let name = HTTPField.Name(key) { request.headerFields[name] = value }
+            }
+            let applied: LFSAppliedCredential = authenticated ? .skipped : try applyCredentials(
+                &request, access: access, endpoint: endpoint, operation: operation, remote: remote)
+            request.headerFields[.userAgent] = "git-lfs"
+            guard let urlRequest = URLRequest(httpRequest: request) else {
+                throw LFSClientError("invalid URL: \(request.url?.absoluteString ?? "")")
+            }
+            let result = try await LFSTransferDelegate(stream: stream).execute(
+                urlRequest, body: body, configuration: session.configuration)
+            if (200..<300).contains(result.status), case .helper(let filled) = applied {
+                context.approve(filled)
+            }
+            if result.status == 401, case .helper(let filled) = applied { context.reject(filled) }
+            guard result.status == 401, !authenticated, attempt == 0,
+                  !Self.hasAuthorization(request) else { return result }
+            let promoted = promote(result.response, from: access.mode)
+            if promoted != access.mode {
+                await finder.setAccess(LFSAccess(mode: promoted, url: access.url))
+            }
+        }
+        preconditionFailure("The final transfer attempt always returns")
+    }
+
     /// Prefer `httpBody`. When it is absent, forward `httpBodyStream`.
     private static func requestBody(_ request: URLRequest) -> LFSRequestBody? {
         if let payload = request.httpBody { return .data(payload) }
@@ -134,6 +211,8 @@ public final class LFSClient: @unchecked Sendable {
             &request, access: access, endpoint: endpoint, operation: operation, remote: remote)
         request.headerFields[.userAgent] = "git-lfs"
         let (data, http) = try await execute(request, body: body)
+        let result = LFSTransferHTTPResult(
+            response: http, body: data, accepted: (200..<300).contains(http.statusCode))
         if (200..<300).contains(http.statusCode) {
             if case .helper(let filled) = applied { context.approve(filled) }
             return (data, http)
@@ -142,9 +221,11 @@ public final class LFSClient: @unchecked Sendable {
             return (data, http)
         }
         let message = Self.httpMessage(status: http.statusCode, body: data, url: request.url)
-        guard http.statusCode == 401 else { throw LFSClientError(message) }
+        guard http.statusCode == 401 else {
+            throw LFSClientError(message, transferResult: result)
+        }
         if applied.stopsRetry, request.headerFields[.authorization] != nil {
-            throw LFSClientError("Authentication required: \(message)")
+            throw LFSClientError("Authentication required: \(message)", transferResult: result)
         }
         if case .helper(let filled) = applied {
             request.headerFields[.authorization] = nil

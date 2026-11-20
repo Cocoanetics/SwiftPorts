@@ -337,7 +337,7 @@ enum LFSBatchEncoding {
 
 /// Compact JSON with an explicit key order. A value written after ``key``
 /// is not given its own comma.
-private struct JSONText {
+struct JSONText {
     private var text = ""
     private var atStart: [Bool] = []
     private var afterKey = false
@@ -554,7 +554,7 @@ extension LFSClient {
             let detail = "LFS: action \(operation.goQuoted) expires at \(LFSTimestamp.rfc822(at))"
             lines.append("[\(name)] \(detail)")
         }
-        return LFSClientError(lines.joined(separator: "\n"))
+        return LFSClientError(lines.joined(separator: "\n"), retryInTransferQueue: false)
     }
 
     private func batchRemote(_ remote: String?, operation: String) async -> String {

@@ -114,7 +114,7 @@ in the SDK's `Commands/` directory:
 
 All filesystem paths go through `Shell.authorize`; production code does not
 launch a system Git or git-lfs process. The hooks are scripts for real Git to
-execute. Filter execution, transfers, other LFS commands, and lock-based file
+execute. Filter execution, other LFS commands, and lock-based file
 permission management remain the separate sub-tasks described in #184.
 
 Bare `git lfs` prints upstream's complete usage text, preceded by the port's
@@ -122,6 +122,41 @@ version, and succeeds. Unsupported subcommands receive git-lfs's diagnostic
 and exit status 127. `git lfs --help` uses embedded usage text; it does not
 launch the system Git's man viewer.
 
+## Transfers (`Transfer/`, #198)
+
+`LFSTransferQueue(client:store:direction:remote:refName:progress:)` transfers
+`[LFSBatchObject]` through the HTTP basic adapter. An empty remote selects the
+download or upload remote. Duplicate OIDs transfer once, retaining the first
+name and upload path. The callback receives `(direction, name, totalSize,
+readSoFar, readSinceLast)`; presentation belongs to the caller.
+
+The queue batches objects (default 100), sorts by descending size, and runs
+eight workers by default. Worker 0 opens the authentication gate on the first
+successful response. Downloads stream into `incomplete/<oid>.part`, resume
+validated ranges, and enter `objects/` only after SHA-256 verification. Failed
+downloads retain the part. Uploads stream from disk, preserve action headers,
+detect content types with Go's 512-byte sniffing rules, and POST an optional
+verify action. A missing action silently skips an already-present object.
+
+`lfs.concurrenttransfers`, `lfs.transfer.batchSize`, `lfs.transfer.maxretries`
+(eight retries after the first attempt), and `lfs.transfer.maxretrydelay`
+(ten seconds) use their defaults for values below one. Backoff starts at
+250 ms and doubles to the cap. Only 429 honors `Retry-After`, without a cap;
+503 uses ordinary backoff. Expired actions return to the next batch.
+`lfs.transfer.maxverifies` permits at least three verification attempts.
+These settings are not permitted in `.lfsconfig`.
+
+`lfs.<url>.contenttype` / `lfs.contenttype` defaults to true. Upload 422
+prints git-lfs's suggestion to disable detection once, without retrying it.
+`lfs.transfer.enablehrefrewrite` defaults to false; enabling it applies the
+endpoint finder's URL aliases to action hrefs without appending `/info/lfs`.
+Object requests use one auth attempt and one additional attempt for an
+unauthenticated 401; authenticated actions use their supplied authorization.
+Batch and general API authentication keep their existing retry behavior.
+
+SSH/file transfer adapters, tus, progress-line formatting, and
+`lfs.transfer.maxretrytime` remain outside this surface. `file://` retains
+the standalone-transfer hint and missing-protocol error.
 ## Scanning (`GitScanner`, #205)
 
 `GitScanner` walks one repository through the in-process `GitClient`.
