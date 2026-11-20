@@ -561,10 +561,20 @@ struct GitClientDiffIndexRefreshTests {
             [.modificationDate: past], ofItemAtPath: dir.appendingPathComponent(name).path)
     }
 
-    private func copyRepo(_ source: URL) throws -> URL {
-        let dest = FileManager.default.temporaryDirectory
+    /// Skip `maintenance.lock`. Git unlinks it while `copyItem` walks the tree.
+    private func copyRepo(_ source: URL, to dest: URL? = nil) throws -> URL {
+        let dest = dest ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("DiffIndexRefresh-\(UUID().uuidString)")
-        try FileManager.default.copyItem(at: source, to: dest)
+        let fm = FileManager.default
+        try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+        let keys: Set<URLResourceKey> = [.isSymbolicLinkKey, .isDirectoryKey]
+        for item in try fm.contentsOfDirectory(at: source, includingPropertiesForKeys: Array(keys)) {
+            if item.lastPathComponent == "maintenance.lock" { continue }
+            let target = dest.appendingPathComponent(item.lastPathComponent)
+            guard let values = try? item.resourceValues(forKeys: keys) else { continue }
+            let directory = values.isDirectory == true && values.isSymbolicLink != true
+            if directory { _ = try copyRepo(item, to: target) } else { try fm.copyItem(at: item, to: target) }
+        }
         return dest
     }
 
