@@ -68,9 +68,14 @@ public final class LFSTransferQueue: Sendable {
             } catch {
                 try Task.checkCancellation()
                 let message = String(describing: error)
+                let shouldRetry = (error as? LFSClientError)?.retryInTransferQueue ?? true
+                if !shouldRetry {
+                    failures.append(message)
+                    continue
+                }
                 var retries: [LFSTransferPending] = []
                 for item in slice {
-                    if let retry = scheduledRetry(item) { retries.append(retry) }
+                    if let item = scheduledRetry(item) { retries.append(item) }
                     else { failures.append(message) }
                 }
                 pending = retries + pending
@@ -84,7 +89,7 @@ public final class LFSTransferQueue: Sendable {
                     failures.append("[\(object.oid)] The server returned an unknown OID.")
                     continue
                 }
-                returned.insert(object.oid)
+                guard returned.insert(object.oid).inserted else { continue }
                 if let error = object.errorText {
                     failures.append(error)
                     continue
@@ -92,7 +97,11 @@ public final class LFSTransferQueue: Sendable {
                 object.name = item.object.name
                 object.path = item.object.path
                 item.object = object
-                if object.action(named: direction.rawValue) != nil { jobs.append(item) }
+                if object.action(named: direction.rawValue) != nil {
+                    jobs.append(item)
+                } else if direction == .download {
+                    failures.append("Object \(object.oid) not found on the server.")
+                }
             }
             for item in slice where !returned.contains(item.object.oid) {
                 failures.append("[\(item.object.oid)] The server did not return the requested OID.")

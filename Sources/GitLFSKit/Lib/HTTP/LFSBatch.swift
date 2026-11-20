@@ -554,7 +554,7 @@ extension LFSClient {
             let detail = "LFS: action \(operation.goQuoted) expires at \(LFSTimestamp.rfc822(at))"
             lines.append("[\(name)] \(detail)")
         }
-        return LFSClientError(lines.joined(separator: "\n"))
+        return LFSClientError(lines.joined(separator: "\n"), retryInTransferQueue: false)
     }
 
     private func batchRemote(_ remote: String?, operation: String) async -> String {

@@ -58,6 +58,26 @@ extension LFSTransferQueueTests {
         }
     }
 
+    @Test("batch expiration exhaustion is not retried by the transfer queue")
+    func batchExpiration() async throws {
+        let body = """
+        {"objects":[{"oid":"\(oid)","size":12,"actions":{"download":{
+        "href":"https://example.com/expired","expires_at":"2000-01-01T00:00:00Z"}}}]}
+        """
+        LFSTransferURLProtocol.install { _ in LFSTransferReply(body: Data(body.utf8)) }
+        try await run { client, store, _ in
+            let clock = LFSTransferClock()
+            let at = try #require(LFSTimestamp.parse("2000-01-01T00:00:00Z"))
+            let expected = "[blob.bin] LFS: action \"download\" expires at \(LFSTimestamp.rfc822(at))"
+            await #expect(throws: LFSClientError(expected)) {
+                try await queue(client, store, clock: clock).transfer([
+                    LFSBatchObject(oid: oid, size: 12, name: "blob.bin")])
+            }
+            #expect(LFSTransferURLProtocol.requests.count == 9)
+            #expect(clock.delays.isEmpty)
+        }
+    }
+
     @Test("an unknown OID in a batch response is reported")
     func unknownOID() async throws {
         let unknown = String(repeating: "a", count: 64)
@@ -74,11 +94,31 @@ extension LFSTransferQueueTests {
         }
     }
 
+    @Test("duplicate OIDs in a batch response are transferred once")
+    func duplicateResponseOID() async throws {
+        let object = #"{"oid":"\#(oid)","size":12,"actions":{"download":{"href":"https://example.com/object"}}}"#
+        LFSTransferURLProtocol.install { request in
+            if request.url?.lastPathComponent == "batch" {
+                return LFSTransferReply(body: Data("{\"objects\":[\(object),\(object)]}".utf8))
+            }
+            return LFSTransferReply(body: data)
+        }
+        try await run(config: [("lfs.concurrenttransfers", "2")]) { client, store, _ in
+            try await queue(client, store).transfer([LFSBatchObject(oid: oid, size: 12)])
+            #expect(try Data(contentsOf: store.objectPathname(oid)) == data)
+            #expect(LFSTransferURLProtocol.requests.count == 2)
+        }
+    }
+
     @Test("requested OIDs omitted from a batch response are reported")
     func omittedOID() async throws {
         let omitted = String(repeating: "a", count: 64)
-        LFSTransferURLProtocol.install { _ in
-            LFSTransferReply(body: Data(#"{"objects":[{"oid":"\#(oid)","size":12}]}"#.utf8))
+        LFSTransferURLProtocol.install { request in
+            if request.url?.lastPathComponent == "batch" {
+                let object = #"{"oid":"\#(oid)","size":12,"actions":{"download":{"href":"https://example.com/object"}}}"#
+                return LFSTransferReply(body: Data("{\"objects\":[\(object)]}".utf8))
+            }
+            return LFSTransferReply(body: data)
         }
         try await run { client, store, _ in
             await #expect(throws: LFSClientError("[\(omitted)] The server did not return the requested OID.")) {
@@ -86,7 +126,7 @@ extension LFSTransferQueueTests {
                     LFSBatchObject(oid: oid, size: 12),
                     LFSBatchObject(oid: omitted, size: 12)])
             }
-            #expect(LFSTransferURLProtocol.requests.count == 1)
+            #expect(LFSTransferURLProtocol.requests.count == 2)
         }
     }
 

@@ -128,15 +128,29 @@ struct LFSTransferQueueTests {
         }
     }
 
-    @Test("no action silently skips an object for both directions", arguments: ["upload", "download"])
-    func noAction(direction: String) async throws {
+    @Test("no upload action silently skips an object already on the server")
+    func noUploadAction() async throws {
         LFSTransferURLProtocol.install { _ in
             LFSTransferReply(body: Data(#"{"objects":[{"oid":"\#(oid)","size":12}]}"#.utf8))
         }
         try await run { client, store, _ in
-            try await queue(client, store, LFSTransferDirection(rawValue: direction)!).transfer(
+            try await queue(client, store, .upload).transfer(
                 [LFSBatchObject(oid: oid, size: 12)])
             #expect(LFSTransferURLProtocol.requests.count == 1)
+        }
+    }
+
+    @Test("no download action reports that the object was not found")
+    func noDownloadAction() async throws {
+        LFSTransferURLProtocol.install { _ in
+            LFSTransferReply(body: Data(#"{"objects":[{"oid":"\#(oid)","size":12}]}"#.utf8))
+        }
+        try await run { client, store, _ in
+            await #expect(throws: LFSClientError("Object \(oid) not found on the server.")) {
+                try await queue(client, store).transfer([LFSBatchObject(oid: oid, size: 12)])
+            }
+            #expect(LFSTransferURLProtocol.requests.count == 1)
+            #expect(!FileManager.default.fileExists(atPath: store.objectPathname(oid).path))
         }
     }
 

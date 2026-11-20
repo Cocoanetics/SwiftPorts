@@ -10,7 +10,21 @@ import FoundationNetworking
 /// Why an LFS HTTP request failed, in git-lfs's words.
 public struct LFSClientError: Error, Equatable, CustomStringConvertible, Sendable {
     public let description: String
-    public init(_ description: String) { self.description = description }
+    let retryInTransferQueue: Bool
+
+    public init(_ description: String) {
+        self.description = description
+        retryInTransferQueue = true
+    }
+
+    init(_ description: String, retryInTransferQueue: Bool) {
+        self.description = description
+        self.retryInTransferQueue = retryInTransferQueue
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.description == rhs.description
+    }
 }
 
 /// Body of an authenticated LFS request. `.file` and `.stream` are not copied
