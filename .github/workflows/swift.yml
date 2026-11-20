@@ -114,31 +114,21 @@ jobs:
         # The hosted image can lag the selected Xcode's iOS runtime. The
         # download occasionally flakes, so retry before failing the job.
         run: |
-          set -o pipefail
+          set -euo pipefail
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          sudo xcodebuild -runFirstLaunch
+          SDK_VERSION=$(xcrun --sdk iphonesimulator --show-sdk-version)
           for i in 1 2 3; do
-            echo "::group::xcodebuild -downloadPlatform iOS (attempt $i)"
-            if xcodebuild -downloadPlatform iOS; then echo "::endgroup::"; exit 0; fi
+            echo "::group::Download iOS $SDK_VERSION (attempt $i)"
+            if xcodebuild -downloadPlatform iOS -buildVersion "$SDK_VERSION"; then echo "::endgroup::"; exit 0; fi
             echo "::endgroup::"
             echo "attempt $i failed; retrying in 20s"; sleep 20
           done
-          echo "::error::Could not download the iOS platform after 3 attempts"; exit 1
+          echo "::error::Could not download iOS $SDK_VERSION on image ${ImageVersion:-unknown} after 3 attempts"; exit 1
+      - name: Check simulator CI regression tests
+        run: python3 -B -m unittest discover -s Scripts -p 'test_ci_ios_simulator.py' -v
       - name: Test (iOS Simulator)
-        run: |
-          set -euo pipefail
-          # `name=iPhone 16,OS=latest` doesn't reliably match after a runtime
-          # download (no seeded device set), so resolve a concrete available iOS
-          # simulator on the newest runtime (the image also carries older ones the
-          # Xcode 27 SDK can't install to) — creating one if needed — and test
-          # against it by UDID.
-          UDID=$(xcrun simctl list devices available --json \
-            | python3 -c "import json,re,sys; d=json.load(sys.stdin)['devices']; ids=[x['udid'] for r,v in sorted(d.items(), key=lambda kv: [int(n) for n in re.findall(r'\\d+', kv[0])], reverse=True) if 'iOS' in r for x in v if x.get('isAvailable')]; print(ids[0] if ids else '')")
-          if [ -z "$UDID" ]; then
-            RT=$(xcrun simctl list runtimes iOS --json \
-              | python3 -c "import json,re,sys; r=sorted([x for x in json.load(sys.stdin)['runtimes'] if x.get('isAvailable')], key=lambda x: [int(n) for n in re.findall(r'\\d+', x['version'])], reverse=True); print(r[0]['identifier'])")
-            UDID=$(xcrun simctl create ci-iphone "iPhone 16" "$RT")
-          fi
-          echo "Testing on iOS simulator $UDID"
-          xcodebuild -scheme SwiftPorts-Package -destination "id=$UDID" test
+        run: python3 -B Scripts/ci-ios-simulator.py
 
   build-linux:
     # Linux: full build + test, parity with Apple platforms.
