@@ -22,7 +22,6 @@ public struct LsFilesOptions: Sendable {
             if all && !refs.isEmpty { throw LFSFailure("Cannot use --all with explicit reference") }
             if refs.first == "--all" { throw LFSFailure("Did you mean `git lfs ls-files --all --` ?") }
             if deleted && refs.count > 1 { throw LFSFailure("Cannot use --deleted with reference range") }
-            if deleted && all { throw LFSFailure("Cannot use --deleted with --all") }
 
             let scanner = GitScanner(client: client, filter: FilepathFilter(
                 include: Self.cleanPaths(include), exclude: Self.cleanPaths(exclude)))

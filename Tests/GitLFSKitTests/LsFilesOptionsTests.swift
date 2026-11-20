@@ -72,8 +72,10 @@ struct LsFilesOptionsTests {
             options.all = true
             #expect(try files(await options.lsFiles([], client: client)).map(\.oid)
                     == [Self.third.oid, Self.second.oid, Self.first.oid])
-            options.all = false
             options.deleted = true
+            #expect(try files(await options.lsFiles([], client: client)).map(\.oid)
+                    == [Self.third.oid, Self.second.oid, Self.first.oid])
+            options.all = false
             #expect(try files(await options.lsFiles([tip], client: client)).map(\.oid) == [Self.third.oid])
             try await client.remove(paths: ["asset"])
             _ = try await client.commit(message: "delete", author: nil, allowEmpty: false)
@@ -146,8 +148,6 @@ struct LsFilesOptionsTests {
             let all = try await options.lsFiles(["HEAD"], client: client)
             #expect(all.status == 2 && all.stderr == "Cannot use --all with explicit reference\n")
             options.deleted = true
-            let both = try await options.lsFiles([], client: client)
-            #expect(both.status == 2 && both.stderr == "Cannot use --deleted with --all\n")
             options.all = false
             let range = try await options.lsFiles(["A", "B"], client: client)
             #expect(range.status == 2 && range.stderr == "Cannot use --deleted with reference range\n")
