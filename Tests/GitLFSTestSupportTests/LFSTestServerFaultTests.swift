@@ -49,6 +49,22 @@ extension LFSTestServerTests {
         }
     }
 
+    @Test("a repeating server error answers later requests with the same JSON message")
+    func injectedRepeatingServerError() async throws {
+        try await LFSTestServer.withServer { server in
+            server.inject(.repeatingServerError)
+            for _ in 0..<2 {
+                let response = try await LFSWireClient.postBatch(
+                    server, operation: "download", objects: [(oid: "abc", size: 1)]
+                )
+                try expectFault(server, response: response, method: "POST", status: 500, fault: "500")
+                let message = try JSONDecoder().decode(ErrorEnvelope.self, from: response.body).message
+                #expect(message == "Server error")
+            }
+            #expect(server.requests().count == 2)
+        }
+    }
+
     @Test("an injected 5xx is on the wire and in the request log")
     func injectedServerError() async throws {
         try await LFSTestServer.withServer { server in
