@@ -33,9 +33,10 @@ struct LFSFilterTests {
         #expect(throws: (any Error).self) { try GitLFSKit.installFilter() }
 
         let observations = LFSFilterObservation()
+        let callbackScope = UUID().uuidString
         let probe = "lfs-callback-" + UUID().uuidString
         let factory: GitFilter.StreamFactory = { source, output in
-            guard observations.watches(source.gitDirectory) else { return nil }
+            guard Shell.env("FILTER_TEST_SCOPE") == callbackScope else { return nil }
             let stream = try GitLFSKit.stream(source, output)
             let enabled = stream != nil
             let context = try GitFilterOperationContext.capture()
@@ -65,17 +66,21 @@ struct LFSFilterTests {
             }
             return stream
         }
-        try GitFilters.register(name: probe, attributes: "filter=lfs", GitFilter(clean: factory, smudge: factory))
+        // Observe independently of the production driver's registration.
+        // The shell marker scopes this process-wide probe without comparing
+        // Windows paths whose short and long spellings may differ.
+        try GitFilters.register(
+            name: probe, attributes: "lfs-callback-probe", priority: GitFilters.defaultPriority + 1,
+            GitFilter(clean: factory, smudge: factory))
         defer { try? GitFilters.unregister(name: probe) }
 
         // Two independent shells and providers must survive the bridge.
         for token in ["first", "second"] {
             let isolated = IsolatedLFSHost()
-            observations.watch(isolated.root)
             defer { try? FileManager.default.removeItem(at: isolated.root) }
             var variables = isolated.variables
             variables.merge([
-                "FILTER_TEST_VALUE": token, "GIT_CONFIG_COUNT": "1",
+                "FILTER_TEST_SCOPE": callbackScope, "FILTER_TEST_VALUE": token, "GIT_CONFIG_COUNT": "1",
                 "GIT_CONFIG_KEY_0": "test.environment", "GIT_CONFIG_VALUE_0": token
             ]) { _, value in value }
             let shell = Shell(environment: Environment(variables: variables, workingDirectory: isolated.root.path))
@@ -117,7 +122,8 @@ struct LFSFilterTests {
             #expect(Shell.env("FILTER_TEST_VALUE") == token)
             return .userPassword(username: "git", password: token)
         })
-        try Data("*.lfs filter=lfs -text\n".utf8).write(to: made.directory.appendingPathComponent(".gitattributes"))
+        try Data("*.lfs filter=lfs lfs-callback-probe -text\n".utf8)
+            .write(to: made.directory.appendingPathComponent(".gitattributes"))
         try Data("payload\n".utf8).write(to: made.directory.appendingPathComponent("a.lfs"))
         try Data("other\n".utf8).write(to: made.directory.appendingPathComponent("b.txt"))
         try await client.add(paths: [".gitattributes", "a.lfs", "b.txt"])
