@@ -3,7 +3,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-final class LFSTransferURLProtocol: URLProtocol, @unchecked Sendable {
+final class LFSTransferURLProtocol: URLProtocol {
     typealias Handler = @Sendable (URLRequest) -> LFSTransferReply
     private static let state = TransferTestLock<(Handler, [URLRequest])?>(nil)
     private let loading = TransferTestLock<Task<Void, Never>?>(nil)
@@ -37,19 +37,28 @@ final class LFSTransferURLProtocol: URLProtocol, @unchecked Sendable {
             return
         }
         let reply = handler(request)
-        let task = Task { @Sendable [self] in
-                await reply.beforeResponse?()
-                guard !Task.isCancelled else { return }
-                let response = HTTPURLResponse(
-                    url: url, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: reply.headers)!
-                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-                await reply.beforeBody?()
-                guard !Task.isCancelled else { return }
-                if !reply.body.isEmpty { client?.urlProtocol(self, didLoad: reply.body) }
-                await reply.afterBody?()
-                guard !Task.isCancelled else { return }
-                if let failure = reply.failure { client?.urlProtocol(self, didFailWithError: failure) }
-                else { client?.urlProtocolDidFinishLoading(self) }
+        // FoundationNetworking makes URLProtocol's Sendable conformance unavailable.
+        // Keep the reference behind the test suite's unchecked, locked container.
+        let protocolReference = TransferTestLock(self)
+        let task = Task { @Sendable [protocolReference] in
+            await reply.beforeResponse?()
+            guard !Task.isCancelled else { return }
+            let response = HTTPURLResponse(
+                url: url, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: reply.headers)!
+            protocolReference.withLock {
+                $0.client?.urlProtocol($0, didReceive: response, cacheStoragePolicy: .notAllowed)
+            }
+            await reply.beforeBody?()
+            guard !Task.isCancelled else { return }
+            if !reply.body.isEmpty {
+                protocolReference.withLock { $0.client?.urlProtocol($0, didLoad: reply.body) }
+            }
+            await reply.afterBody?()
+            guard !Task.isCancelled else { return }
+            protocolReference.withLock {
+                if let failure = reply.failure { $0.client?.urlProtocol($0, didFailWithError: failure) }
+                else { $0.client?.urlProtocolDidFinishLoading($0) }
+            }
         }
         loading.withLock { $0 = task }
     }
