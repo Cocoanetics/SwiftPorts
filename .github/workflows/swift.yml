@@ -125,12 +125,28 @@ jobs:
           set -euo pipefail
           sudo xcodebuild -runFirstLaunch
           SDK_VERSION=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          runtime_available() {
+            python3 -B Scripts/ci-ios-simulator.py --check-runtime "$SDK_VERSION"
+          }
+          if runtime_available; then
+            echo "iOS $SDK_VERSION runtime is already available"
+            exit 0
+          fi
           for i in 1 2 3; do
             echo "::group::Download iOS $SDK_VERSION (attempt $i)"
-            if xcodebuild -downloadPlatform iOS -buildVersion "$SDK_VERSION"; then echo "::endgroup::"; exit 0; fi
+            if ! xcodebuild -downloadPlatform iOS -buildVersion "$SDK_VERSION"; then
+              echo "::warning::xcodebuild did not report a successful download"
+            fi
             echo "::endgroup::"
-            echo "attempt $i failed; retrying in 20s"; sleep 20
+            if runtime_available; then exit 0; fi
+            if [ "$i" -lt 3 ]; then
+              echo "attempt $i did not install iOS $SDK_VERSION; retrying in 20s"
+              sleep 20
+            fi
           done
+          xcrun simctl list runtimes
+          xcodebuild -showsdks
+          xcode-select -p
           echo "::error::Could not download iOS $SDK_VERSION on image ${ImageVersion:-unknown} after 3 attempts"; exit 1
       - name: Check simulator CI regression tests
         run: python3 -B -m unittest discover -s Scripts -p 'test_ci_ios_simulator.py' -v

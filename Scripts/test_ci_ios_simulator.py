@@ -41,6 +41,17 @@ class SimulatorTests(unittest.TestCase):
             with self.subTest(runtimes=runtimes), self.assertRaisesRegex(RuntimeError, "SDK 27.1"):
                 ci.select_runtime(runtimes, "27.1")
 
+    def test_available_runtime_accepts_an_installed_match(self):
+        runtimes = json.dumps({"runtimes": [runtime("27.2"), runtime("27.0")]})
+        with patch.object(ci, "run", return_value=runtimes), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(ci.available_runtime("27.0"),
+                             "com.apple.CoreSimulator.SimRuntime.iOS-27-0")
+
+    def test_available_runtime_rejects_a_missing_match(self):
+        runtimes = json.dumps({"runtimes": [runtime("27.2"), runtime("27.0", available=False)]})
+        with patch.object(ci, "run", return_value=runtimes), contextlib.redirect_stdout(io.StringIO()):
+            self.assertIsNone(ci.available_runtime("27.0"))
+
     def simulate(self, *, state="Shutdown", seeded=True, destinations=None, fail=None):
         def run(*command, **kwargs):
             if fail and fail in command:

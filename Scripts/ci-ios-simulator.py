@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import signal
 import subprocess
+import sys
 
 
 def run(*command, timeout=120, capture=False):
@@ -60,10 +61,21 @@ def select_runtime(runtimes, sdk):
     raise RuntimeError(f"No available iOS runtime matches selected SDK {sdk}")
 
 
+def available_runtime(sdk):
+    runtimes = json.loads(run("xcrun", "simctl", "list", "runtimes", "--json", capture=True))
+    try:
+        runtime = select_runtime(runtimes["runtimes"], sdk)
+    except RuntimeError:
+        return None
+    print(f"Found available iOS {sdk} runtime: {runtime}", flush=True)
+    return runtime
+
+
 def test():
     sdk = run("xcrun", "--sdk", "iphonesimulator", "--show-sdk-version", capture=True)
-    runtimes = json.loads(run("xcrun", "simctl", "list", "runtimes", "--json", capture=True))
-    runtime = select_runtime(runtimes["runtimes"], sdk)
+    runtime = available_runtime(sdk)
+    if runtime is None:
+        raise RuntimeError(f"No available iOS runtime matches selected SDK {sdk}")
     devices = json.loads(run("xcrun", "simctl", "list", "devices", "available", "--json", capture=True))
     device = next((device for device in devices["devices"].get(runtime, [])
                    if device.get("isAvailable") and device["name"].startswith("iPhone")), None)
@@ -111,4 +123,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--check-runtime":
+        raise SystemExit(0 if available_runtime(sys.argv[2]) else 1)
     raise SystemExit(main())
