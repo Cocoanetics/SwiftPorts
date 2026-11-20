@@ -1,30 +1,76 @@
 #!/usr/bin/env python3
 """Prepare an SDK-matched simulator and bound discovery, boot and test launch."""
 
+import codecs
 import json
 import os
 from pathlib import Path
 import re
+import selectors
 import signal
 import subprocess
 import sys
+import time
 
 
 SIMULATOR_BOOT_TIMEOUT = 300
 DESTINATION_DISCOVERY_TIMEOUT = 300
 PACKAGE_RESOLUTION_TIMEOUT = 1500
+TEST_SESSION_TIMEOUT = 1500
+TEST_ACTIVITY_TIMEOUT = 300
 
 
-def run(*command, timeout=120, capture=False):
+def wait_for_tests(process, command, timeout, activity_timeout):
+    """Stream test output, bounding both inactivity and the complete session."""
+    deadline = time.monotonic() + timeout
+    activity_deadline = time.monotonic() + activity_timeout
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    pending = ""
+    # Swift Testing and XCTest progress, rather than generic Xcode diagnostics.
+    activity = re.compile(r"(?:^|[◇✔✘] )(?:Test|Suite) .+ (?:started|passed|failed)\b"
+                          r"|^Test (?:Case|Suite) '")
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                raise subprocess.TimeoutExpired(command, timeout)
+            if now >= activity_deadline:
+                raise subprocess.TimeoutExpired(command, activity_timeout)
+            if not selector.select(min(deadline, activity_deadline) - now):
+                continue
+            chunk = os.read(process.stdout.fileno(), 65536)
+            output = decoder.decode(chunk, final=not chunk)
+            print(output, end="", flush=True)
+            pending += output
+            lines = pending.split("\n")
+            pending = lines.pop()
+            if any(activity.search(line) for line in lines):
+                activity_deadline = time.monotonic() + activity_timeout
+            if not chunk:
+                # EOF can precede process exit; keep the remaining wait bounded.
+                try:
+                    process.wait(timeout=max(0, min(deadline, activity_deadline) - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    limit = timeout if deadline <= activity_deadline else activity_timeout
+                    raise subprocess.TimeoutExpired(command, limit)
+                return
+
+
+def run(*command, timeout=120, capture=False, test_activity_timeout=None):
     print("+ " + " ".join(command), flush=True)
     process = subprocess.Popen(
         command, start_new_session=True, text=True,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.STDOUT if capture else None,
+        stdout=subprocess.PIPE if capture or test_activity_timeout else None,
+        stderr=subprocess.STDOUT if capture or test_activity_timeout else None,
     )
     try:
-        output, _ = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
+        if test_activity_timeout:
+            wait_for_tests(process, command, timeout, test_activity_timeout)
+            output = ""
+        else:
+            output, _ = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
         # Include child test runners, which otherwise survive xcodebuild.
         try:
             os.killpg(process.pid, signal.SIGTERM)
@@ -41,7 +87,11 @@ def run(*command, timeout=120, capture=False):
         output, _ = process.communicate()
         if output:
             print(output, flush=True)
-        raise RuntimeError(f"Timed out after {timeout}s: {' '.join(command)}")
+        reason = " without test activity" if error.timeout == test_activity_timeout else ""
+        raise RuntimeError(f"Timed out after {error.timeout}s{reason}: {' '.join(command)}")
+    finally:
+        if process.stdout:
+            process.stdout.close()
     if process.returncode:
         if output:
             print(output, flush=True)
@@ -109,10 +159,11 @@ def test():
         raise RuntimeError(f"SDK {sdk} simulator {udid} is absent from eligible scheme destinations")
     destination = ("-destination", f"platform=iOS Simulator,id={udid}", "-destination-timeout", "60")
     run(*common, *destination, "build-for-testing", timeout=1500)
-    # A separate test phase bounds the zero-tests/launch hang without charging
-    # compilation against that limit. Per-test timeouts cannot catch launch hangs.
+    # Bound silent launch/stalls to five minutes, while active suites can run
+    # longer. Keep a separate overall cap even if tests continually make progress.
     run(*common, *destination, "-parallel-testing-enabled", "NO",
-        "test-without-building", timeout=300)
+        "test-without-building", timeout=TEST_SESSION_TIMEOUT,
+        test_activity_timeout=TEST_ACTIVITY_TIMEOUT)
 
 
 def main():
