@@ -22,21 +22,29 @@ struct LFSSamePathOracle {
     let globalConfig: URL
     let systemConfig: URL
 
-    /// Whether `git lfs version` runs. Oracle suites skip otherwise.
+    /// Whether the pinned git-lfs 3.7.1 reference is the `git lfs` on `PATH`.
     static let isAvailable: Bool = {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git", "lfs", "version"]
-        process.standardOutput = FileHandle.nullDevice
+        let out = Pipe()
+        process.standardOutput = out
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
-            return process.terminationStatus == 0
+            guard process.terminationStatus == 0 else { return false }
+            return isReferenceRelease(String(decoding: data, as: UTF8.self))
         } catch {
             return false
         }
     }()
+
+    /// The raw env oracle's rule: the first token of `git lfs version` is `git-lfs/3.7.1`.
+    static func isReferenceRelease(_ output: String) -> Bool {
+        output.split(whereSeparator: { $0.isWhitespace }).first == "git-lfs/3.7.1"
+    }
 
     init() throws {
         root = FileManager.default.temporaryDirectory

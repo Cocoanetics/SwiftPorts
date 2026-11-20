@@ -151,8 +151,10 @@ one history walk of the remaining commits, and deduplicates by blob OID.
 `--all` (`scanAll`), `--deleted` (defaulting to `HEAD`), or the `HEAD` tree.
 `--all` wins over `--deleted`. An explicit ref skips the index and scans that
 tree. Two arguments `A B` include `B` and exclude `A`. A single argument
-`A..B` is that tree name, not a range. `--all` with a ref, `--deleted` with
-two refs, and a bare `--all` after `--` fail with status 2. Name
+`A..B` is that tree name, not a range. A name that does not resolve is
+reported as git ls-tree's `Not a valid object name`. A resolved ref whose
+blob is later missing keeps that scan error. `--all` with a ref, `--deleted`
+with two refs, and a bare `--all` after `--` fail with status 2. Name
 deduplication is off for `--all` and for a two-ref range, and on otherwise.
 Checkout is whether the worktree file at the repository root, after following
 symlinks, has the pointer's size. `LocalStore` answers only the debug and
@@ -167,8 +169,8 @@ isolated `HOME`, `XDG_CONFIG_HOME`, `GIT_CONFIG_GLOBAL`, and
 the index, and worktree metadata between the two reads. Stdout, stderr, and
 status match exactly: nothing is sorted, rewritten, or reformatted. The only
 normalization replaces a `git-lfs/<digits…>` line and a `git version` line,
-and only when a command prints one. The suite skips when `git lfs version`
-fails. It does not call `LFSCommandFixture.compare`.
+and only when a command prints one. The suite runs only when the first token
+of `git lfs version` is `git-lfs/3.7.1`. It does not call `LFSCommandFixture.compare`.
 
 ## Environment report (`git lfs env`, #207)
 
@@ -340,4 +342,5 @@ the assertion through #187's batch client/server remains open for that work.
 - `GitCommandLFSLsFilesOracleTests` (macOS / Linux) — `ls-files` stdout, stderr,
   and status against system git-lfs on one repository
   (`Support/LFSSamePathOracle.swift`). Only a `git-lfs/` version line and a
-  `git version` line are normalized. Skipped when `git lfs version` fails.
+  `git version` line are normalized. Skipped unless `git lfs version` starts
+  with `git-lfs/3.7.1`.

@@ -54,15 +54,22 @@ public struct LsFilesOptions: Sendable {
                 } else if refs.isEmpty, try await !client.canResolveRef("HEAD") {
                     pointers = [] // The unborn HEAD's empty tree.
                 } else {
-                    pointers = try await scanner.scanTree(refs.first ?? "HEAD")
+                    let ref = refs.first ?? "HEAD"
+                    // Classify here. A later missing blob also says "not found",
+                    // and that must stay the scan error rather than a fake ref.
+                    guard try await client.canResolveRef(ref) else {
+                        throw LFSFailure(Self.unresolvedTree(ref))
+                    }
+                    pointers = try await scanner.scanTree(ref)
                 }
                 try await render(pointers, repo: repo, store: store,
                                  deduplicate: !all && refs.count < 2,
                                  seen: &seen, items: &items, output: &result.stdout)
+            } catch let failure as LFSFailure {
+                throw failure
             } catch {
                 let kind = all ? "history" : "tree"
-                let ref = (!all && !deleted && refs.count < 2) ? (refs.first ?? "HEAD") : nil
-                throw LFSFailure(Self.scanFailure(kind, error: error, ref: ref))
+                throw LFSFailure("Could not scan for Git LFS \(kind): \(error.localizedDescription)")
             }
             if json {
                 let files = items.isEmpty ? "null" : "[\n" + items.map(\.json).joined(separator: ",\n") + "\n ]"
@@ -80,21 +87,10 @@ public struct LsFilesOptions: Sendable {
 
     /// git-lfs wraps `git ls-tree`'s stderr. That text already ends in a newline,
     /// and `commands.Error` adds another, so the message keeps one trailing newline
-    /// for ``LFSFailure`` to finish.
-    private static func scanFailure(_ kind: String, error: Error, ref: String?) -> String {
-        let detail: String
-        if let ref, isUnresolvedRevision(error) {
-            detail = "error in `git ls-tree`: exit status 128 fatal: Not a valid object name \(ref)\n"
-        } else {
-            detail = error.localizedDescription
-        }
-        return "Could not scan for Git LFS \(kind): \(detail)"
-    }
-
-    private static func isUnresolvedRevision(_ error: Error) -> Bool {
-        let text = error.localizedDescription.lowercased()
-        return text.contains("not found") || text.contains("revspec") || text.contains("failed to parse")
-            || text.contains("invalid pattern") || text.contains("not valid")
+    /// for ``LFSFailure`` to finish. Only a failed rev-parse uses this text.
+    private static func unresolvedTree(_ ref: String) -> String {
+        "Could not scan for Git LFS tree: error in `git ls-tree`: "
+            + "exit status 128 fatal: Not a valid object name \(ref)\n"
     }
 
     /// `tools.CleanPaths`: trim whitespace, then a single trailing separator.

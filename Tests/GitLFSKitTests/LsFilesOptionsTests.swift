@@ -191,6 +191,18 @@ struct LsFilesOptionsTests {
             let literalAll = try await options.lsFiles(["--all"], client: client)
             #expect(literalAll.status == 2 && literalAll.stderr == "Did you mean `git lfs ls-files --all --` ?\n")
         }
+        try await withRepo { dir, client in
+            try write(Self.first, in: dir)
+            try await commit(client)
+            let sha = try #require((try await client.lsTree(recursive: true)).first { $0.kind == .blob }?.sha)
+            let object = dir.appendingPathComponent(".git/objects/\(sha.prefix(2))/\(sha.dropFirst(2))")
+            try FileManager.default.removeItem(at: object)
+            // HEAD still resolves. The missing blob must not be reported as a bad ref.
+            let missingBlob = try await LsFilesOptions().lsFiles(["HEAD"], client: client)
+            #expect(missingBlob.status == 2)
+            #expect(missingBlob.stderr.hasPrefix("Could not scan for Git LFS tree: "))
+            #expect(!missingBlob.stderr.contains("Not a valid object name"))
+        }
         let host = IsolatedLFSHost()
         defer { try? FileManager.default.removeItem(at: host.root) }
         try await host.run {

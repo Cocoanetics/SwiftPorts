@@ -3,7 +3,8 @@ import Foundation
 import Testing
 import SwiftGit
 
-@Suite("git lfs ls-files same-path oracle", .enabled(if: LFSSamePathOracle.isAvailable, "git-lfs is not on PATH"))
+@Suite("git lfs ls-files same-path oracle",
+       .enabled(if: LFSSamePathOracle.isAvailable, "git-lfs 3.7.1 is not on PATH"))
 struct GitCommandLFSLsFilesOracleTests {
     @Test func versionLinesAreTheOnlyNormalization() {
         let json = "{\n \"files\": null\n}\n"
@@ -11,6 +12,9 @@ struct GitCommandLFSLsFilesOracleTests {
         let versions = "git-lfs/3.7.1 (GitHub; darwin arm64)\n\(PortVersion.gitLine)\ngit version 2.54.0\n"
             + "git-lfs/not-a-version\n"
         #expect(LFSSamePathOracle.normalize(versions) == "<version>\n<version>\n<version>\ngit-lfs/not-a-version\n")
+        #expect(LFSSamePathOracle.isReferenceRelease("git-lfs/3.7.1 (GitHub; darwin arm64)\n"))
+        #expect(!LFSSamePathOracle.isReferenceRelease("git-lfs/3.6.1 (GitHub; darwin arm64)\n"))
+        #expect(!LFSSamePathOracle.isReferenceRelease("git lfs version 3.7.1\n"))
     }
 
     @Test func flagsPrecedenceAndNames() async throws {
