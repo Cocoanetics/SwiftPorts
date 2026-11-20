@@ -31,13 +31,18 @@ extension LFSTransferQueue {
             try? handle.close()
             throw error
         }
+        let progress = report(object)
+        let sent = LFSSentBytes()
         let result: LFSTransferHTTPResult
         do {
             result = try await client.transfer(
                 request, body: .file(file), operation: direction.rawValue, remote: remote,
                 authenticated: object.authenticated,
                 accessURL: request.url?.absoluteString.components(separatedBy: object.oid).first,
-                stream: LFSTransferStream(progress: report(object), success: success))
+                stream: LFSTransferStream(progress: { total, delta in
+                    sent.record(total)
+                    progress(total, delta)
+                }, success: success))
         } catch {
             try Task.checkCancellation()
             throw LFSTransferError(message: String(describing: error))
@@ -51,6 +56,7 @@ extension LFSTransferQueue {
         guard result.accepted else {
             throw LFSTransferError(result, url: request.url, now: environment.now())
         }
+        if sent.total < object.size { progress(object.size, object.size - sent.total) }
         try await verify(object)
     }
 }
