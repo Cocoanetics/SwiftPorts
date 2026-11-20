@@ -16,6 +16,14 @@ struct LFSConfiguration: Sendable {
 
     func getAll(_ key: String) -> [String] { values[Self.fold(key)] ?? [] }
 
+    /// `strconv.Atoi`, without git's size suffixes or whitespace trimming.
+    func int(_ key: String, fallback: Int) -> Int {
+        guard let value = get(key), !value.isEmpty else { return fallback }
+        let digits = value.first == "+" || value.first == "-" ? value.dropFirst() : value[...]
+        guard !digits.isEmpty, digits.utf8.allSatisfy({ (48...57).contains($0) }) else { return fallback }
+        return Int(value) ?? fallback
+    }
+
     /// Every entry in read order (`.lfsconfig`, then git config, lowest level first).
     var entries: [(key: String, value: String)] { sequence }
 

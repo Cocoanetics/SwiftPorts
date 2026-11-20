@@ -337,7 +337,7 @@ enum LFSBatchEncoding {
 
 /// Compact JSON with an explicit key order. A value written after ``key``
 /// is not given its own comma.
-private struct JSONText {
+struct JSONText {
     private var text = ""
     private var atStart: [Bool] = []
     private var afterKey = false
