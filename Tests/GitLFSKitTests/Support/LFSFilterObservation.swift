@@ -6,15 +6,15 @@ final class LFSFilterObservation: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [(GitFilterDirection, Bool)] = []
     private var saved: GitClient?
-    private var roots: [String] = []
+    private var roots: [[String]] = []
 
     func watch(_ root: URL) {
-        lock.withLock { roots.append(root.standardizedFileURL.path) }
+        lock.withLock { roots.append(root.standardizedFileURL.pathComponents) }
     }
 
     func watches(_ directory: URL) -> Bool {
-        let path = directory.standardizedFileURL.path
-        return lock.withLock { roots.contains { path == $0 || path.hasPrefix($0 + "/") } }
+        let components = directory.standardizedFileURL.pathComponents
+        return lock.withLock { roots.contains { components.starts(with: $0) } }
     }
 
     func record(_ direction: GitFilterDirection, enabled: Bool, client: GitClient) {
