@@ -28,7 +28,7 @@ public struct GitScanner: Sendable {
     ) async throws -> [WrappedPointer] {
         let entries = try await client.diffIndex(ref: ref, cached: true)
         var result: [WrappedPointer] = []
-        var emitted = Set<String>()
+        var emitted = Set<[UInt8]>()
         for entry in entries {
             // Absent/unmerged sides have mode zero; gitlinks are not blobs.
             guard entry.newMode != 0, entry.newMode != 0o160000,
@@ -36,13 +36,13 @@ public struct GitScanner: Sendable {
                     entry.newOID, name: entry.destinationPath,
                     sourceName: entry.sourcePath, status: String(entry.status)) else { continue }
             result.append(pointer)
-            emitted.insert(entry.destinationPath)
+            emitted.insert(Array(entry.destinationPath.utf8))
         }
         // diffIndex already validated the ref and only accepts a missing
         // HEAD when it is unborn. Other repository/revision errors propagate.
         if ref == "HEAD", try await client.canResolveRef(ref) == false { return result }
         try await walkTree(ref) { oid, name in
-            guard !emitted.contains(name) else { return }
+            guard !emitted.contains(Array(name.utf8)) else { return }
             if let pointer = try await readPointer(oid, name: name) { result.append(pointer) }
         }
         return result
@@ -55,8 +55,9 @@ public struct GitScanner: Sendable {
     }
 
     /// One history walk from all refs/ tips and HEAD (including detached HEAD).
-    /// Direct tree and blob refs are walked in ref order around that history
-    /// walk, as `git rev-list --objects --all` does for non-commit roots.
+    /// Direct tree and blob refs are walked first, in ref order, as
+    /// `git rev-list --objects --all` visits non-commit roots before commit
+    /// trees. All commit roots then share one history walk.
     public func scanAll() async throws -> [WrappedPointer] {
         var targets = try await client.references(matching: nil).map(\.targetSHA)
         if try await client.canResolveRef("HEAD") {
@@ -69,7 +70,6 @@ public struct GitScanner: Sendable {
         }
 
         enum Root {
-            case history
             case tree(String)
             case blob(String)
         }
@@ -85,7 +85,6 @@ public struct GitScanner: Sendable {
             switch metadata.kind {
             case .commit:
                 history.append(metadata.sha)
-                if history.count == 1 { roots.append(.history) }
             case .tree:
                 roots.append(.tree(metadata.sha))
             case .blob:
@@ -99,10 +98,6 @@ public struct GitScanner: Sendable {
         var result: [WrappedPointer] = []
         for root in roots {
             switch root {
-            case .history:
-                let scan = try await scanRefs(include: history, exclude: [], seen: seen)
-                result += scan.pointers
-                seen = scan.seen
             case .tree(let oid):
                 try await walkTree(oid) { oid, name in
                     guard seen.insert(oid).inserted else { return }
@@ -112,6 +107,10 @@ public struct GitScanner: Sendable {
                 guard seen.insert(oid).inserted else { continue }
                 if let pointer = try await readPointer(oid, name: "") { result.append(pointer) }
             }
+        }
+        if !history.isEmpty {
+            let scan = try await scanRefs(include: history, exclude: [], seen: seen)
+            result += scan.pointers
         }
         return result
     }
@@ -154,11 +153,11 @@ public struct GitScanner: Sendable {
         _ oid: String, name: String, sourceName: String = "", status: String = ""
     ) async throws -> WrappedPointer? {
         guard filter.allows(name) else { return nil }
-        let metadata = try await client.objectMetadata(of: oid)
-        guard metadata.kind == .blob, metadata.size < Pointer.blobSizeCutoff else { return nil }
+        guard let size = try await client.blobSize(ofOID: oid),
+              size < Pointer.blobSizeCutoff else { return nil }
         let data = try await client.catFileBlob(oid)
         do {
-            return WrappedPointer(pointer: try Pointer.decode(data), oid: metadata.sha,
+            return WrappedPointer(pointer: try Pointer.decode(data), oid: oid,
                                   name: name, sourceName: sourceName, status: status)
         } catch is PointerError {
             return nil
