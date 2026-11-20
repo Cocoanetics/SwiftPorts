@@ -81,12 +81,16 @@ class SimulatorTests(unittest.TestCase):
         commands = [call.args for call in run.call_args_list]
         boot = commands.index(("xcrun", "simctl", "boot", UDID))
         bootstatus = commands.index(("xcrun", "simctl", "bootstatus", UDID, "-b"))
+        resolution = next(i for i, command in enumerate(commands)
+                          if "-resolvePackageDependencies" in command)
         discovery = next(i for i, command in enumerate(commands) if "-showdestinations" in command)
         build = next(i for i, command in enumerate(commands) if "build-for-testing" in command)
         self.assertLess(boot, bootstatus)
-        self.assertLess(bootstatus, discovery)
+        self.assertLess(bootstatus, resolution)
+        self.assertLess(resolution, discovery)
         self.assertLess(discovery, build)
         self.assertEqual(run.call_args_list[bootstatus].kwargs["timeout"], 300)
+        self.assertEqual(run.call_args_list[resolution].kwargs["timeout"], 1500)
         self.assertEqual(run.call_args_list[discovery].kwargs["timeout"], 300)
         test = run.call_args_list[-1]
         self.assertIn("test-without-building", test.args)
@@ -113,7 +117,8 @@ class SimulatorTests(unittest.TestCase):
                 self.assertFalse(any("build-for-testing" in call.args for call in run.call_args_list))
 
     def test_failure_reports_image_and_diagnostics(self):
-        for fail in ("bootstatus", "-showdestinations", "test-without-building"):
+        for fail in ("bootstatus", "-resolvePackageDependencies",
+                     "-showdestinations", "test-without-building"):
             output = io.StringIO()
             with self.simulate(fail=fail) as run, patch.dict(os.environ, {"ImageVersion": "20261119.0378.1"}):
                 with contextlib.redirect_stdout(output):

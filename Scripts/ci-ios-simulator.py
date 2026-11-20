@@ -12,6 +12,7 @@ import sys
 
 SIMULATOR_BOOT_TIMEOUT = 300
 DESTINATION_DISCOVERY_TIMEOUT = 300
+PACKAGE_RESOLUTION_TIMEOUT = 1500
 
 
 def run(*command, timeout=120, capture=False):
@@ -95,6 +96,9 @@ def test():
     build_root = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "SwiftPorts-iOS"
     common = ("xcodebuild", "-scheme", "SwiftPorts-Package",
               "-derivedDataPath", str(build_root / "DerivedData"))
+    # A clean runner resolves and downloads the full package graph here. Keep
+    # that work out of the shorter destination-discovery budget.
+    run(*common, "-resolvePackageDependencies", timeout=PACKAGE_RESOLUTION_TIMEOUT)
     destinations = run(
         *common, "-showdestinations", timeout=DESTINATION_DISCOVERY_TIMEOUT, capture=True,
     )
