@@ -56,30 +56,40 @@ struct LFSConfiguration: Sendable {
     /// `NewIn`: a `.lfsconfig` git can't read prints
     /// `Error reading `git config`: …` and, as `Sources` does, drops both
     /// sources. A missing file is not an error.
-    static func load(_ client: GitClient) async -> LFSConfiguration {
+    static func load(_ client: GitClient, showWarnings: Bool = false) async -> LFSConfiguration {
         do {
-            return try await reading(client)
+            return try await reading(client, showWarnings: showWarnings)
         } catch {
             LFSStandardError.write("Error reading `git config`: \(error)\n")
             return LFSConfiguration()
         }
     }
 
-    private static func reading(_ client: GitClient) async throws -> LFSConfiguration {
+    private static func reading(_ client: GitClient, showWarnings: Bool) async throws -> LFSConfiguration {
         var configuration = LFSConfiguration()
+        var ignored: [String] = []
         if let data = try await lfsconfig(client) {
-            let parsed = try LFSConfigFile.parse(data)
-            configuration.ingest(parsed, onlySafe: true)
+            let parsed = try LFSConfigFile.parse(data).map { "\($0.key)=\($0.value)" }
+            ignored = configuration.ingest(parseLines(parsed), onlySafe: true, showWarnings: showWarnings)
         }
         let lines = try await client.configLines()
-        let git = lines.map { parseLine($0) }
-        configuration.ingest(git, onlySafe: false)
+        let git = parseLines(lines)
+        _ = configuration.ingest(git, onlySafe: false, showWarnings: showWarnings)
+        if !ignored.isEmpty {
+            var warning = "warning: These unsafe '.lfsconfig' keys were ignored:\n\n"
+            for key in ignored { warning += "  \(key)\n" }
+            LFSStandardError.write(warning)
+        }
         return configuration
     }
 
-    private static func parseLine(_ line: String) -> (key: String, value: String) {
-        guard let equals = line.firstIndex(of: "=") else { return (line, "") }
-        return (String(line[..<equals]), String(line[line.index(after: equals)...]))
+    /// git-lfs scans `git config --list` by newline, ignoring rows without
+    /// an equals sign. Embedded newlines therefore truncate a value.
+    private static func parseLines(_ lines: [String]) -> [(key: String, value: String)] {
+        lines.flatMap { $0.components(separatedBy: "\n") }.compactMap { line in
+            guard let equals = line.firstIndex(of: "=") else { return nil }
+            return (String(line[..<equals]), String(line[line.index(after: equals)...]))
+        }
     }
 
     /// `.lfsconfig` at the work tree root, else the index, else `HEAD`
@@ -114,10 +124,20 @@ struct LFSConfiguration: Sendable {
         return try? await client.catFileBlob(entry.oid)
     }
 
-    private mutating func ingest(_ rows: [(key: String, value: String)], onlySafe: Bool) {
+    private mutating func ingest(
+        _ rows: [(key: String, value: String)], onlySafe: Bool, showWarnings: Bool
+    ) -> [String] {
         var ignored: [String] = []
+        var seen: Set<String> = []
         for row in rows {
             let key = Self.fold(row.key)
+            if showWarnings, !seen.insert(key).inserted, key.hasPrefix("lfs."),
+               let previous = get(key), previous != row.value {
+                let values = getAll(key).map(\.goQuoted).joined(separator: " ")
+                LFSStandardError.write("warning: These `git config` values clash:\n"
+                    + "  git config \(key.goQuoted) = [\(values)]\n"
+                    + "  git config \(key.goQuoted) = \(row.value.goQuoted)\n")
+            }
             if onlySafe && !Self.allowed(key) {
                 ignored.append(key)
                 continue
@@ -126,10 +146,7 @@ struct LFSConfiguration: Sendable {
             values[key, default: []].append(row.value)
             noteRemote(key)
         }
-        guard onlySafe, !ignored.isEmpty else { return }
-        var warning = "warning: These unsafe '.lfsconfig' keys were ignored:\n\n"
-        for key in ignored { warning += "  \(key)\n" }
-        LFSStandardError.write(warning)
+        return ignored
     }
 
     /// `readGitConfig`'s allowlist (`git_fetcher.go`).

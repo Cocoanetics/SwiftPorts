@@ -6,7 +6,7 @@ struct LFSCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "lfs",
         abstract: "Git Large File Storage.",
-        subcommands: [LFSVersionCommand.self, LFSPointerCommand.self, LFSInstall.self,
+        subcommands: [LFSVersionCommand.self, LFSEnvCommand.self, LFSPointerCommand.self, LFSInstall.self,
                       LFSUninstall.self, LFSTrack.self, LFSUntrack.self, LFSLsFiles.self],
         helpNames: [])
 
