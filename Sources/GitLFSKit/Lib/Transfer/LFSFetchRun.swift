@@ -16,7 +16,6 @@ struct LFSFetchRun {
     let watcher: LFSFetchWatcher
     var result = LFSCommandResult()
 
-    // swiftlint:disable:next function_parameter_count
     init(
         client: LFSClient, git: GitClient, store: LocalStore, remote: String,
         dryRun: Bool, json: Bool, terminal: Bool, environment: LFSTransferEnvironment

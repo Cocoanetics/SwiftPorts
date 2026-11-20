@@ -66,7 +66,7 @@ public final class LFSTransferQueue: Sendable {
         var failures: [LFSTransferFailure] = []
         var unsupported = false
         var authenticated = false
-        batches: while !pending.isEmpty {
+        while !pending.isEmpty {
             try Task.checkCancellation()
             let now = environment.now()
             var slice: [LFSTransferPending] = []
@@ -104,52 +104,8 @@ public final class LFSTransferQueue: Sendable {
                 pending = retries + pending
                 continue
             }
-            let originals = Dictionary(uniqueKeysWithValues: slice.map { ($0.object.oid, $0) })
-            if direction == .upload {
-                for object in response.objects where !object.actions.isEmpty && missing.contains(object.oid) {
-                    let name = originals[object.oid]?.object.name ?? object.name
-                    failures.append(.malformed(name: name, oid: object.oid, missing: true))
-                    break batches
-                }
-            }
-            meter?.start()
-            var returned: Set<String> = []
-            var jobs: [LFSTransferPending] = []
-            for var object in response.objects {
-                guard var item = originals[object.oid] else {
-                    failures.append(.message("[\(object.oid)] The server returned an unknown OID."))
-                    meter?.skip(object.size)
-                    continue
-                }
-                guard returned.insert(object.oid).inserted else { continue }
-                if let error = object.errorText {
-                    failures.append(.message(error))
-                    meter?.skip(object.size)
-                    continue
-                }
-                object.name = item.object.name
-                object.path = item.object.path
-                item.object = object
-                if object.action(named: direction.rawValue) != nil {
-                    meter?.startTransfer(object.name)
-                    jobs.append(item)
-                } else {
-                    meter?.skip(object.size)
-                    completion?(.skipped(object))
-                }
-            }
-            for item in slice where !returned.contains(item.object.oid) {
-                failures.append(.message("[\(item.object.oid)] The server did not return the requested OID."))
-            }
-            jobs.sort { $0.object.size > $1.object.size }
-            if direction == .upload {
-                var present: [LFSTransferPending] = []
-                for item in jobs {
-                    if let failure = await Self.malformed(item.object) { failures.append(failure) }
-                    else { present.append(item) }
-                }
-                jobs = present
-            }
+            guard let jobs = await jobs(for: response, slice: slice, missing: missing, failures: &failures)
+            else { break }
             if dryRun {
                 for item in jobs { finished(item.object) }
                 continue
@@ -174,6 +130,61 @@ public final class LFSTransferQueue: Sendable {
         meter?.flush()
         if unsupported { environment.stderr(Self.contentTypeInfo) }
         return failures
+    }
+
+    /// The response's objects that have an action, in transfer order. An
+    /// object without one is done; nil stops the queue on a missing upload.
+    private func jobs(
+        for response: LFSBatchResponse, slice: [LFSTransferPending], missing: Set<String>,
+        failures: inout [LFSTransferFailure]
+    ) async -> [LFSTransferPending]? {
+        let originals = Dictionary(uniqueKeysWithValues: slice.map { ($0.object.oid, $0) })
+        if direction == .upload {
+            for object in response.objects where !object.actions.isEmpty && missing.contains(object.oid) {
+                let name = originals[object.oid]?.object.name ?? object.name
+                failures.append(.malformed(name: name, oid: object.oid, missing: true))
+                return nil
+            }
+        }
+        meter?.start()
+        var returned: Set<String> = []
+        var jobs: [LFSTransferPending] = []
+        for var object in response.objects {
+            guard var item = originals[object.oid] else {
+                failures.append(.message("[\(object.oid)] The server returned an unknown OID."))
+                meter?.skip(object.size)
+                continue
+            }
+            guard returned.insert(object.oid).inserted else { continue }
+            if let error = object.errorText {
+                failures.append(.message(error))
+                meter?.skip(object.size)
+                continue
+            }
+            object.name = item.object.name
+            object.path = item.object.path
+            item.object = object
+            if object.action(named: direction.rawValue) != nil {
+                meter?.startTransfer(object.name)
+                jobs.append(item)
+            } else {
+                meter?.skip(object.size)
+                completion?(.skipped(object))
+            }
+        }
+        for item in slice where !returned.contains(item.object.oid) {
+            failures.append(.message("[\(item.object.oid)] The server did not return the requested OID."))
+        }
+        jobs.sort { $0.object.size > $1.object.size }
+        if direction == .upload {
+            var present: [LFSTransferPending] = []
+            for item in jobs {
+                if let failure = await Self.malformed(item.object) { failures.append(failure) }
+                else { present.append(item) }
+            }
+            jobs = present
+        }
+        return jobs
     }
 
     private func finished(_ object: LFSBatchObject) {
