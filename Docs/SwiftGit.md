@@ -42,6 +42,7 @@ let client = GitClient(
 | `currentBranch()` | `git rev-parse --abbrev-ref HEAD` |
 | `upstreamBranch(of:)` | `git rev-parse --abbrev-ref <local>@{upstream}` |
 | `localBranches()` | `git branch` |
+| `references(matching:)` → `[ReferenceEntry]` | refs under `refs/` (branches, remotes, tags, notes, stash). Not the `HEAD` pseudoref |
 | `tagList(pattern:)` / `tagDetails(pattern:)` | `git tag [-l <pattern>]` / `-n` |
 | `resolveOID(_:)` | `git rev-parse <spec>` |
 | `gitDir()` / `toplevel()` / `isInsideWorkTree()` | `git rev-parse --git-dir / --show-toplevel / --is-inside-work-tree` |
