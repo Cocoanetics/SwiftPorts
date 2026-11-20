@@ -1,5 +1,6 @@
 import Foundation
 import Crypto
+import CGitKit
 @_spi(GitLFSKit) import SwiftGit
 
 /// Shared pointer decoding and full content identity (`lfs.PointerScanner`).
@@ -25,9 +26,25 @@ struct PointerScanner: Sendable {
             let hash = pointer?.oid ?? Self.sha256(data)
             return BlobScanResult(oid: oid, pointer: pointer, contentsSHA256: hash)
         }
+        guard let size else {
+            let data = try await client.catFileBlob(oid)
+            return BlobScanResult(oid: oid, pointer: nil, contentsSHA256: Self.sha256(data))
+        }
 
         var hasher = SHA256()
-        try await client.forEachBlobChunk(ofOID: oid) { hasher.update(bufferPointer: $0) }
+        var objectHasher = Insecure.SHA1()
+        objectHasher.update(data: Data("blob \(size)\0".utf8))
+        try await client.forEachBlobChunk(ofOID: oid) {
+            hasher.update(bufferPointer: $0)
+            objectHasher.update(bufferPointer: $0)
+        }
+        let actualOID = Self.hexadecimal(objectHasher.finalize())
+        guard actualOID.caseInsensitiveCompare(oid) == .orderedSame else {
+            throw Libgit2Error(
+                code: GIT_EMISMATCH.rawValue,
+                klass: Int32(GIT_ERROR_ODB.rawValue),
+                message: "object hash mismatch - expected \(oid) but got \(actualOID)")
+        }
         return BlobScanResult(oid: oid, pointer: nil,
                               contentsSHA256: Self.hexadecimal(hasher.finalize()))
     }

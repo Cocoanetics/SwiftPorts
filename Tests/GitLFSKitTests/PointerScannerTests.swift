@@ -146,6 +146,36 @@ struct PointerScannerTests {
         }
     }
 
+    @Test("streamed loose blobs must match their Git object IDs")
+    func streamedLooseBlobObjectIDMismatch() async throws {
+        try await withRepo { _, dir, client in
+            let scanner = PointerScanner(client: client)
+            let original = try await blob(Data(repeating: 0x80, count: 4096), client: client)
+            let replacement = try await blob(Data(repeating: 0x81, count: 4096), client: client)
+            let objects = dir.appendingPathComponent(".git/objects")
+            let originalURL = objects.appendingPathComponent(
+                "\(original.prefix(2))/\(original.dropFirst(2))")
+            let replacementURL = objects.appendingPathComponent(
+                "\(replacement.prefix(2))/\(replacement.dropFirst(2))")
+
+            // Preserve a valid zlib stream and object header while changing the payload.
+            try Data(contentsOf: replacementURL).write(to: originalURL, options: .atomic)
+            #expect(try await scanner.readPointer(original) == nil)
+            do {
+                _ = try await scanner.scanBlob(original)
+                Issue.record("expected the streamed blob's object ID mismatch to throw")
+            } catch let error as Libgit2Error {
+                #expect(error.code == GIT_EMISMATCH.rawValue)
+                #expect(error.klass == Int32(GIT_ERROR_ODB.rawValue))
+            } catch {
+                Issue.record("unexpected error: \(error)")
+            }
+            await #expect(throws: Libgit2Error.self) {
+                try await scanner.annotation(original, name: "unused", repositoryRoot: dir)
+            }
+        }
+    }
+
     @Test("zero IDs stream the entire worktree file relative to the repository root")
     func fullWorktreeHash() async throws {
         try await withRepo { _, dir, client in
