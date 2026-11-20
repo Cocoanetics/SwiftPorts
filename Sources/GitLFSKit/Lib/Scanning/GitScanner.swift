@@ -51,7 +51,75 @@ public struct GitScanner: Sendable {
     /// Unique Git blobs in rev-list order, subtracting all objects reachable
     /// from excluded commits. A filtered path still consumes its blob OID.
     public func scanRefs(include: [String], exclude: [String] = []) async throws -> [WrappedPointer] {
+        try await scanRefs(include: include, exclude: exclude, seen: []).pointers
+    }
+
+    /// One history walk from all refs/ tips and HEAD (including detached HEAD).
+    /// Direct tree and blob refs are walked in ref order around that history
+    /// walk, as `git rev-list --objects --all` does for non-commit roots.
+    public func scanAll() async throws -> [WrappedPointer] {
+        var targets = try await client.references(matching: nil).map(\.targetSHA)
+        if try await client.canResolveRef("HEAD") {
+            targets.append("HEAD")
+        } else {
+            // `canResolveRef` deliberately turns every lookup failure into
+            // false. revList distinguishes an unborn HEAD (empty) from a
+            // corrupt or missing object (throw), preserving scanner errors.
+            _ = try await client.revList(starts: ["HEAD"])
+        }
+
+        enum Root {
+            case history
+            case tree(String)
+            case blob(String)
+        }
+        var roots: [Root] = []
+        var history: [String] = []
+        var seenTargets = Set<String>()
+        for target in targets {
+            var metadata = try await client.objectMetadata(of: target)
+            if metadata.kind == .tag {
+                metadata = try await client.objectMetadata(of: target + "^{}")
+            }
+            guard seenTargets.insert(metadata.sha).inserted else { continue }
+            switch metadata.kind {
+            case .commit:
+                history.append(metadata.sha)
+                if history.count == 1 { roots.append(.history) }
+            case .tree:
+                roots.append(.tree(metadata.sha))
+            case .blob:
+                roots.append(.blob(metadata.sha))
+            case .tag:
+                break // `^{}` above peels through every tag.
+            }
+        }
+
         var seen = Set<String>()
+        var result: [WrappedPointer] = []
+        for root in roots {
+            switch root {
+            case .history:
+                let scan = try await scanRefs(include: history, exclude: [], seen: seen)
+                result += scan.pointers
+                seen = scan.seen
+            case .tree(let oid):
+                try await walkTree(oid) { oid, name in
+                    guard seen.insert(oid).inserted else { return }
+                    if let pointer = try await readPointer(oid, name: name) { result.append(pointer) }
+                }
+            case .blob(let oid):
+                guard seen.insert(oid).inserted else { continue }
+                if let pointer = try await readPointer(oid, name: "") { result.append(pointer) }
+            }
+        }
+        return result
+    }
+
+    private func scanRefs(
+        include: [String], exclude: [String], seen initialSeen: Set<String>
+    ) async throws -> (pointers: [WrappedPointer], seen: Set<String>) {
+        var seen = initialSeen
         if !exclude.isEmpty {
             for commit in try await client.revList(starts: exclude) {
                 try await walkTree(commit) { oid, _ in seen.insert(oid) }
@@ -64,16 +132,7 @@ public struct GitScanner: Sendable {
                 if let pointer = try await readPointer(oid, name: name) { result.append(pointer) }
             }
         }
-        return result
-    }
-
-    /// One history walk from all refs/ tips and HEAD (including detached HEAD).
-    public func scanAll() async throws -> [WrappedPointer] {
-        var starts = try await client.references(matching: nil).map(\.targetSHA)
-        // revList omits an unborn HEAD, while propagating a corrupt or
-        // missing object. Resolve it as part of the same walk as all refs.
-        starts.append("HEAD")
-        return try await scanRefs(include: starts)
+        return (result, seen)
     }
 
     private func walkTree(

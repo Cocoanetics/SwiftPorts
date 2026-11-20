@@ -49,6 +49,41 @@ struct GitScannerTests {
         }
     }
 
+    private func addReference(_ client: GitClient, name: String, target: inout git_oid) async throws {
+        try await client.withRepository { repository in
+            let repo = try #require(GitClient.handle(of: repository))
+            var reference: OpaquePointer?
+            #expect(git_reference_create(&reference, repo, name, &target, 0, nil) == 0)
+            git_reference_free(reference)
+        }
+    }
+
+    private func standaloneBlob(_ client: GitClient, pointer: Pointer) async throws -> git_oid {
+        try await client.withRepository { repository in
+            let repo = try #require(GitClient.handle(of: repository))
+            let data = Data(pointer.encoded.utf8)
+            var oid = git_oid()
+            let rc = data.withUnsafeBytes { bytes in
+                git_blob_create_from_buffer(&oid, repo, bytes.baseAddress, bytes.count)
+            }
+            #expect(rc == 0)
+            return oid
+        }
+    }
+
+    private func standaloneTree(_ client: GitClient, blob: inout git_oid) async throws -> git_oid {
+        try await client.withRepository { repository in
+            let repo = try #require(GitClient.handle(of: repository))
+            var builder: OpaquePointer?
+            #expect(git_treebuilder_new(&builder, repo, nil) == 0)
+            defer { git_treebuilder_free(builder) }
+            #expect(git_treebuilder_insert(nil, builder, "nested.dat", &blob, GIT_FILEMODE_BLOB) == 0)
+            var oid = git_oid()
+            #expect(git_treebuilder_write(&oid, builder) == 0)
+            return oid
+        }
+    }
+
     @Test("depth-first tree order preserves every path sharing a blob")
     func treeOrderAndMultiplicity() async throws {
         try await withRepo { dir, client in
@@ -265,6 +300,22 @@ struct GitScannerTests {
             #expect(all == expected)
             #expect(Set(all.map(\.pointer.oid)) == [Self.first.oid, Self.second.oid])
             #expect(all.count == 2)
+        }
+    }
+
+    @Test("scanAll preserves direct blob and tree refs in an unborn repository")
+    func allNonCommitReferences() async throws {
+        try await withRepo { _, client in
+            var directBlob = try await standaloneBlob(client, pointer: Self.first)
+            var nestedBlob = try await standaloneBlob(client, pointer: Self.second)
+            var directTree = try await standaloneTree(client, blob: &nestedBlob)
+            try await addReference(client, name: "refs/custom/blob", target: &directBlob)
+            try await addReference(client, name: "refs/custom/tree", target: &directTree)
+
+            let pointers = try await GitScanner(client: client).scanAll()
+            #expect(pointers.map(\.name) == ["", "nested.dat"])
+            #expect(pointers.map(\.pointer) == [Self.first, Self.second])
+            #expect(pointers.map(\.oid).allSatisfy { $0.count == 40 })
         }
     }
 }
