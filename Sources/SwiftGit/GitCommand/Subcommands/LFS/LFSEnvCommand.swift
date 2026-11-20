@@ -7,6 +7,6 @@ struct LFSEnvCommand: AsyncParsableCommand {
     @Argument var arguments: [String] = []
 
     func run() async throws {
-        try LFSCommand.emit(await LFSEnv.run(client: CommandContext.gitClient()))
+        try LFSCommand.emit(await LFSEnv.run(client: CommandContext.lfsEnvironmentGitClient()))
     }
 }

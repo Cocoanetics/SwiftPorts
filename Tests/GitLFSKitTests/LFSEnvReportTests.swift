@@ -168,6 +168,18 @@ struct LFSEnvReportTests {
             #expect(outside.stdout.contains(
                 "LocalWorkingDir=\nLocalGitDir=\nLocalGitStorageDir=\nLocalMediaDir=\(nativePath("lfs/objects"))\n"))
             #expect(outside.stdout.contains("TempDir=\(nativePath("lfs/tmp"))\n"))
+            let outsideClient = GitClient(workingDirectory: host.home)
+            for (storage, expectedStorage, expectedMedia, expectedTemporary) in [
+                ("../cache", nativePath("../cache"), nativePath("../cache/objects"), nativePath("../cache/tmp")),
+                (".", ".", nativePath("objects"), nativePath("tmp"))
+            ] {
+                try await outsideClient.configSet("lfs.storage", storage, scope: .global)
+                let paths = await LFSRepositoryPaths.load(
+                    outsideClient, configuration: await LFSConfiguration.load(outsideClient))
+                #expect(paths.storage == expectedStorage)
+                #expect(paths.media == expectedMedia)
+                #expect(paths.temporary == expectedTemporary)
+            }
         }
     }
 
@@ -179,6 +191,10 @@ struct LFSEnvReportTests {
             let media = reference.appendingPathComponent("lfs/objects")
             try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
             let objectPath = reference.appendingPathComponent("objects").path
+            Shell.current.environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = "../reference/objects"
+            let relativePaths = await LFSRepositoryPaths.load(
+                made.client, configuration: await LFSConfiguration.load(made.client))
+            #expect(relativePaths.references == [nativePath("../reference/lfs/objects")])
             Shell.current.environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = objectPath
             let alternates = made.directory.appendingPathComponent(".git/objects/info/alternates")
             try Data("\n# ignored\n\(objectPath.goQuoted)\n/missing/objects\n".utf8).write(to: alternates)
@@ -218,6 +234,15 @@ struct LFSEnvReportTests {
             #expect(config.fetchPaths("lfs.fetchinclude") == ["from-git"])
             #expect(config.fetchPaths("lfs.fetchexclude") == ["cache"])
             #expect(config.extensionLines == ["Extension[7]=zip"])
+            try await made.client.configSet("lfs.concurrenttransfers", "6", scope: .global)
+            let error = OutputSink()
+            Shell.current.stderr = error
+            let report = await LFSEnv.run(client: made.client)
+            error.finish()
+            let warning = await error.readAllString()
+            #expect(report.stdout.contains("ConcurrentTransfers=5\n"))
+            #expect(warning.contains("warning: These `git config` values clash:\n"))
+            #expect(warning.contains("git config \"lfs.concurrenttransfers\""))
             Shell.current.environment["GIT_SHELL_ONLY"] = "original/../value"
             let entries = LFSEnvironment.gitEntries()
             #expect(entries.contains("GIT_SHELL_ONLY=original/../value"))

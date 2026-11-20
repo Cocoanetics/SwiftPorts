@@ -1,6 +1,8 @@
 #if !os(Android)
+import Foundation
 import Testing
 import ArgumentParser
+import ShellKit
 @testable import GitCommand
 
 @Suite("git lfs argv parsing")
@@ -17,6 +19,17 @@ struct GitCommandLFSParsingTests {
         #expect(env.arguments == ["ignored", "arguments"])
         let unknown = try #require(GitCommand.parseAsRoot(["lfs", "unknown"]) as? LFSCommand)
         #expect(unknown.arguments == ["unknown"])
+    }
+
+    @Test func environmentRepositorySelection() async {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let outside = root.appendingPathComponent("outside")
+        let repository = root.appendingPathComponent("repository")
+        let shell = Shell(environment: Environment(variables: [
+            "GIT_DIR": "../repository/.git", "GIT_WORK_TREE": "../repository"
+        ], workingDirectory: outside.path))
+        let client = await shell.withCurrent { CommandContext.lfsEnvironmentGitClient() }
+        #expect(client.workingDirectory.standardizedFileURL == repository.standardizedFileURL)
     }
 
     @Test func pointer() throws {

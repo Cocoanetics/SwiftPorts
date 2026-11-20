@@ -36,11 +36,19 @@ struct LFSEnvOracleTests {
         }
         try fixture.config("lfs.url", "https://example.com/override", cwd: repo)
         try fixture.compare(repo)
+        try fixture.compare(fixture.host.home, extra: [
+            "GIT_DIR=" + repo.appendingPathComponent(".git").path,
+            "GIT_WORK_TREE=" + repo.path
+        ])
         let bare = try fixture.repository("bare", bare: true)
         try fixture.compare(bare)
         try fixture.compare(fixture.host.home)
         try fixture.system(["config", "--global", "lfs.storage", "outside-store"], cwd: fixture.host.home)
         try fixture.compare(fixture.host.home)
+        for storage in ["../cache", "."] {
+            try fixture.system(["config", "--global", "lfs.storage", storage], cwd: fixture.host.home)
+            try fixture.compare(fixture.host.home)
+        }
     }
 
     @Test func sshAndFilters() throws {
@@ -107,6 +115,7 @@ struct LFSEnvOracleTests {
         let alternates = "\n# comment\n\(reference.path)/objects\nrelative/objects\n/missing/objects\n"
         try Data(alternates.utf8).write(to: repo.appendingPathComponent(".git/objects/info/alternates"))
         try fixture.compare(repo, extra: ["GIT_ALTERNATE_OBJECT_DIRECTORIES=" + reference.path + "/objects"])
+        try fixture.compare(repo, extra: ["GIT_ALTERNATE_OBJECT_DIRECTORIES=../reference/objects"])
     }
 }
 #endif
