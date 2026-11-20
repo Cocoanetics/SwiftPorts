@@ -23,6 +23,17 @@ extension GitClient {
         try await withRepository { try $0.remoteBranches(remote: remote) }
     }
 
+    /// References under `refs/` whose full name matches `pattern`.
+    ///
+    /// `nil` lists every one of them: branches, remote-tracking branches,
+    /// tags, notes and stash. `HEAD` is a pseudoref and is not included.
+    /// Symbolic refs are resolved; `targetSHA` is the object the ref names
+    /// (an annotated tag's tag object, as `git for-each-ref` reports
+    /// `%(objectname)`). A dangling symbolic ref is omitted.
+    public func references(matching pattern: String? = nil) async throws -> [ReferenceEntry] {
+        try await withRepository { try $0.references(matching: pattern) }
+    }
+
     /// List configured remote names, sorted alphabetically.
     public func remoteList() async throws -> [String] {
         try await withRepository { try $0.remoteList() }
