@@ -29,7 +29,7 @@ public struct LsFilesOptions: Sendable {
                                    storage: try await client.configGet("lfs.storage"))
             var seen = Set<[UInt8]>()
             var items: [LsFilesObject] = []
-            if refs.isEmpty {
+            if refs.isEmpty && !all && !deleted {
                 do {
                     // The shared scanner also returns HEAD's tree. Keep just
                     // the changed destinations for this upstream ScanIndex pass.

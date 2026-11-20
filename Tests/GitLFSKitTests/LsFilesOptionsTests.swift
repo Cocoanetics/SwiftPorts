@@ -85,6 +85,31 @@ struct LsFilesOptionsTests {
         }
     }
 
+    @Test func historyModesIgnoreTheIndex() async throws {
+        try await withRepo { dir, client in
+            try write(Self.first, in: dir)
+            try await commit(client)
+            try write(Self.second, in: dir)
+            try await client.add(paths: ["asset"])
+            var options = LsFilesOptions()
+            options.json = true
+            options.all = true
+            #expect(try files(await options.lsFiles([], client: client)).map(\.oid) == [Self.first.oid])
+            options.all = false
+            options.deleted = true
+            #expect(try files(await options.lsFiles([], client: client)).map(\.oid) == [Self.first.oid])
+
+            try Data("invalid index".utf8).write(to: dir.appendingPathComponent(".git/index"))
+            options.all = true
+            #expect(try files(await options.lsFiles([], client: client)).map(\.oid) == [Self.first.oid])
+            options.all = false
+            #expect(try files(await options.lsFiles([], client: client)).map(\.oid) == [Self.first.oid])
+            options.deleted = false
+            let result = try await options.lsFiles([], client: client)
+            #expect(result.status == 2 && result.stderr.hasPrefix("Could not scan for Git LFS index: "))
+        }
+    }
+
     @Test func filtersAndIndependentObjectStates() async throws {
         try await withRepo { dir, client in
             for name in ["a.bin", "b.bin", "c.txt"] { try write(Self.first, name, in: dir) }
