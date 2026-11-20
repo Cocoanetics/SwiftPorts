@@ -43,7 +43,10 @@ extension LFSTransferQueue {
             throw LFSTransferError(message: String(describing: error))
         }
         if result.status == 422 {
-            throw LFSTransferError(message: "", retry: false, unsupportedContentType: true)
+            var error = LFSTransferError(result, url: request.url, now: environment.now())
+            error.retry = false
+            error.unsupportedContentType = true
+            throw error
         }
         guard result.accepted else {
             throw LFSTransferError(result, url: request.url, now: environment.now())

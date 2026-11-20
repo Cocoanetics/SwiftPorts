@@ -90,7 +90,7 @@ extension LFSTransferQueueTests {
         }
     }
 
-    @Test("an unsuccessful first worker drains the jobs and releases all waiters")
+    @Test("an unsuccessful first worker drains the jobs, reports failures, and releases all waiters")
     func failedAuthGate() async throws {
         LFSTransferURLProtocol.install { request in
             if request.url?.lastPathComponent == "batch" { return .batch(request, operation: "upload") }
@@ -99,9 +99,15 @@ extension LFSTransferQueueTests {
         try await run(config: [("lfs.concurrenttransfers", "3")]) { client, store, directory in
             let path = directory.appendingPathComponent("upload")
             try data.write(to: path)
-            try await queue(client, store, .upload).transfer((1...4).map {
+            let objects = (1...4).map {
                 LFSBatchObject(oid: String(repeating: String($0), count: 64), size: 12, path: path.path)
-            })
+            }
+            let expected = objects.map {
+                "Unprocessable entity: https://example.com/objects/\($0.oid)"
+            }.joined(separator: "\n")
+            await #expect(throws: LFSClientError(expected)) {
+                try await queue(client, store, .upload).transfer(objects)
+            }
             #expect(LFSTransferURLProtocol.requests.count == 5)
         }
     }

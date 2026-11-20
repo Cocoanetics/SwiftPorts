@@ -212,9 +212,11 @@ struct LFSTransferQueueTests {
             let file = directory.appendingPathComponent("file")
             try data.write(to: file)
             let clock = LFSTransferClock()
-            try await queue(client, store, .upload, clock: clock).transfer([
-                LFSBatchObject(oid: oid, size: 12, path: file.path),
-                LFSBatchObject(oid: String(repeating: "a", count: 64), size: 12, path: file.path)])
+            await #expect(throws: LFSClientError("unsupported\nunsupported")) {
+                try await queue(client, store, .upload, clock: clock).transfer([
+                    LFSBatchObject(oid: oid, size: 12, path: file.path),
+                    LFSBatchObject(oid: String(repeating: "a", count: 64), size: 12, path: file.path)])
+            }
             #expect(clock.stderr == LFSTransferQueue.contentTypeInfo)
             #expect(LFSTransferURLProtocol.requests.filter { $0.httpMethod == "PUT" }.count == 2)
             #expect(clock.delays.isEmpty)

@@ -65,8 +65,26 @@ extension LFSTransferQueueTests {
             LFSTransferReply(body: Data(#"{"objects":[{"oid":"\#(unknown)","size":12}]}"#.utf8))
         }
         try await run { client, store, _ in
-            await #expect(throws: LFSClientError("[\(unknown)] The server returned an unknown OID.")) {
+            let expected = "[\(unknown)] The server returned an unknown OID.\n"
+                + "[\(oid)] The server did not return the requested OID."
+            await #expect(throws: LFSClientError(expected)) {
                 try await queue(client, store).transfer([LFSBatchObject(oid: oid, size: 12)])
+            }
+            #expect(LFSTransferURLProtocol.requests.count == 1)
+        }
+    }
+
+    @Test("requested OIDs omitted from a batch response are reported")
+    func omittedOID() async throws {
+        let omitted = String(repeating: "a", count: 64)
+        LFSTransferURLProtocol.install { _ in
+            LFSTransferReply(body: Data(#"{"objects":[{"oid":"\#(oid)","size":12}]}"#.utf8))
+        }
+        try await run { client, store, _ in
+            await #expect(throws: LFSClientError("[\(omitted)] The server did not return the requested OID.")) {
+                try await queue(client, store).transfer([
+                    LFSBatchObject(oid: oid, size: 12),
+                    LFSBatchObject(oid: omitted, size: 12)])
             }
             #expect(LFSTransferURLProtocol.requests.count == 1)
         }

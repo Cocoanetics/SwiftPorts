@@ -77,20 +77,25 @@ public final class LFSTransferQueue: Sendable {
                 continue
             }
             let originals = Dictionary(uniqueKeysWithValues: slice.map { ($0.object.oid, $0) })
+            var returned: Set<String> = []
             var jobs: [LFSTransferPending] = []
             for var object in response.objects {
-                if let error = object.errorText {
-                    failures.append(error)
-                    continue
-                }
                 guard var item = originals[object.oid] else {
                     failures.append("[\(object.oid)] The server returned an unknown OID.")
+                    continue
+                }
+                returned.insert(object.oid)
+                if let error = object.errorText {
+                    failures.append(error)
                     continue
                 }
                 object.name = item.object.name
                 object.path = item.object.path
                 item.object = object
                 if object.action(named: direction.rawValue) != nil { jobs.append(item) }
+            }
+            for item in slice where !returned.contains(item.object.oid) {
+                failures.append("[\(item.object.oid)] The server did not return the requested OID.")
             }
             jobs.sort { $0.object.size > $1.object.size }
             let workers = LFSTransferWorkers(jobs, authenticated: authenticated)
@@ -100,7 +105,7 @@ public final class LFSTransferQueue: Sendable {
             var retries: [LFSTransferPending] = []
             for (item, error) in results {
                 guard let error else { continue }
-                if error.unsupportedContentType { unsupported = true; continue }
+                if error.unsupportedContentType { unsupported = true }
                 if error.retry, let retry = scheduledRetry(item, delay: error.delay) {
                     retries.append(retry)
                 } else { failures.append(error.message) }

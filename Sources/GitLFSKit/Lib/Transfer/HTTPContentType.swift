@@ -61,6 +61,7 @@ enum HTTPContentType {
         ("89 50 4E 47 0D 0A 1A 0A", "image/png"),
         ("FF D8 FF", "image/jpeg"),
         ("46 4F 52 4D ?? ?? ?? ?? 41 49 46 46", "audio/aiff"),
+        ("2E 73 6E 64", "audio/basic"),
         ("49 44 33", "audio/mpeg"),
         ("4F 67 67 53 00", "application/ogg"),
         ("4D 54 68 64 00 00 00 06", "audio/midi"),

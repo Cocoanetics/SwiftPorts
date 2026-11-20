@@ -11,6 +11,7 @@ struct HTTPContentTypeTests {
         (Data("%PDF-1.7".utf8), "application/pdf"),
         (Data([137, 80, 78, 71, 13, 10, 26, 10]), "image/png"),
         (Data([255, 216, 255]), "image/jpeg"),
+        (Data(".snd".utf8), "audio/basic"),
         (Data("RIFF1234WEBPVP".utf8), "image/webp"),
         (Data([0, 0, 0, 20]) + Data("ftypmp42\0\0\0\0mp41".utf8), "video/mp4"),
         (Data("wOFF".utf8), "font/woff"),
