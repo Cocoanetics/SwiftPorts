@@ -13,8 +13,10 @@ struct LFSFilterContext: Sendable {
     let remotes: LFSFilterRemotes
 
     static func command(_ git: SwiftGit.GitClient, direction: GitFilterDirection) async throws -> String? {
-        // convert.c gives a non-empty process command precedence over a direction.
-        if let process = try await git.configGet("filter.lfs.process"), !process.isEmpty { return process }
+        // convert.c gives process presence precedence, including an empty value.
+        if let process = try await git.configGet("filter.lfs.process") {
+            return process.isEmpty ? nil : process
+        }
         let key = direction == .clean ? "filter.lfs.clean" : "filter.lfs.smudge"
         guard let command = try await git.configGet(key), !command.isEmpty else { return nil }
         return command
