@@ -1,6 +1,7 @@
 import Foundation
 import ShellKit
 #if os(Windows)
+import ucrt
 import WinSDK
 #elseif canImport(Glibc)
 import Glibc
@@ -100,7 +101,13 @@ final class LFSProgressMeter: @unchecked Sendable {
         guard let handle, handle != INVALID_HANDLE_VALUE else {
             return failed("Windows error \(GetLastError())")
         }
-        return FileHandle(handle: handle, closeOnDealloc: true)
+        // Foundation takes a C runtime descriptor; it then owns the handle.
+        let descriptor = _open_osfhandle(Int(bitPattern: handle), _O_APPEND)
+        guard descriptor >= 0 else {
+            CloseHandle(handle)
+            return failed("Windows error \(GetLastError())")
+        }
+        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         #else
         let descriptor = open(file.path, O_WRONLY | O_CREAT | O_APPEND, 0o666)
         guard descriptor >= 0 else {
