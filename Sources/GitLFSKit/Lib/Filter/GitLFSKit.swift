@@ -25,8 +25,17 @@ public enum GitLFSKit {
     }
 
     static func isEnabled(_ git: SwiftGit.GitClient, direction: GitFilterDirection) async throws -> Bool {
-        if let process = try await git.configGet("filter.lfs.process"), !process.isEmpty { return true }
-        let key = direction == .clean ? "filter.lfs.clean" : "filter.lfs.smudge"
-        return try await git.configGet(key).map { !$0.isEmpty } ?? false
+        let enabled: Bool
+        // convert.c's apply_filter gives process precedence, even when empty.
+        if let process = try await git.configGet("filter.lfs.process") {
+            enabled = !process.isEmpty
+        } else {
+            let key = direction == .clean ? "filter.lfs.clean" : "filter.lfs.smudge"
+            enabled = try await git.configGet(key).map { !$0.isEmpty } ?? false
+        }
+        if !enabled, try await git.configBool("filter.lfs.required") == true {
+            throw LFSFilterUnavailable()
+        }
+        return enabled
     }
 }

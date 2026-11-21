@@ -407,7 +407,7 @@ extension GitClient {
     /// nonzero integer, a key without a value), or `nil` when unset.
     /// Anything else throws git's "bad boolean config value".
     public func configBool(_ name: String) async throws -> Bool? {
-        try await withRepository { _ in
+        try await withFilterMetadataRepository { _ in
             try Self.configEntry(name, in: workingDirectory).map { try Self.parseGitBool($0, key: name) }
         }
     }
