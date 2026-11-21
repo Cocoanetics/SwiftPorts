@@ -1,9 +1,44 @@
 import Foundation
+import ShellKit
 import SwiftGit
 
 /// git-lfs 3.7.1 `commands/command_status.go`. Rendering and the command
 /// adapter build on ``scanIndex(_:client:repositoryRoot:)``.
-struct StatusOptions: Sendable {
+public struct StatusOptions: Sendable {
+    public var porcelain = false
+    public var json = false
+
+    public init() {}
+
+    public func status(client: GitClient) async throws -> LFSCommandResult {
+        var result = LFSCommandResult()
+        do {
+            let repository = try await LFSRepository.open(client, workTree: true)
+            let root = repository.workingDirectory ?? client.workingDirectory
+            if !porcelain && !json {
+                try await renderTracking(client: client, output: &result.stdout)
+            }
+            // diffIndex's typed HEAD primitive supplies the empty tree for an unborn HEAD.
+            let scanned = try await scanIndex(client: client, repositoryRoot: root)
+            let quotePath = try await client.configBool("core.quotepath") ?? true
+            let index = Self.quotePaths(scanned, quotePath: quotePath)
+            if porcelain {
+                result.stdout += Self.renderPorcelain(index)
+            } else if json {
+                result.stdout += try await renderJSON(index, client: client, root: root)
+            } else {
+                try await renderHuman(index, client: client, root: root, output: &result.stdout)
+            }
+        } catch let failure as LFSFailure {
+            result.stdout += failure.result.stdout
+            result.stderr += failure.result.stderr
+            result.status = failure.result.status
+        } catch {
+            result.fail(error.localizedDescription)
+        }
+        return result
+    }
+
     /// `scanIndex`: the refreshed work-tree comparison is obtained before the
     /// cached one, then cached entries are drained first, so a record both
     /// diffs report is listed once, as staged.

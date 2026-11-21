@@ -7,7 +7,7 @@ struct LFSCommand: AsyncParsableCommand {
         commandName: "lfs",
         abstract: "Git Large File Storage.",
         subcommands: [LFSVersionCommand.self, LFSEnvCommand.self, LFSPointerCommand.self, LFSInstall.self,
-                      LFSUninstall.self, LFSTrack.self, LFSUntrack.self, LFSLsFiles.self,
+                      LFSUninstall.self, LFSTrack.self, LFSUntrack.self, LFSLsFiles.self, LFSStatus.self,
                       LFSFetch.self, LFSPush.self, LFSPrePush.self],
         helpNames: [])
 

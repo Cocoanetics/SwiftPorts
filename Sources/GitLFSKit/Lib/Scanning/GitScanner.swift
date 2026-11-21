@@ -61,15 +61,21 @@ public struct GitScanner: Sendable {
     /// As with `rev-list --objects`, a ref may name (or tag) a tree or blob
     /// as well as a commit; those roots are walked before commit history.
     public func scanRefs(include: [String], exclude: [String] = []) async throws -> [WrappedPointer] {
+        var result: [WrappedPointer] = []
+        try await scanRefs(include: include, exclude: exclude, into: &result)
+        return result
+    }
+
+    /// Status retains pointers discovered before a later scan error, as upstream's
+    /// pointer callbacks run before the scanner reports its final failure.
+    func scanRefs(include: [String], exclude: [String], into result: inout [WrappedPointer]) async throws {
         let included = try await classify(include)
         let excluded = try await classify(exclude)
         var seen = try await reachable(from: excluded)
-        var result: [WrappedPointer] = []
         try await scan(included, seen: &seen, into: &result)
         if !included.commits.isEmpty {
-            result += try await scanHistory(include: included.commits, exclude: excluded.commits, seen: &seen)
+            try await scanHistory(include: included.commits, exclude: excluded.commits, seen: &seen, into: &result)
         }
-        return result
     }
 
     /// One history walk from all refs/ tips and HEAD (including detached HEAD).
@@ -92,7 +98,7 @@ public struct GitScanner: Sendable {
         var result: [WrappedPointer] = []
         try await scan(roots, seen: &seen, into: &result)
         if !roots.commits.isEmpty {
-            result += try await scanHistory(include: roots.commits, exclude: [], seen: &seen)
+            try await scanHistory(include: roots.commits, exclude: [], seen: &seen, into: &result)
         }
         return result
     }
@@ -165,16 +171,14 @@ public struct GitScanner: Sendable {
     /// `rev-list --objects` over commits: the trees of `include`'s history
     /// not reached from `exclude`, skipping objects already `seen`.
     private func scanHistory(
-        include: [String], exclude: [String], seen: inout Set<String>
-    ) async throws -> [WrappedPointer] {
-        var result: [WrappedPointer] = []
+        include: [String], exclude: [String], seen: inout Set<String>, into result: inout [WrappedPointer]
+    ) async throws {
         for commit in try await client.revList(starts: include, excludes: exclude) {
             try await walkTree(commit) { oid, name in
                 guard seen.insert(oid).inserted else { return }
                 if let pointer = try await readPointer(oid, name: name) { result.append(pointer) }
             }
         }
-        return result
     }
 
     private func walkTree(

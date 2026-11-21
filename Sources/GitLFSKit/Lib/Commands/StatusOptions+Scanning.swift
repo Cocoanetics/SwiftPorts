@@ -25,6 +25,7 @@ extension StatusOptions {
             guard Self.isContentChange(entry),
                   let indexed = index[Array(entry.destinationPath.utf8)],
                   indexed.mode == entry.newMode,
+                  entry.newOID != indexed.oid,
                   let pointer = try await scanner.readPointer(indexed.oid),
                   try await Self.worktree(entry.destinationPath, root: repositoryRoot, matches: pointer)
             else {
@@ -113,12 +114,11 @@ extension StatusOptions {
         return Int(score)
     }
 
-    /// A regular work-tree file git has not hashed (an all-zero new id),
-    /// including one that replaced a symlink or gitlink.
+    /// A regular work-tree side, including a candidate rename detection has
+    /// already hashed without running a clean filter or storing its blob.
     private static func isContentChange(_ entry: DiffIndexEntry) -> Bool {
         ["M", "A", "R", "T"].contains(entry.status)
             && [0o100644, 0o100755].contains(entry.newMode)
-            && entry.newOID.allSatisfy { $0 == "0" }
     }
 
     /// Streams the whole regular file at `name`, relative to the repository root.
