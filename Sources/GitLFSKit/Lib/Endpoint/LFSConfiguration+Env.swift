@@ -25,7 +25,12 @@ extension LFSConfiguration {
 
     /// `tools.CleanPaths` trims whitespace and one trailing slash per pattern.
     func fetchPaths(_ key: String) -> [String] {
-        let value = (get(key) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        Self.cleanPaths(get(key) ?? "")
+    }
+
+    /// `tools.CleanPaths(value, ",")`.
+    static func cleanPaths(_ value: String) -> [String] {
+        let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return [] }
         return value.components(separatedBy: ",").map {
             var path = $0.trimmingCharacters(in: .whitespacesAndNewlines)

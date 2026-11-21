@@ -53,7 +53,13 @@ private struct LFSServerState {
         }
         if parts.count == 2, parts[0] == "objects" {
             if method == "GET" { return respondGet(parts[1]) }
-            if method == "PUT" { return respondPut(parts[1], body: body) }
+            if method == "PUT" {
+                if case .putStatus(_, let code)? = objectFaults[parts[1]] {
+                    objectFaults.removeValue(forKey: parts[1])
+                    return .json(status: code, message: objectMessage(code), fault: String(code))
+                }
+                return respondPut(parts[1], body: body)
+            }
         }
         if method == "POST", parts.count == 3, parts[0] == "objects", parts[2] == "verify" {
             return respondVerify(parts[1], body: body)
