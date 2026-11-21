@@ -14,6 +14,7 @@ package final class GitFilterOperationContext: @unchecked Sendable {
     private let credentials: CredentialProvider?
     private let environment: EnvironmentConfig
     private let gate: ConfigIncludeGate
+    private let deferFilterFailures: Bool
 
     enum Failure: Error, Equatable {
         case expired
@@ -21,11 +22,13 @@ package final class GitFilterOperationContext: @unchecked Sendable {
         case noOperation
     }
 
-    init(shell: Shell, credentials: CredentialProvider?, environment: EnvironmentConfig, gate: ConfigIncludeGate) {
+    init(shell: Shell, credentials: CredentialProvider?, environment: EnvironmentConfig, gate: ConfigIncludeGate,
+         deferFilterFailures: Bool = false) {
         self.shell = shell
         self.credentials = credentials
         self.environment = environment
         self.gate = gate
+        self.deferFilterFailures = deferFilterFailures
     }
 
     /// Capture on the libgit2 callback thread, before starting async work.
@@ -52,10 +55,13 @@ package final class GitFilterOperationContext: @unchecked Sendable {
     }
 
     /// Delayed process filters report failure after the other checkout entries
-    /// have been written. Retain only the first error, never file contents.
+    /// have been written. Only explicit checkout/clone operations opt in;
+    /// composite operations such as stash pop must fail before dropping data.
+    /// Retain only the first error, never file contents.
     package func deferFailure(_ error: any Error) throws {
         try lock.withLock {
             guard active else { throw Failure.expired }
+            guard deferFilterFailures else { throw error }
             if deferredFailure == nil { deferredFailure = error }
         }
     }

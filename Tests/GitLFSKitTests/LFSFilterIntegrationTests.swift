@@ -9,6 +9,47 @@ import GitLFSTestSupport
 extension LFSFilterTests {
     @Suite("LFS checkout, clone and status integration")
     struct LFSFilterIntegrationTests {
+        @Test("failed stash restoration retains the unstaged edit and can be retried",
+               arguments: ["pop", "branch"])
+        func stashFailure(mode: String) async throws {
+            try await LFSFilterFixture.run { host in
+                let original = Data("original content\n".utf8)
+                let edited = Data("unstaged edited content\n".utf8)
+                let made = try await LFSFilterFixture.seed(host, data: original, config: [
+                    ("filter.lfs.required", "false"), ("lfs.skipdownloaderrors", "false")
+                ])
+                let file = made.directory.appendingPathComponent("a.lfs")
+                try edited.write(to: file)
+                let stash = try await made.client.stashSave(message: "edit", author: nil)
+                let editedPointer = Pointer(oid: LFSFilterFixture.hash(edited), size: Int64(edited.count))
+                #expect(try await made.client.catFileBlob("\(stash):a.lfs") == Data(editedPointer.encoded.utf8))
+                let indexed = try #require(try await made.client.indexedEntries().first { $0.path == "a.lfs" })
+                #expect(try await made.client.catFileBlob(indexed.oid) == Data(made.pointer.encoded.utf8))
+                #expect(try Data(contentsOf: file) == original)
+                let store = try await LocalStore.open(made.client)
+                let object = store.objectPathname(editedPointer.oid)
+                // Deny just this cached object, without relying on OS permission
+                // bits (which elevated test runners can bypass).
+                Shell.current.sandbox = host.sandbox(refusing: { $0 == object })
+                await #expect(throws: GitFilterError.self) {
+                    if mode == "pop" { try await made.client.stashPop(index: 0) }
+                    else { try await made.client.stashBranch(name: "recovered") }
+                }
+                Shell.current.sandbox = host.sandbox
+                let entries = try await made.client.stashList()
+                #expect(entries.map(\.sha) == [stash])
+                #expect(try await made.client.indexedEntries().first { $0.path == "a.lfs" }?.oid == indexed.oid)
+                _ = try #require(entries.first)
+                // Reset any partial checkout, restore access and retry the
+                // retained entry: the original unstaged bytes must be recoverable.
+                try await made.client.checkoutPaths(["a.lfs"])
+                try await made.client.stashPop(index: 0)
+                #expect(try Data(contentsOf: file) == edited)
+                #expect(try await made.client.stashList().isEmpty)
+                #expect(try await made.client.indexedEntries().first { $0.path == "a.lfs" }?.oid == indexed.oid)
+            }
+        }
+
         @Test("optional process failure finishes other paths and does not leak into later operations")
         func mixedPathFailure() async throws {
             try await LFSTestServer.withServer { server in

@@ -116,6 +116,9 @@ smudge failures replay the original input. An optional process driver that exits
 during delayed checkout still fails with status 1 and Git's external-filter
 diagnostics after the other checkout paths have been restored; clone adds
 `fatal: unable to checkout working tree` and exits 128.
+Deferral is limited to explicit checkout and clone operations. Composite
+operations such as stash pop and stash branch fail immediately, before the
+stash can be dropped, so restoring object access allows the entry to be retried.
 Required process-driver failures report the external-filter error before the
 path-specific fatal. Required download failures report git-lfs's diagnostic
 and fail checkout/clone with Git's fatal text and status 128; this is distinct

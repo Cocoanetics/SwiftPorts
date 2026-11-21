@@ -86,7 +86,7 @@ extension GitClient {
     /// which is repeated once the sandbox has allowed it (or the denial is
     /// thrown). Without a sandbox nothing is gated. The shell's
     /// `GIT_CONFIG_*` plan is applied for the run, as ``isolated`` did.
-    func isolatedGated<T>(_ body: () throws -> T) async throws -> T {
+    func isolatedGated<T>(deferFilterFailures: Bool = false, _ body: () throws -> T) async throws -> T {
         guard filterContext == nil else { throw GitFilterOperationContext.Failure.unsupportedOperation }
         let plan = try await environmentConfig()
         let gate = ConfigIncludeGate(enforcing: Shell.current.sandbox != nil)
@@ -98,7 +98,8 @@ extension GitClient {
                     try Libgit2Sandboxing.shared.runIsolated(
                         Shell.current.sandbox, environment: plan) {
                             let context = GitFilterOperationContext(
-                                shell: Shell.current, credentials: credentials, environment: plan, gate: gate)
+                                shell: Shell.current, credentials: credentials, environment: plan, gate: gate,
+                                deferFilterFailures: deferFilterFailures)
                             return try context.run { try gate.run(body) }
                         }
                 }

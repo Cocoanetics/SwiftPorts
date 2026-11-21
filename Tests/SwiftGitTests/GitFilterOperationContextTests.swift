@@ -5,10 +5,25 @@ import ShellKit
 
 @Suite("Filter operation context lifetime")
 struct GitFilterOperationContextTests {
+    @Test("filter failures are immediate unless checkout explicitly opts in")
+    func deferralDisabledByDefault() throws {
+        let context = GitFilterOperationContext(
+            shell: Shell(), credentials: nil, environment: .none, gate: ConfigIncludeGate(enforcing: false))
+        var finished = false
+        #expect(throws: GitFilterOperationContext.Failure.noOperation) {
+            try context.run {
+                try context.deferFailure(GitFilterOperationContext.Failure.noOperation)
+                finished = true
+            }
+        }
+        #expect(!finished)
+    }
+
     @Test("deferred failure is raised after the body and the lease is revoked")
     func deferredFailure() async throws {
         let context = GitFilterOperationContext(
-            shell: Shell(), credentials: nil, environment: .none, gate: ConfigIncludeGate(enforcing: false))
+            shell: Shell(), credentials: nil, environment: .none, gate: ConfigIncludeGate(enforcing: false),
+            deferFilterFailures: true)
         var finished = false
         #expect(throws: GitFilterOperationContext.Failure.unsupportedOperation) {
             try context.run {
@@ -29,7 +44,8 @@ struct GitFilterOperationContextTests {
     @Test("a body failure takes precedence over deferred failure")
     func immediateFailure() throws {
         let context = GitFilterOperationContext(
-            shell: Shell(), credentials: nil, environment: .none, gate: ConfigIncludeGate(enforcing: false))
+            shell: Shell(), credentials: nil, environment: .none, gate: ConfigIncludeGate(enforcing: false),
+            deferFilterFailures: true)
         #expect(throws: GitFilterOperationContext.Failure.noOperation) {
             try context.run {
                 try context.deferFailure(GitFilterOperationContext.Failure.unsupportedOperation)
