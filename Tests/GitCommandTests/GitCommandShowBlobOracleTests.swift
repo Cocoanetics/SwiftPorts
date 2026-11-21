@@ -48,8 +48,38 @@ struct GitCommandShowBlobOracleTests {
         try await fixture.compare("HEAD:payload.lfs", bytes: Fixture.pointer)
     }
 
+    @Test(arguments: ["binary.dat", "no-newline.txt", "payload.lfs"])
+    func annotatedBlobTag(_ path: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let target = try fixture.git(["rev-parse", "HEAD:\(path)"])
+        let oid = try #require(String(data: target.stdout, encoding: .utf8))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // A tag without a tagger isolates blob dispatch from the existing tagger-formatting gap.
+        let object = "object \(oid)\ntype blob\ntag blob-tag\n\nblob annotation\n"
+        let file = fixture.repo.appendingPathComponent(".git/blob-tag")
+        try Data(object.utf8).write(to: file)
+        let hashed = try fixture.git(["hash-object", "--literally", "-t", "tag", "-w", file.path])
+        let tagOID = try #require(String(data: hashed.stdout, encoding: .utf8))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try fixture.git(["update-ref", "refs/tags/blob-tag", tagOID])
+        let payload = try fixture.git(["show", "HEAD:\(path)"]).stdout
+        let bytes = Data("tag blob-tag\n\nblob annotation\n".utf8) + payload
+        try await fixture.compare("blob-tag", bytes: bytes)
+        try await fixture.compare(tagOID, bytes: bytes)
+    }
+
+    @Test(arguments: [":message.txt", ":0:message.txt"])
+    func indexBlob(_ spec: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try await fixture.compare(spec, bytes: Data("current\n".utf8))
+    }
+
     @Test(arguments: ["missing-revision", "missing-revision:message.txt",
-                      "HEAD:missing-path.txt", "HEAD:untracked.txt"])
+                      "HEAD:missing-path.txt", "HEAD:untracked.txt",
+                      ":missing-path.txt", ":untracked.txt",
+                      ":0:missing-path.txt", ":0:untracked.txt", ":1:message.txt"])
     func missingObject(_ spec: String) async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

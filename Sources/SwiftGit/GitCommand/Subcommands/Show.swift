@@ -23,26 +23,30 @@ struct Show: AsyncParsableCommand {
 
         // Resolve the object first; blobs are emitted without formatting.
         let sha: String
-        do {
-            sha = try await client.resolveOID(target)
-        } catch {
-            if let colon = target.firstIndex(of: ":"), colon != target.startIndex {
-                let revision = String(target[..<colon])
-                let path = String(target[target.index(after: colon)...])
-                guard (try? await client.resolveOID(revision + "^{tree}")) != nil else {
-                    throw CLIError.stderr("fatal: invalid object name '\(revision)'.", exitCode: 128)
+        if target.hasPrefix(":"), !target.hasPrefix(":/") {
+            sha = try await resolveIndexBlob(target, client: client)
+        } else {
+            do {
+                sha = try await client.resolveOID(target)
+            } catch {
+                if let colon = target.firstIndex(of: ":"), colon != target.startIndex {
+                    let revision = String(target[..<colon])
+                    let path = String(target[target.index(after: colon)...])
+                    guard (try? await client.resolveOID(revision + "^{tree}")) != nil else {
+                        throw CLIError.stderr("fatal: invalid object name '\(revision)'.", exitCode: 128)
+                    }
+                    let url = Shell.resolve(path)
+                    try await Shell.authorize(url)
+                    let reason = FileManager.default.fileExists(atPath: url.path)
+                        ? "exists on disk, but not in" : "does not exist in"
+                    throw CLIError.stderr("fatal: path '\(path)' \(reason) '\(revision)'", exitCode: 128)
                 }
-                let url = Shell.resolve(path)
-                try await Shell.authorize(url)
-                let reason = FileManager.default.fileExists(atPath: url.path)
-                    ? "exists on disk, but not in" : "does not exist in"
-                throw CLIError.stderr("fatal: path '\(path)' \(reason) '\(revision)'", exitCode: 128)
+                throw CLIError.stderr(
+                    "fatal: ambiguous argument '\(target)': unknown revision or path not in the working tree.\n"
+                        + "Use '--' to separate paths from revisions, like this:\n"
+                        + "'git <command> [<revision>...] -- [<file>...]'",
+                    exitCode: 128)
             }
-            throw CLIError.stderr(
-                "fatal: ambiguous argument '\(target)': unknown revision or path not in the working tree.\n"
-                    + "Use '--' to separate paths from revisions, like this:\n"
-                    + "'git <command> [<revision>...] -- [<file>...]'",
-                exitCode: 128)
         }
 
         let stdout = Shell.current.stdout
@@ -53,7 +57,7 @@ struct Show: AsyncParsableCommand {
         }
 
         // If the spec resolves directly to an annotated tag, emit the
-        // tag block then fall through to its target commit.
+        // tag block then fall through to its target object.
         let entries = try await client.tagDetails()
         if let tag = entries.first(where: { $0.sha == sha && $0.isAnnotated }) {
             stdout.write(Data("tag \(tag.name)\n".utf8))
@@ -61,12 +65,39 @@ struct Show: AsyncParsableCommand {
             // We don't currently surface tagger here; this is a small gap.
             // Print message body.
             stdout.write(Data("\n\(tag.summary)\n".utf8))
-            // Then the target commit.
+            if try await client.objectMetadata(of: tag.targetSHA).kind == .blob {
+                stdout.write(try await client.catFileBlob(tag.targetSHA))
+                return
+            }
+            // Otherwise, keep the existing commit formatter.
             try await showCommit(sha: tag.targetSHA, client: client, stdout: stdout, signature: showSignatures)
             return
         }
 
         try await showCommit(sha: sha, client: client, stdout: stdout, signature: showSignatures)
+    }
+
+    /// Index paths use stage zero unless an explicit `:0:` ... `:3:` is given.
+    private func resolveIndexBlob(_ spec: String, client: SwiftGit.GitClient) async throws -> String {
+        var path = String(spec.dropFirst())
+        var stage = 0
+        if path.count >= 2, let digit = path.first, ("0"..."3").contains(String(digit)),
+           path[path.index(after: path.startIndex)] == ":" {
+            stage = Int(String(digit)) ?? 0
+            path = String(path.dropFirst(2))
+        }
+        let entries = try await client.indexedEntries().filter { $0.path == path }
+        if let entry = entries.first(where: { $0.stage == stage }) { return entry.oid }
+        if let entry = entries.first {
+            throw CLIError.stderr(
+                "fatal: path '\(path)' is in the index, but not at stage \(stage)\n"
+                    + "hint: Did you mean ':\(entry.stage):\(path)'?", exitCode: 128)
+        }
+        let url = Shell.resolve(path)
+        try await Shell.authorize(url)
+        let reason = FileManager.default.fileExists(atPath: url.path)
+            ? "exists on disk, but not in the index" : "does not exist (neither on disk nor in the index)"
+        throw CLIError.stderr("fatal: path '\(path)' \(reason)", exitCode: 128)
     }
 
     /// One-commit `defaultFormat` block + unified diff against parent.
