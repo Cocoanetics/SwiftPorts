@@ -646,8 +646,10 @@ unconditionally trapped in Windows `parallelTransfers`. File uploads now own
 independent `CreateFileW` handles with read/write/delete sharing, obtain their
 length through `GetFileSizeEx` and read at most 64 KiB through `ReadFile` per
 callback. Redirect rewinds use `SetFilePointerEx` after validating the offset
-against the known length. No Foundation file handle or stream is used for file
-bodies. Explicit stream bodies retain their bounded InputStream reader.
+against the known length. Size validation and the 512-byte Content-Type sniff
+also use that native reader, before the upload starts. No Foundation file handle
+or stream is used for file bodies. Explicit stream bodies retain their bounded
+InputStream reader.
 The Windows curl regression uploads empty and 1 MB files concurrently from the
 same path and checks exact bodies, framing and bounded progress.
 

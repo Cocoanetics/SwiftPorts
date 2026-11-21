@@ -125,12 +125,45 @@ struct LFSUploadObjectsTests {
         }
     }
 
-    @Test("a failed PUT takes back its bytes, so the retry is counted once", .timeLimit(.minutes(1)))
-    func retriedUploadProgress() async throws {
+    @Test("batch then 1 MB PUT preserves upload headers without the queue's file preflight",
+          .timeLimit(.minutes(1)), arguments: [true, false])
+    func batchThenUpload(detectContentType: Bool) async throws {
         let large = Data(repeating: 0x61, count: 1_000_000)
         try await LFSTestServer.withServer { server in
             server.inject(.putStatus(oid: oid(large), code: 503))
             try await LFSServerRepository.run(server) { repo in
+                let file = repo.directory.appendingPathComponent("large.bin")
+                try large.write(to: file)
+                let batch = try await repo.client.batch(operation: "upload", objects: [
+                    LFSBatchObject(oid: oid(large), size: Int64(large.count))
+                ])
+                let action = try #require(batch.objects.first?.action(named: "upload"))
+                var request = HTTPRequest(method: .put, url: try #require(URL(string: action.href)))
+                request.headerFields[.contentLength] = String(large.count)
+                request.headerFields[.contentType] = detectContentType
+                    ? "text/plain; charset=utf-8" : "application/octet-stream"
+                for status in [503, 200] {
+                    let result = try await repo.client.transfer(
+                        request, body: .file(file), operation: "upload", remote: nil, authenticated: true)
+                    #expect(result.status == status)
+                }
+                let puts = server.requests().filter { $0.method == "PUT" }
+                #expect(puts.map(\.status) == [503, 200])
+                #expect(puts.allSatisfy { $0.requestBody == large })
+                #expect(server.bytes(for: oid(large)) == large)
+            }
+        }
+    }
+
+    @Test("a failed PUT takes back its bytes, so the retry is counted once",
+          .timeLimit(.minutes(1)), arguments: [true, false])
+    func retriedUploadProgress(detectContentType: Bool) async throws {
+        let large = Data(repeating: 0x61, count: 1_000_000)
+        try await LFSTestServer.withServer { server in
+            server.inject(.putStatus(oid: oid(large), code: 503))
+            try await LFSServerRepository.run(server, config: [
+                ("lfs.contenttype", String(detectContentType)), ("lfs.transfer.maxretries", "1")
+            ]) { repo in
                 try await repo.storeLocally(large)
                 let tip = try await repo.commit([("large.dat", large)])
                 let result = try await repo.uploadObjects(for: [update(tip)], git: repo.git)
@@ -139,6 +172,10 @@ struct LFSUploadObjectsTests {
                 let puts = server.requests().filter { $0.method == "PUT" }
                 #expect(puts.map(\.status) == [503, 200])
                 #expect(puts.allSatisfy { $0.requestBody == large })
+                #expect(puts.allSatisfy {
+                    $0.requestHeaders["content-type"] == (detectContentType
+                        ? "text/plain; charset=utf-8" : "application/octet-stream")
+                })
                 #expect(server.bytes(for: oid(large)) == large)
             }
         }
