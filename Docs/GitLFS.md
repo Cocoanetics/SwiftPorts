@@ -145,6 +145,26 @@ version, and succeeds. Unsupported subcommands receive git-lfs's diagnostic
 and exit status 127. `git lfs --help` uses embedded usage text; it does not
 launch the system Git's man viewer.
 
+## `git push` and the pre-push hook (#234)
+
+`git push` does the work of git-lfs's pre-push hook in-process, without
+running the script, when the hook git would run is git-lfs's
+(`Hook.lfsPrePush`): `pre-push` in the `install` hooks directory
+(`core.hooksPath`, else `<common-dir>/hooks`), executable on Unix (present
+on Windows), read through `Shell.authorize`, with a non-comment line running
+`git lfs pre-push`, `git-lfs pre-push` or `git lfs push --stdin`. A foreign
+or non-executable hook is not run, and the push goes ahead as without one.
+
+The updates are those GitKit is about to send (its `beforeSending` push
+callback, after git's fast-forward and lease rules, up-to-date refs left
+out), handed to `PrePushOptions.run(_:updates:client:git:terminal:)`, the
+same path `git lfs pre-push` reads from stdin, so `GIT_LFS_SKIP_PUSH` and
+`lfs.allowincompletepush` apply as there. The upload's git reads run in
+the push's libgit2 isolation, lent to them while the push waits on one
+connection. A failed upload prints git-lfs's output, then
+`error: failed to push some refs to '<url>'`, exits 1 and sends nothing.
+`--no-verify` skips the upload.
+
 ## Transfers (`Transfer/`, #198)
 
 `LFSTransferQueue(client:store:direction:remote:refName:progress:)` transfers
