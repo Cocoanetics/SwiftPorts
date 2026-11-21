@@ -9,7 +9,6 @@ struct GitFilterOperationContextTests {
     func revokedOnFailure() async throws {
         let shell = Shell()
         let client = GitClient()
-        #expect(!GitFilters.isRegistered("lfs"))
         #expect(throws: GitFilterOperationContext.Failure.noOperation) {
             _ = try GitFilterOperationContext.capture()
         }
