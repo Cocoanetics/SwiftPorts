@@ -51,5 +51,24 @@ struct GitCommandLFSStatusOracleTests {
         try await oracle.compare(["status"], in: bare)
         try await oracle.compare(["status"], in: oracle.home)
     }
+
+    @Test(arguments: [false, true])
+    func missingIndexedBlobKeepsFullAnnotation(modification: Bool) async throws {
+        let oracle = try LFSSamePathOracle()
+        defer { oracle.cleanup() }
+        let repo = try oracle.repository("missing")
+        if modification {
+            try oracle.write("x.dat", "ordinary file", in: repo)
+            try oracle.add(["x.dat"], in: repo)
+            try oracle.commit("base", in: repo)
+            try FileManager.default.removeItem(at: repo.appendingPathComponent("x.dat"))
+        }
+        let missing = String(repeating: "d", count: 40)
+        try oracle.git(["update-index", "--add", "--cacheinfo", "100644,\(missing),x.dat"], in: repo)
+        let result = try await oracle.compare(["status"], in: repo)
+        let annotation = modification ? " -> ?: <missing>)\n" : "\tx.dat (?: <missing>)\n"
+        #expect(result.stdout.contains(annotation))
+        #expect(result.status == 0 && result.stderr.isEmpty)
+    }
 }
 #endif
