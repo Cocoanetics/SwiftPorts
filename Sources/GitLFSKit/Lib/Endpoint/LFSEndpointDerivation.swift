@@ -1,4 +1,5 @@
 import Foundation
+import ShellKit
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -139,10 +140,11 @@ enum LFSEndpointDerivation {
 
     /// `filepath.Abs`, then `filepath.Clean`. A relative path joins `base`,
     /// the repository directory git-lfs would have been run in, rather than
-    /// the process's current directory. That join uses `os.Getwd`.
+    /// the process's current directory. That join uses `os.Getwd`, and `PWD`
+    /// comes from the bound shell, not the host process.
     /// Symlinks inside the relative path itself are left alone.
     static func absolutePath(_ path: String, base: String) -> String {
-        absolutePath(path, base: base, pwd: ProcessInfo.processInfo.environment["PWD"])
+        absolutePath(path, base: base, pwd: Shell.env("PWD"))
     }
 
     static func absolutePath(_ path: String, base: String, pwd: String?) -> String {
@@ -152,7 +154,7 @@ enum LFSEndpointDerivation {
     /// An absolute path stays put. A relative one is joined onto `base`
     /// the way `filepath.Abs` joins onto the process directory.
     static func located(_ path: String, base: String) -> String {
-        located(path, base: base, pwd: ProcessInfo.processInfo.environment["PWD"])
+        located(path, base: base, pwd: Shell.env("PWD"))
     }
 
     static func located(_ path: String, base: String, pwd: String?) -> String {
