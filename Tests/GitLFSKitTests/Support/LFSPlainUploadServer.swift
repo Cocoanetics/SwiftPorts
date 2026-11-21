@@ -10,19 +10,54 @@ final class LFSPlainUploadServer {
     private var output: FileHandle?
     private(set) var endpoint: URL?
 
-    static func pythonExecutable(
+    static func pythonCommand(
         environment: [String: String], windows: Bool,
         isExecutable: (URL) -> Bool = { FileManager.default.isExecutableFile(atPath: $0.path) }
-    ) -> URL? {
+    ) -> (executable: URL, arguments: [String])? {
+        if windows, let directory = environment.first(where: {
+            $0.key.caseInsensitiveCompare("pythonLocation") == .orderedSame
+        })?.value {
+            let executable = URL(fileURLWithPath: directory).appendingPathComponent("python.exe")
+            if isExecutable(executable) { return (executable, []) }
+        }
         let path = environment["PATH"] ?? (windows ? environment.first {
             $0.key.caseInsensitiveCompare("PATH") == .orderedSame
         }?.value : nil) ?? ""
-        let names = windows ? ["python.exe", "python3.exe"] : ["python3"]
         let paths = path.split(separator: windows ? ";" : ":")
-        return names.lazy.flatMap { name in
-            paths.map { URL(fileURLWithPath: String($0)).appendingPathComponent(name) }
-        }.first(where: isExecutable)
+        // Windows' python.exe may be a Store alias. Prefer the runner's setup
+        // directory, then the Python launcher with an explicit Python 3 version.
+        var candidates = paths.map {
+            URL(fileURLWithPath: String($0)).appendingPathComponent(windows ? "py.exe" : "python3")
+        }
+        if windows, let systemRoot = environment["SystemRoot"] {
+            candidates.append(URL(fileURLWithPath: systemRoot).appendingPathComponent("py.exe"))
+        }
+        guard let executable = candidates.first(where: isExecutable) else { return nil }
+        return (executable, windows ? ["-3"] : [])
     }
+
+    private static let command: (executable: URL, arguments: [String])? = {
+        #if os(Windows)
+        let windows = true
+        #else
+        let windows = false
+        #endif
+        guard let command = pythonCommand(environment: ProcessInfo.processInfo.environment, windows: windows)
+        else { return nil }
+        // A launcher can exist without a Python 3 installation.
+        let probe = Process()
+        probe.executableURL = command.executable
+        probe.arguments = command.arguments + ["--version"]
+        probe.standardInput = FileHandle.nullDevice
+        probe.standardOutput = FileHandle.nullDevice
+        probe.standardError = FileHandle.nullDevice
+        do { try probe.run() } catch { return nil }
+        probe.waitUntilExit()
+        return probe.terminationStatus == 0 ? command : nil
+    }()
+
+    static var isAvailable: Bool { command != nil }
+    static let unavailableReason: Comment = "Python 3 is unavailable (Windows requires pythonLocation or py -3)"
 
     static func start() async throws -> LFSPlainUploadServer {
         let server = LFSPlainUploadServer()
@@ -36,14 +71,7 @@ final class LFSPlainUploadServer {
     }
 
     private func launch() async throws {
-        #if os(Windows)
-        let windows = true
-        #else
-        let windows = false
-        #endif
-        let executable = try #require(Self.pythonExecutable(
-            environment: ProcessInfo.processInfo.environment, windows: windows),
-                                      "Python 3 is required for the independent Windows upload probe")
+        let command = try #require(Self.command, Self.unavailableReason)
         let script = try #require(Bundle.module.url(forResource: "LFSUploadServer", withExtension: "py",
                                                     subdirectory: "Fixtures"))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -51,8 +79,8 @@ final class LFSPlainUploadServer {
         let log = directory.appendingPathComponent("server.log")
         FileManager.default.createFile(atPath: log.path, contents: nil)
         output = try FileHandle(forWritingTo: log)
-        process.executableURL = executable
-        process.arguments = ["-u", script.path, ready.path]
+        process.executableURL = command.executable
+        process.arguments = command.arguments + ["-u", script.path, ready.path]
         process.standardOutput = output
         process.standardError = output
         try process.run()

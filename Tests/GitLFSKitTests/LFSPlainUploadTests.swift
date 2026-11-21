@@ -10,6 +10,7 @@ import FoundationNetworking
 @Suite("LFS PUT server comparison", .serialized)
 struct LFSPlainUploadTests {
     @Test("1 MB file/Data uploads reach Python with unambiguous framing",
+          .enabled(if: LFSPlainUploadServer.isAvailable, LFSPlainUploadServer.unavailableReason),
           .timeLimit(.minutes(1)), arguments: ["file", "data"], [false, true])
     func upload(kind: String, expectContinue: Bool) async throws {
         let server = try await LFSPlainUploadServer.start()
@@ -40,6 +41,7 @@ struct LFSPlainUploadTests {
     }
 
     @Test("redirects retain configured headers and follow the platform method rules",
+          .enabled(if: LFSPlainUploadServer.isAvailable, LFSPlainUploadServer.unavailableReason),
           arguments: [303, 307], ["file", "data"])
     func redirects(code: Int, kind: String) async throws {
         let server = try await LFSPlainUploadServer.start()
@@ -70,7 +72,8 @@ struct LFSPlainUploadTests {
     }
 
     #if os(Windows)
-    @Test("the upload uses the session's explicit HTTP proxy configuration")
+    @Test("the upload uses the session's explicit HTTP proxy configuration",
+          .enabled(if: LFSPlainUploadServer.isAvailable, LFSPlainUploadServer.unavailableReason))
     func configuredProxy() async throws {
         let server = try await LFSPlainUploadServer.start()
         defer { server.stop() }
