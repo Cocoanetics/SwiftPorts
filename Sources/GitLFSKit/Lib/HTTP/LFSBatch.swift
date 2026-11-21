@@ -516,8 +516,18 @@ extension LFSClient {
         var last = LFSBatchResponse(endpoint: endpoint)
         for _ in 0..<9 {
             let requestedAt = Date()
-            let (data, response) = try await send(
-                http, body: .data(payload), operation: operation, remote: remote)
+            let data: Data
+            let response: HTTPResponse
+            do {
+                (data, response) = try await send(
+                    http, body: .data(payload), operation: operation, remote: remote)
+            } catch let error as LFSClientError {
+                // tq/api.go wraps DoAPIRequestWithAuth; lfshttp marks most 5xx errors fatal.
+                let status = error.transferResult?.status ?? 0
+                let fatal = status > 499 && ![501, 507, 509].contains(status)
+                throw LFSClientError("batch response: " + (fatal ? "Fatal error: " : "") + error.description,
+                                     retryInTransferQueue: error.retryInTransferQueue)
+            }
             var decoded = try Self.decodeBatch(data, response: response, url: url)
             if !decoded.hashAlgorithm.isEmpty, decoded.hashAlgorithm != "sha256" {
                 let rejected = decoded.hashAlgorithm.goQuoted
