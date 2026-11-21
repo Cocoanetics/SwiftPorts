@@ -2,7 +2,7 @@
 import Foundation
 import Testing
 
-@Suite("git lfs config oracle", .enabled(if: LFSCommandFixture.isAvailable, "git-lfs is not on PATH"))
+@Suite("git lfs config oracle", .enabled(if: LFSCommandFixture.isAvailable, LFSCommandFixture.unavailableReason))
 struct GitCommandLFSConfigOracleTests {
     @Test(arguments: [[], ["--system"], ["--file=settings.cfg"]])
     func destinations(_ flags: [String]) async throws {
