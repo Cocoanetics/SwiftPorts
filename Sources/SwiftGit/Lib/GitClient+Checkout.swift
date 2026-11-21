@@ -15,7 +15,7 @@ extension GitClient {
         startPoint: String = "HEAD",
         force: Bool = false
     ) async throws -> CheckoutBranchOutcome {
-        try await withRepository {
+        try await withRepository(deferFilterFailures: true) {
             try $0.checkoutNewBranch(name: name, startPoint: startPoint, force: force)
         }
     }
@@ -24,13 +24,13 @@ extension GitClient {
     /// working tree to match the index.
     public func checkoutPaths(_ paths: [String]) async throws {
         guard !paths.isEmpty else { return }
-        try await withRepository { try $0.checkoutPaths(paths) }
+        try await withRepository(deferFilterFailures: true) { try $0.checkoutPaths(paths) }
     }
 
     /// `git checkout <ref> -- <paths>`: restore listed paths from
     /// `ref`'s tree into both the index and working tree.
     public func checkoutPaths(_ paths: [String], from ref: String) async throws {
         guard !paths.isEmpty else { return }
-        try await withRepository { try $0.checkoutPaths(paths, from: ref) }
+        try await withRepository(deferFilterFailures: true) { try $0.checkoutPaths(paths, from: ref) }
     }
 }

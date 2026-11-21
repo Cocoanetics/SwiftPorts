@@ -101,6 +101,10 @@ private struct LFSServerState {
     private mutating func batchObject(
         _ operation: String, _ object: BatchObjectRequest
     ) -> (ObjectBody, String?) {
+        if case .noAction = objectFaults[object.oid] {
+            objectFaults.removeValue(forKey: object.oid)
+            return (ObjectBody(oid: object.oid, size: object.size, actions: nil, error: nil), "no-action")
+        }
         if let code = consumeObjectStatus(object.oid) {
             let error = ErrorBody(code: code, message: objectMessage(code))
             let item = ObjectBody(oid: object.oid, size: object.size, actions: nil, error: error)
