@@ -93,7 +93,14 @@ struct LFSCommandFixture {
         let actual = try await run(args, subdirectory: subdirectory, input: input)
         // Twin roots and the installed git executable's absolute path differ by environment.
         func normalize(_ value: String) -> String {
-            value.replacingOccurrences(of: theirs.path, with: ours.path)
+            var value = value
+            #if os(macOS)
+            // Go's os.Getwd can return /private/var while Foundation spells the same fixture /var.
+            if root.path.hasPrefix("/var/") {
+                value = value.replacingOccurrences(of: "/private" + root.path, with: root.path)
+            }
+            #endif
+            return value.replacingOccurrences(of: theirs.path, with: ours.path)
                 .replacingOccurrences(of: theirHost.home.path, with: ourHost.home.path)
                 .replacingOccurrences(of: #"error running [^\n]+? 'config'"#,
                                       with: "error running git 'config'", options: .regularExpression)
