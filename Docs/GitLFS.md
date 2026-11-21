@@ -425,6 +425,16 @@ the assertion through #187's batch client/server remains open for that work.
 
 `Tests/GitLFSKitTests/`:
 
+- `LFSPlainUploadTests` (macOS/Linux/Windows) — independent Python 3
+  `http.server` receiver and the NIO fixture, using the same 1 MB URLSession
+  file/Data PUTs with and without `Expect: 100-continue`. Logs wire headers and
+  partial byte counts even when the client times out; successful responses
+  verify the byte count and SHA-256.
+  Python 3 must be on `PATH`; the subprocess is test-only.
+- `LFSURLSessionUploadTests` — 1 MB file/Data/stream PUTs to the NIO fixture,
+  including 200/503/401, cancellation, and an idle response timeout. Explicit
+  test tracing records headers, body chunks, decoder read completions, and the
+  flushed `100 Continue`. Production uploads use URLSession on every platform.
 - `PointerTests` — round-trips, the empty file, the 1024-byte boundary,
   extension ordering, every rejection with its text.
 - `LocalStoreTests` — store paths in a plain repository, a linked worktree and

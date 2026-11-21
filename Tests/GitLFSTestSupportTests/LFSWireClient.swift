@@ -120,9 +120,10 @@ final class LFSWireClient: @unchecked Sendable {
         return try await send(url, method: .GET, body: nil, json: false)
     }
 
-    func put(_ href: String, body: Data) async throws -> WireBody {
+    func put(_ href: String, body: Data, expectContinue: Bool = false, chunked: Bool = false) async throws -> WireBody {
         let url = try #require(URL(string: href))
-        return try await send(url, method: .PUT, body: body, json: false)
+        return try await send(url, method: .PUT, body: body, json: false,
+                              expectContinue: expectContinue, chunked: chunked)
     }
 
     func verify(_ href: String, oid: String, size: Int) async throws -> WireBody {
@@ -135,23 +136,36 @@ final class LFSWireClient: @unchecked Sendable {
         try #require(URL(string: server.endpoint.absoluteString + path))
     }
 
-    private func send(_ url: URL, method: HTTPMethod, body: Data?, json: Bool) async throws -> WireBody {
+    private func send(
+        _ url: URL, method: HTTPMethod, body: Data?, json: Bool,
+        expectContinue: Bool = false, chunked: Bool = false
+    ) async throws -> WireBody {
         let host = try #require(url.host)
         let port = try #require(url.port)
         let loop = group.next()
         let response = loop.makePromise(of: WireBody.self)
+        let continued = expectContinue ? loop.makePromise(of: Void.self) : nil
         let channel: Channel
         do {
             channel = try await ClientBootstrap(group: loop)
                 .connectTimeout(.seconds(10))
                 .channelInitializer { channel in
                     channel.eventLoop.makeCompletedFuture {
-                        try channel.pipeline.syncOperations.addHTTPClientHandlers()
-                        try channel.pipeline.syncOperations.addHandler(LFSWireResponseHandler(response: response))
+                        // The convenience setup drops 1xx responses. This probe
+                        // must observe 100 before it is allowed to send a body.
+                        try channel.pipeline.syncOperations.addHandlers([
+                            HTTPRequestEncoder(),
+                            ByteToMessageHandler(HTTPResponseDecoder(
+                                leftOverBytesStrategy: .dropBytes, informationalResponseStrategy: .forward)),
+                            NIOHTTPRequestHeadersValidator()
+                        ])
+                        try channel.pipeline.syncOperations.addHandler(
+                            LFSWireResponseHandler(response: response, continued: continued))
                     }
                 }
                 .connect(host: host, port: port).get()
         } catch {
+            continued?.fail(error)
             response.fail(error)
             throw error
         }
@@ -162,21 +176,29 @@ final class LFSWireClient: @unchecked Sendable {
             self.lock.withLock { _ = self.channels.removeValue(forKey: identifier) }
         }
         let timeout = loop.scheduleTask(in: .seconds(10)) {
+            continued?.fail(URLError(.timedOut))
             response.fail(URLError(.timedOut))
             channel.close(promise: nil)
         }
         do {
             let value = try await withTaskCancellationHandler {
                 try Task.checkCancellation()
-                try await channel.writeAndFlush(Self.request(url, method: method, body: body, json: json)).get()
+                try await channel.writeAndFlush(Self.request(
+                    url, method: method, body: body, json: json,
+                    expectContinue: expectContinue, chunked: chunked)).get()
+                if let continued { try await continued.futureResult.get() }
                 if let body {
-                    var buffer = channel.allocator.buffer(capacity: body.count)
-                    buffer.writeBytes(body)
-                    try await channel.writeAndFlush(HTTPClientRequestPart.body(.byteBuffer(buffer))).get()
+                    for offset in stride(from: 0, to: body.count, by: 32 * 1024) {
+                        let end = min(offset + 32 * 1024, body.count)
+                        var buffer = channel.allocator.buffer(capacity: end - offset)
+                        buffer.writeBytes(body[offset..<end])
+                        try await channel.writeAndFlush(HTTPClientRequestPart.body(.byteBuffer(buffer))).get()
+                    }
                 }
                 try await channel.writeAndFlush(HTTPClientRequestPart.end(nil)).get()
                 return try await response.futureResult.get()
             } onCancel: {
+                continued?.fail(CancellationError())
                 response.fail(CancellationError())
                 channel.close(promise: nil)
             }
@@ -193,10 +215,14 @@ final class LFSWireClient: @unchecked Sendable {
         }
     }
 
-    private static func request(_ url: URL, method: HTTPMethod, body: Data?, json: Bool) -> HTTPClientRequestPart {
+    private static func request(
+        _ url: URL, method: HTTPMethod, body: Data?, json: Bool, expectContinue: Bool, chunked: Bool
+    ) -> HTTPClientRequestPart {
         var headers = HTTPHeaders()
         headers.add(name: "Host", value: "\(url.host ?? "127.0.0.1"):\(url.port ?? 80)")
-        headers.add(name: "Content-Length", value: String(body?.count ?? 0))
+        if chunked { headers.add(name: "Transfer-Encoding", value: "chunked") }
+        else { headers.add(name: "Content-Length", value: String(body?.count ?? 0)) }
+        if expectContinue { headers.add(name: "Expect", value: "100-continue") }
         if json {
             headers.add(name: "Accept", value: mediaType)
             headers.add(name: "Content-Type", value: mediaType)

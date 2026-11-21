@@ -67,11 +67,6 @@ let androidDroppedTargets: Set<String> = [
     "GitLFSKitTests",
     "GitLFSTestSupport",
     "GitLFSTestSupportTests",
-    // Windows/macOS/Linux libcurl adapter. GitLFSKit must not name this
-    // target on Android either: SwiftPM requires a `.target` dependency to
-    // be declared even when a platform condition excludes it, and a dropped
-    // target that is still named fails loading with a Sources/CLFSCurl hint.
-    "CLFSCurl",
 ]
 
 func androidFiltered(products list: [Product]) -> [Product] {
@@ -1198,25 +1193,11 @@ let package = Package(
             path: "Sources/GitLFSKit/CGitLFSEnvironment",
             publicHeadersPath: "include"
         ),
-        // Windows-only production workaround for FoundationNetworking #5532:
-        // https://github.com/swiftlang/swift-corelibs-foundation/issues/5532
-        // macOS/Linux have valid reference implementations for direct transport
-        // tests, but their production requests still use URLSession. Android
-        // drops both this declaration and its dependency below during resolution.
-        .target(
-            name: "CLFSCurl",
-            path: "Sources/GitLFSKit/CLFSCurl",
-            publicHeadersPath: "include",
-            linkerSettings: [.linkedLibrary("dl", .when(platforms: [.linux]))]
-        ),
         // No ArgumentParser dependency; stays in the Android build.
         .target(
             name: "GitLFSKit",
             dependencies: [
-                "CGitLFSEnvironment"
-            ] + (buildingForAndroid ? [] : [
-                .target(name: "CLFSCurl", condition: .when(platforms: [.macOS, .linux, .windows]))
-            ]) + [
+                "CGitLFSEnvironment",
                 "SwiftGit",
                 .product(name: "CGitKit", package: "GitKit"),
                 "SSHKit",
@@ -1248,7 +1229,8 @@ let package = Package(
                 "GitLFSTestSupport",
                 "SwiftGit",
                 .product(name: "ShellKit", package: "ShellKit"),
-            ]
+            ],
+            resources: [.copy("Fixtures")]
         ),
         .testTarget(
             name: "GitLFSTestSupportTests",

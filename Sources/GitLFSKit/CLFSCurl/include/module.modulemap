@@ -1,4 +1,0 @@
-module CLFSCurl {
-    header "CLFSCurl.h"
-    export *
-}
