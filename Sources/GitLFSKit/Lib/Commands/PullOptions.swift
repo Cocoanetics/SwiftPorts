@@ -81,6 +81,7 @@ public struct PullOptions: Sendable {
                 byOID[oid]?.append(pointer)
                 continue
             }
+            try? await store.linkOrCopyFromReference(oid, size: size, directories: single.referenceDirectories)
             if try await store.objectExists(oid, size: size) {
                 await single.run(pointer)
                 continue

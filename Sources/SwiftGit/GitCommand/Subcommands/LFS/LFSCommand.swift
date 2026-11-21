@@ -55,12 +55,4 @@ struct LFSCommand: AsyncParsableCommand {
         Shell.current.stderr.write(result.stderr)
         if result.status != 0 { throw CLIError(lines: [], exitCode: result.status) }
     }
-
-    static func installLFSFilter() throws {
-        try GitLFSKit.installFilter()
-    }
-
-    static func uninstallLFSFilter() throws {
-        try GitLFSKit.uninstallFilter()
-    }
 }

@@ -294,6 +294,91 @@ extension LFSFilterTests {
             }
         }
 
+        @Test("pull uses reference objects before downloading, with copy fallback for an existing object",
+               arguments: [false, true])
+        func pullUsesReferenceWithoutRequests(invalidLocalObject: Bool) async throws {
+            try GitLFSKit.installFilter()
+            defer { try? GitLFSKit.uninstallFilter() }
+            try await LFSTestServer.withServer { server in
+                try await LFSServerRepository.run(server, config: LFSFilterFixture.commands) { repo in
+                    try await commitTracked(repo, files: [("a.dat", alpha), ("sub/a.dat", alpha)])
+                    let reference = repo.directory.deletingLastPathComponent().appendingPathComponent("reference.git")
+                    try await GitClient(workingDirectory: reference).initRepository(bare: true)
+                    let referenceStore = LocalStore(gitStorageDirectory: reference)
+                    let source = try await referenceStore.objectPath(oid(alpha))
+                    try alpha.write(to: source)
+                    let alternates = repo.directory.appendingPathComponent(".git/objects/info/alternates")
+                    try Data("\(reference.appendingPathComponent("objects").path.goQuoted)\n".utf8)
+                        .write(to: alternates)
+                    let destination = try await repo.store.objectPath(oid(alpha))
+                    if invalidLocalObject { try Data("truncated".utf8).write(to: destination) }
+
+                    let result = try await runPull(client: repo.client, git: repo.git)
+                    #expect(result.status == 0)
+                    #expect(result.stderr.isEmpty && result.stdout.isEmpty)
+                    #expect(server.requests().isEmpty)
+                    #expect(try Data(contentsOf: destination) == alpha)
+                    #expect(try Data(contentsOf: source) == alpha)
+                    #expect(try Data(contentsOf: repo.directory.appendingPathComponent("a.dat")) == alpha)
+                    #expect(try Data(contentsOf: repo.directory.appendingPathComponent("sub/a.dat")) == alpha)
+                    #expect(try await repo.git.status().isClean)
+                }
+            }
+        }
+
+        @Test("reference imports hard-link missing objects and copy over wrong-size local objects",
+               arguments: [false, true])
+        func referenceImportLinksOrCopies(invalidLocalObject: Bool) async throws {
+            try await LFSTestServer.withServer { server in
+                try await LFSServerRepository.run(server) { repo in
+                    let reference = repo.directory.appendingPathComponent("reference.git")
+                    let referenceStore = LocalStore(gitStorageDirectory: reference)
+                    let source = try await referenceStore.objectPath(oid(alpha))
+                    try alpha.write(to: source)
+                    let destination = try await repo.store.objectPath(oid(alpha))
+                    if invalidLocalObject { try Data("truncated".utf8).write(to: destination) }
+
+                    try await repo.store.linkOrCopyFromReference(
+                        oid(alpha), size: Int64(alpha.count), directories: [referenceStore.objectsDirectory.path])
+                    #expect(try Data(contentsOf: destination) == alpha)
+                    #expect(try Data(contentsOf: source) == alpha)
+                    #if !os(Windows)
+                    let sourceAttributes = try FileManager.default.attributesOfItem(atPath: source.path)
+                    let targetAttributes = try FileManager.default.attributesOfItem(atPath: destination.path)
+                    let sourceInode = sourceAttributes[.systemFileNumber] as? NSNumber
+                    let targetInode = targetAttributes[.systemFileNumber] as? NSNumber
+                    #expect((sourceInode == targetInode) == !invalidLocalObject)
+                    #endif
+                }
+            }
+        }
+
+        @Test("pull downloads when a reference object has the wrong size")
+        func pullRejectsWrongSizeReference() async throws {
+            try GitLFSKit.installFilter()
+            defer { try? GitLFSKit.uninstallFilter() }
+            try await LFSTestServer.withServer { server in
+                server.store(alpha, oid: oid(alpha))
+                try await LFSServerRepository.run(server, config: LFSFilterFixture.commands) { repo in
+                    try await commitTracked(repo, files: [("a.dat", alpha)])
+                    let reference = repo.directory.deletingLastPathComponent().appendingPathComponent("reference.git")
+                    try await GitClient(workingDirectory: reference).initRepository(bare: true)
+                    let referenceStore = LocalStore(gitStorageDirectory: reference)
+                    let source = try await referenceStore.objectPath(oid(alpha))
+                    try Data("truncated".utf8).write(to: source)
+                    try Data("\(reference.appendingPathComponent("objects").path)\n".utf8)
+                        .write(to: repo.directory.appendingPathComponent(".git/objects/info/alternates"))
+
+                    let result = try await runPull(client: repo.client, git: repo.git)
+                    #expect(result.status == 0 && result.stderr.isEmpty)
+                    #expect(server.requests().filter { $0.method == "GET" }.map(\.path) == ["/objects/\(oid(alpha))"])
+                    #expect(try Data(contentsOf: repo.directory.appendingPathComponent("a.dat")) == alpha)
+                    #expect(try Data(contentsOf: source) == Data("truncated".utf8))
+                    #expect(try await repo.git.status().isClean)
+                }
+            }
+        }
+
         @Test("pull respects include/exclude, empty override, missing remote object, and invalid remote")
         func pullFiltersAndFailures() async throws {
             try GitLFSKit.installFilter()

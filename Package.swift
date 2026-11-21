@@ -1178,7 +1178,7 @@ let package = Package(
                 .target(name: "GitCommand", condition: .when(platforms: commandTestPlatforms)),
                 "SwiftGit", "ForgeKit", "SwiftPortsCommands", "SSHKit",
                 // The in-process LFS server for `git push` and LFS transfer oracles.
-                "GitLFSTestSupport",
+                "GitLFSTestSupport", "GitLFSKit",
                 // `Shell.parsableCommand`, to run git the way a host shell does.
                 .product(name: "ShellCommandKit", package: "ShellKit"),
             ]

@@ -58,6 +58,7 @@ struct GitCommandLFSCheckoutPullParsingTests {
 
 #if os(macOS) || os(Linux)
 import Foundation
+import GitLFSKit
 import GitLFSTestSupport
 import ShellKit
 import SwiftGit
@@ -78,13 +79,14 @@ struct GitCommandLFSCheckoutPullOracleTests {
         static func with(
             files: [(String, Data)],
             extraConfig: [(String, String)] = [],
+            useReference: Bool = false,
             _ body: (TwinClones) async throws -> Void
         ) async throws {
             let oracle = try LFSSamePathOracle()
             let server = try await LFSTestServer.start()
-            try LFSCommand.installLFSFilter()
+            try GitLFSKit.installFilter()
             defer {
-                try? LFSCommand.uninstallLFSFilter()
+                try? GitLFSKit.uninstallFilter()
                 oracle.cleanup()
             }
             do {
@@ -102,10 +104,12 @@ struct GitCommandLFSCheckoutPullOracleTests {
 
                 let reference = try skipSmudgeClone(
                     oracle: oracle, bare: bare, name: "clone-ref",
-                    lfsURL: server.endpoint.absoluteString, extraConfig: extraConfig)
+                    lfsURL: server.endpoint.absoluteString, extraConfig: extraConfig,
+                    reference: useReference ? seed : nil)
                 let port = try skipSmudgeClone(
                     oracle: oracle, bare: bare, name: "clone-port",
-                    lfsURL: server.endpoint.absoluteString, extraConfig: extraConfig)
+                    lfsURL: server.endpoint.absoluteString, extraConfig: extraConfig,
+                    reference: useReference ? seed : nil)
                 let twin = TwinClones(
                     oracle: oracle, server: server, bare: bare,
                     reference: reference, port: port, files: files)
@@ -119,13 +123,14 @@ struct GitCommandLFSCheckoutPullOracleTests {
 
         private static func skipSmudgeClone(
             oracle: LFSSamePathOracle, bare: URL, name: String,
-            lfsURL: String, extraConfig: [(String, String)]
+            lfsURL: String, extraConfig: [(String, String)], reference: URL?
         ) throws -> URL {
             let dest = oracle.root.appendingPathComponent(name)
+            let referenceArguments = reference.map { ["--reference", $0.path] } ?? []
             try oracle.git(
                 ["-c", "filter.lfs.smudge=git-lfs smudge --skip -- %f",
                  "-c", "filter.lfs.process=git-lfs filter-process --skip",
-                 "clone", "-q", bare.path, dest.path],
+                 "clone", "-q"] + referenceArguments + [bare.path, dest.path],
                 in: oracle.root)
             try oracle.git(["lfs", "install", "--local"], in: dest)
             try oracle.git(["config", "lfs.url", lfsURL], in: dest)
@@ -200,6 +205,35 @@ struct GitCommandLFSCheckoutPullOracleTests {
         }
     }
 
+    @Test func pullReferenceCloneMakesZeroServerRequests() async throws {
+        let data = Data("reference repository media\n".utf8)
+        try await TwinClones.with(files: [("sub/asset.dat", data)], useReference: true) { twin in
+            let oid = try Pointer.decode(Data(contentsOf: twin.port.appendingPathComponent("sub/asset.dat"))).oid
+            let objectPath = ".git/lfs/objects/\(oid.prefix(2))/\(oid.dropFirst(2).prefix(2))/\(oid)"
+            for repo in [twin.reference, twin.port] {
+                // The smudge filter imports reference objects even with --skip.
+                // Remove only the clone's local link so pull must import it again.
+                let localObject = repo.appendingPathComponent(objectPath)
+                if FileManager.default.fileExists(atPath: localObject.path) {
+                    try FileManager.default.removeItem(at: localObject)
+                }
+                #expect(!FileManager.default.fileExists(atPath: repo.appendingPathComponent(objectPath).path))
+            }
+            let before = twin.server.requests().count
+            let expected = try twin.oracle.run(["lfs", "pull"], in: twin.reference.appendingPathComponent("sub"))
+            let actual = try await twin.oracle.port(["lfs", "pull"], in: twin.port.appendingPathComponent("sub"))
+            #expect(actual.status == expected.status && actual.status == 0)
+            #expect(actual.stdout == expected.stdout && actual.stderr == expected.stderr)
+            #expect(twin.server.requests().count == before)
+            for repo in [twin.reference, twin.port] {
+                #expect(try Data(contentsOf: repo.appendingPathComponent(objectPath)) == data)
+                #expect(try Data(contentsOf: repo.appendingPathComponent("sub/asset.dat")) == data)
+                try await twin.assertClean(repo)
+            }
+            try twin.assertWorktreesMatch()
+        }
+    }
+
     @Test func checkoutLocalObjectMakesZeroServerRequests() async throws {
         let files: [(String, Data)] = [
             ("a.dat", Data("local alpha\n".utf8)),
@@ -228,9 +262,9 @@ struct GitCommandLFSCheckoutPullOracleTests {
 
     @Test func checkoutConflictStagesAndModifiedFilePreservation() async throws {
         let oracle = try LFSSamePathOracle()
-        try LFSCommand.installLFSFilter()
+        try GitLFSKit.installFilter()
         defer {
-            try? LFSCommand.uninstallLFSFilter()
+            try? GitLFSKit.uninstallFilter()
             oracle.cleanup()
         }
 

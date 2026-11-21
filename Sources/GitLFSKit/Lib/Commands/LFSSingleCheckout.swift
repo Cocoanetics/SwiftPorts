@@ -50,7 +50,9 @@ struct LFSSingleCheckout {
         let paths = await LFSRepositoryPaths.load(git, configuration: configuration)
         return LFSSingleCheckout(
             git: git, store: store, workingDirectory: repository.workingDirectory,
-            skip: clean.isEmpty, referenceDirectories: paths.references)
+            skip: clean.isEmpty, referenceDirectories: paths.references.map {
+                URL(fileURLWithPath: $0, relativeTo: git.workingDirectory).path
+            })
     }
 
     /// Checks out one pointer to its repo-relative path, leaving modified
@@ -258,35 +260,8 @@ struct LFSSingleCheckout {
             if info == size { return media }
             try? FileManager.default.removeItem(at: media)
         }
-        for directory in referenceDirectories {
-            let candidate = URL(fileURLWithPath: directory, isDirectory: true)
-                .appendingPathComponent(String(oid.prefix(2)), isDirectory: true)
-                .appendingPathComponent(String(oid.dropFirst(2).prefix(2)), isDirectory: true)
-                .appendingPathComponent(oid)
-            do { try await Shell.authorize(candidate) } catch { continue }
-            guard LocalStore.isObject(at: candidate, size: size) else { continue }
-            let target = try await store.objectPath(oid)
-            try await Shell.authorize(target)
-            if Self.linkOrCopy(from: candidate, to: target) {
-                return target
-            }
-        }
-        return nil
-    }
-
-    private static func linkOrCopy(from source: URL, to destination: URL) -> Bool {
-        if source.standardizedFileURL == destination.standardizedFileURL { return true }
-        do {
-            try FileManager.default.linkItem(at: source, to: destination)
-            return true
-        } catch {
-            do {
-                try FileManager.default.copyItem(at: source, to: destination)
-                return true
-            } catch {
-                return false
-            }
-        }
+        try? await store.linkOrCopyFromReference(oid, size: size, directories: referenceDirectories)
+        return try await store.objectExists(oid, size: size) ? media : nil
     }
 
     private static func copyStream(from source: URL, to destination: FileHandle) throws {
