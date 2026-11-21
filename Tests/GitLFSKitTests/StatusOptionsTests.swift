@@ -152,23 +152,23 @@ struct StatusOptionsTests {
         }
     }
 
-    @Test("a renamed pointer with a new target pairs by the staged rename's similarity")
+    /// Pointers sharing extension lines stay above 50% similar across targets.
+    private func extendedPointer(_ file: (bytes: Data, pointer: Data)) throws -> Data {
+        let extensions = (0..<6).map {
+            PointerExtension(name: "ext\($0)", priority: $0, oid: String(repeating: "\($0)", count: 64))
+        }
+        let plain = try Pointer.decode(file.pointer)
+        return Data(Pointer(oid: plain.oid, size: plain.size, extensions: extensions).encoded.utf8)
+    }
+
+    @Test("a renamed pointer with a new target pairs by similarity, as the staged rename does")
     func renamedChangedPointer() async throws {
         try await withRepo { _, dir, client in
-            // Shared extension lines keep the two pointers above 50% similar.
-            let extensions = (0..<6).map {
-                PointerExtension(name: "ext\($0)", priority: $0, oid: String(repeating: "\($0)", count: 64))
-            }
-            func pointer(_ file: (bytes: Data, pointer: Data)) throws -> Data {
-                let plain = try Pointer.decode(file.pointer)
-                return Data(Pointer(oid: plain.oid, size: plain.size, extensions: extensions).encoded.utf8)
-            }
-            let first = media(17)
             let second = media(18)
-            let oldOID = try await stage(try pointer(first), "old.bin", in: dir, client: client)
+            let oldOID = try await stage(try extendedPointer(media(17)), "old.bin", in: dir, client: client)
             try await commit(client)
             try await client.move(from: "old.bin", to: "new.bin")
-            let newOID = try await stage(try pointer(second), "new.bin", in: dir, client: client)
+            let newOID = try await stage(try extendedPointer(second), "new.bin", in: dir, client: client)
             let cached = try await client.diffIndex(cached: true)
             let similarity = try #require(cached.first?.similarity)
             #expect(cached == [entry("R", oldOID, newOID, "new.bin", from: "old.bin", similarity: similarity)])
@@ -178,6 +178,28 @@ struct StatusOptionsTests {
             #expect(try await scan(client, dir) == StatusIndex(staged: cached, unstaged: []))
             try write(media(19).bytes, "new.bin", in: dir)
             #expect(try await scan(client, dir).unstaged.map(\.status) == ["A", "D"])
+        }
+    }
+
+    @Test("an unstaged deletion pairs with a corrected, similar staged addition")
+    func unstagedDeletionPairsBySimilarity() async throws {
+        try await withRepo { _, dir, client in
+            let second = media(21)
+            let oldOID = try await stage(try extendedPointer(media(20)), "old.bin", in: dir, client: client)
+            try await commit(client)
+            let newOID = try await stage(try extendedPointer(second), "new.bin", in: dir, client: client)
+            try FileManager.default.removeItem(at: dir.appendingPathComponent("old.bin"))
+            try write(second.bytes, "new.bin", in: dir)
+            let status = try await scan(client, dir)
+            #expect(status.staged == [entry("A", Self.zero, newOID, "new.bin", oldMode: 0)])
+            let rename = try #require(status.unstaged.first)
+            #expect(status.unstaged == [entry("R", oldOID, newOID, "new.bin", from: "old.bin",
+                                              similarity: rename.similarity)])
+            #expect((50..<100).contains(rename.similarity ?? 0))
+
+            // The same score git gives the pair once old.bin's deletion is staged.
+            try await client.remove(paths: ["old.bin"], keepWorktree: true)
+            #expect(try await client.diffIndex(cached: true).first?.similarity == rename.similarity)
         }
     }
 
@@ -200,6 +222,27 @@ struct StatusOptionsTests {
             #expect(try await scan(client, dir) == StatusIndex(staged: [], unstaged: [
                 entry("M", executableOID, Self.zero, "exec.bin", newMode: 0o100755),
                 entry("T", linkedOID, Self.zero, "link.bin", newMode: 0o120000)]))
+        }
+    }
+
+    @Test("a staged symlink-to-pointer replacement with matching media is only staged")
+    func stagedSymlinkReplacement() async throws {
+        try await withRepo { _, dir, client in
+            let file = media(22)
+            try write(Data("x".utf8), "target", in: dir)
+            try FileManager.default.createSymbolicLink(
+                atPath: dir.appendingPathComponent("a.bin").path, withDestinationPath: "target")
+            try await client.add(paths: ["target", "a.bin"])
+            try await commit(client)
+            let link = try #require(try await client.indexedEntries().first { $0.path == "a.bin" }).oid
+            try FileManager.default.removeItem(at: dir.appendingPathComponent("a.bin"))
+            let pointer = try await stage(file.pointer, "a.bin", in: dir, client: client)
+            try write(file.bytes, "a.bin", in: dir)
+            let staged = [entry("T", link, pointer, "a.bin", oldMode: 0o120000)]
+            #expect(try await scan(client, dir) == StatusIndex(staged: staged, unstaged: []))
+            try write(media(23).bytes, "a.bin", in: dir)
+            #expect(try await scan(client, dir) == StatusIndex(
+                staged: staged, unstaged: [entry("T", link, Self.zero, "a.bin", oldMode: 0o120000)]))
         }
     }
     #endif
@@ -226,7 +269,7 @@ struct StatusOptionsTests {
             let uncached = try await client.diffIndex(cached: false, refresh: true)
             #expect(uncached == [entry("M", oursOID, Self.zero, "a.bin")])
             #expect(try await StatusOptions().comparePointers(
-                uncached, cached: [], client: client, repositoryRoot: dir) == uncached)
+                uncached, client: client, repositoryRoot: dir) == uncached)
             // The cached U shares the work-tree record's key, as in upstream.
             let status = try await scan(client, dir)
             #expect(status.staged.map(\.status) == ["U"])
