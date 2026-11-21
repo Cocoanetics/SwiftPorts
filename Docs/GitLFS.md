@@ -127,6 +127,11 @@ at a time, checks retained probe and I/O bounds, hashes the smudged output
 incrementally, and verifies the staged pointer. Task cancellation releases
 the clean stream's temporary file.
 
+Another libgit2 limitation is failed-clone cleanup: it removes the destination
+after a checkout error, whereas Git retains it. The failure oracle checks the
+LFS diagnostic, Git fatal/warning text and exit status; it does not establish
+parity for retaining a failed clone's repository.
+
 Callback filesystem/network work uses ForgeKit's internal `BlockingBridge`.
 SwiftGit supplies a revocable operation context with the calling shell,
 credentials, environment configuration and include authorization. Its metadata
