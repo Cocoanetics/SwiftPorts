@@ -198,7 +198,32 @@ extension GitClient {
     /// `git diff -M` at the default 50% threshold. Copies stay off:
     /// `GIT_DIFF_FIND_BY_CONFIG` would follow `diff.renames`, which can
     /// disable renames, and plain `git diff-index` does not turn them on.
+    /// Real `git diff-index -M` never splits `T` (typechange) deltas for
+    /// rename detection without `-B`; shield them across `git_diff_find_similar`.
     private static func detectDiffIndexRenames(_ diff: OpaquePointer?) throws {
+        var typeChangePaths: Set<[UInt8]> = []
+        let count = git_diff_num_deltas(diff)
+        for index in 0..<count {
+            guard let pointer = git_diff_get_delta(diff, index),
+                  pointer.pointee.status == GIT_DELTA_TYPECHANGE,
+                  let path = pointer.pointee.old_file.path ?? pointer.pointee.new_file.path
+            else { continue }
+            typeChangePaths.insert(Array(String(cString: path).utf8))
+            UnsafeMutablePointer(mutating: pointer).pointee.status = GIT_DELTA_CONFLICTED
+        }
+        defer {
+            if !typeChangePaths.isEmpty {
+                let updated = git_diff_num_deltas(diff)
+                for index in 0..<updated {
+                    guard let pointer = git_diff_get_delta(diff, index),
+                          pointer.pointee.status == GIT_DELTA_CONFLICTED,
+                          let path = pointer.pointee.old_file.path ?? pointer.pointee.new_file.path,
+                          typeChangePaths.contains(Array(String(cString: path).utf8))
+                    else { continue }
+                    UnsafeMutablePointer(mutating: pointer).pointee.status = GIT_DELTA_TYPECHANGE
+                }
+            }
+        }
         var find = git_diff_find_options()
         try check(git_diff_find_options_init(&find, UInt32(GIT_DIFF_FIND_OPTIONS_VERSION)))
         find.flags = UInt32(GIT_DIFF_FIND_RENAMES.rawValue)
@@ -378,6 +403,14 @@ extension GitClient {
             guard let delta = git_diff_get_delta(diff, index)?.pointee,
                   let entry = DiffIndexEntry(delta: delta) else { continue }
             entries.append(entry)
+        }
+        // `git diff-index` always outputs in unsigned byte (`strcmp`) order,
+        // even when `core.ignoreCase = true` makes libgit2 sort case-insensitively.
+        entries.sort { lhs, rhs in
+            if !lhs.destinationPath.utf8.elementsEqual(rhs.destinationPath.utf8) {
+                return lhs.destinationPath.utf8.lexicographicallyPrecedes(rhs.destinationPath.utf8)
+            }
+            return lhs.sourcePath.utf8.lexicographicallyPrecedes(rhs.sourcePath.utf8)
         }
         return entries
     }

@@ -18,6 +18,7 @@ public struct StatusOptions: Sendable {
             if !porcelain && !json {
                 try await renderTracking(client: client, output: &result.stdout)
             }
+            try await checkUnmergedEntries(client: client)
             // diffIndex's typed HEAD primitive supplies the empty tree for an unborn HEAD.
             let scanned = try await scanIndex(client: client, repositoryRoot: root)
             let quotePath = try await client.configBool("core.quotepath") ?? true
@@ -64,5 +65,23 @@ public struct StatusOptions: Sendable {
     private static func key(_ entry: DiffIndexEntry) -> [UInt8] {
         let name = entry.destinationPath.isEmpty ? entry.sourcePath : entry.destinationPath
         return Array("\(entry.oldOID):\(entry.newOID):".utf8) + Array(name.utf8)
+    }
+
+    /// Upstream `git.DiffIndex(..., refresh: true)` runs `git update-index -q --refresh`,
+    /// which fails with `<path>: needs merge` whenever the index has unmerged entries.
+    private func checkUnmergedEntries(client: GitClient) async throws {
+        var seen = Set<[UInt8]>()
+        var paths: [String] = []
+        for entry in try await client.indexedEntries() where entry.stage != 0 {
+            if seen.insert(Array(entry.path.utf8)).inserted {
+                paths.append(entry.path)
+            }
+        }
+        guard !paths.isEmpty else { return }
+        paths.sort { $0.utf8.lexicographicallyPrecedes($1.utf8) }
+        let details = paths.map { "\($0): needs merge" }.joined(separator: "\n")
+        throw LFSFailure(
+            "Failed to run `git update-index`: error running git 'update-index' '-q' '--refresh': "
+                + "'\(details)' 'exit status 1'")
     }
 }
