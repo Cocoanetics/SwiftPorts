@@ -77,9 +77,9 @@ struct LFSProgressRateOracleTests {
 
     @Test(
         "multi-second transfer stays 0 B/s on first sample from zero time, then updates running average",
-        arguments: [LFSTransferDirection.upload, .download]
+        arguments: [LFSProgressMeter.Direction.upload, .download]
     )
-    func multiSecondRunningAverage(_ direction: LFSTransferDirection) {
+    func multiSecondRunningAverage(_ direction: LFSProgressMeter.Direction) {
         let clock = Clock()
         let sink = Sink()
         let meter = LFSProgressMeter(
