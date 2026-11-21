@@ -29,6 +29,8 @@ history, and one test runner.
 
 `git lfs ls-files` is also available, with ref/history selection, explicit
 include/exclude filters, and text, debug, or JSON output.
+`git push` uploads LFS objects first when the effective pre-push hook is
+git-lfs's (read, never run; `--no-verify` skips it); see Docs/GitLFS.md.
 
 `SSHKeygenCommand` / `ssh-keygen` shares SSHKit's key material: Ed25519 and
 ECDSA key generation (`-t`, `-b`, `-f`, `-N`, `-C`, `-q`), public keys (`-y`),

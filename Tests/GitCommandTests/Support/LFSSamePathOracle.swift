@@ -251,13 +251,20 @@ struct LFSSamePathOracle {
     private func command(
         _ arguments: [String], in directory: URL, input: Data = Data(), environment: [String: String] = [:]
     ) async throws -> Output {
+        try await port(["lfs"] + arguments, in: directory, input: input, environment: environment)
+    }
+
+    /// `GitCommand` for `git <arguments>`, in the same environment as system git.
+    func port(
+        _ arguments: [String], in directory: URL, input: Data = Data(), environment: [String: String] = [:]
+    ) async throws -> Output {
         let out = OutputSink(), err = OutputSink()
         let shell = Shell(stdin: InputSource.data(input), stdout: out, stderr: err,
                           environment: Environment(variables: commandEnvironment(environment),
                                                    workingDirectory: directory.path))
         shell.sandbox = sandbox
         let status = try await shell.withCurrent {
-            try await Shell.parsableCommand(GitCommand.self).run(["git", "lfs"] + arguments)
+            try await Shell.parsableCommand(GitCommand.self).run(["git"] + arguments)
         }
         out.finish()
         err.finish()

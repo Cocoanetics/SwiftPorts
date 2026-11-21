@@ -166,7 +166,7 @@ extension GitClient {
     }
 
     func configEntries(scope: ConfigScope?, missing: MissingConfigFile = .fail) async throws -> [ListedConfigEntry] {
-        if filterContext != nil {
+        if filterContext != nil, !borrowsIsolation {
             guard scope == nil || scope == .local else {
                 throw GitFilterOperationContext.Failure.unsupportedOperation
             }
