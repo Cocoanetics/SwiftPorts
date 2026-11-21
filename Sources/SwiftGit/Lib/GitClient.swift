@@ -35,6 +35,9 @@ public struct GitClient: ForgeKit.GitClient {
     public var quiet = false
     /// Set only for the internal, callback-scoped metadata client.
     var filterContext: GitFilterOperationContext?
+    /// Set only for the client a push lends its whole isolation to, for
+    /// its pre-push work (``push(remote:refspecs:setUpstream:leases:beforeSending:)``).
+    var borrowsIsolation = false
 
     public init(
         workingDirectory: URL = Shell.currentDirectory,
@@ -54,6 +57,13 @@ public struct GitClient: ForgeKit.GitClient {
 
     public func currentBranch() async throws -> String? {
         try await withFilterMetadataRepository { try $0.currentBranch() }
+    }
+
+    /// How git names `remote` in a push's output: a configured remote's
+    /// push URL, else its URL, or the URL or path as given, without
+    /// credentials.
+    public func displayName(ofRemote remote: String) async throws -> String {
+        try await withRepository { $0.displayName(ofRemote: remote) }
     }
 
     public func upstreamBranch(of localBranch: String) async throws -> String? {
@@ -187,14 +197,32 @@ public struct GitClient: ForgeKit.GitClient {
     /// if the remote still has it where they expect, and refused as
     /// `stale info` if not.
     ///
+    /// `beforeSending` is the work git's pre-push hook does: it gets the
+    /// updates the push is about to send, as the hook reads them, once the
+    /// remote's refs are known and before anything is sent, and a client
+    /// whose git operations run while the push waits. If it throws, the
+    /// push sends nothing and rethrows.
+    ///
     /// - Returns: The refspecs pushed, one per ref and fully qualified;
     ///   empty when there was nothing to send.
     @discardableResult
     public func push(
-        remote: String, refspecs: [String], setUpstream: Bool, leases: PushLeases? = nil
+        remote: String, refspecs: [String], setUpstream: Bool, leases: PushLeases? = nil,
+        beforeSending: (@Sendable (_ updates: [PushUpdate], _ git: GitClient) async throws -> Void)? = nil
     ) async throws -> [String] {
         let progress = shellProgressSink()
         let connection = try await resolveRemoteOperand(remote, for: .push)
+        // GitKit calls it on the thread running the push, inside its
+        // isolation: the async work is bridged as ShellSigner bridges
+        // signing, and runs in the isolation the push lends it.
+        let hook = beforeSending.map { work in
+            { [self] (updates: [PushUpdate]) throws in
+                let context = try GitFilterOperationContext.capture()
+                try BlockingBridge.runBlocking {
+                    try await context.withLentClient(self) { try await work(updates, $0) }
+                }
+            }
+        }
         return try await withRepository { repository in
             // GitKit records the upstream of each branch that went
             // through as git does: the remote's name, or the URL or path
@@ -203,12 +231,12 @@ public struct GitClient: ForgeKit.GitClient {
                 return try repository.push(
                     remote: connection.remote, refspecs: refspecs, setUpstream: setUpstream,
                     leases: leases, connectingTo: connection.location,
-                    credentials: credentials, progress: progress)
+                    credentials: credentials, progress: progress, beforeSending: hook)
             }
             return try repository.push(
                 remote: connection.remote, refspecs: refspecs, setUpstream: setUpstream,
                 connectingTo: connection.location,
-                credentials: credentials, progress: progress)
+                credentials: credentials, progress: progress, beforeSending: hook)
         }
     }
 
