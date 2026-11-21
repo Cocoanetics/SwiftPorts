@@ -1,7 +1,7 @@
 import Foundation
 import ShellKit
 #if os(Windows)
-import ucrt
+import WinSDK
 #elseif canImport(Glibc)
 import Glibc
 #elseif canImport(Musl)
@@ -92,16 +92,22 @@ final class LFSProgressMeter: @unchecked Sendable {
         // `os.O_WRONLY|os.O_CREATE|os.O_APPEND`: every write lands at the end,
         // even when another handle appends to the same file.
         #if os(Windows)
-        let descriptor = file.path.withCString(encodedAs: UTF16.self) {
-            _wopen($0, _O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY, _S_IREAD | _S_IWRITE)
+        // Go opens O_APPEND as FILE_APPEND_DATA, which Windows appends atomically.
+        let handle = file.path.withCString(encodedAs: UTF16.self) {
+            CreateFileW($0, DWORD(FILE_APPEND_DATA), DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE), nil,
+                        DWORD(OPEN_ALWAYS), DWORD(FILE_ATTRIBUTE_NORMAL), nil)
         }
+        guard let handle, handle != INVALID_HANDLE_VALUE else {
+            return failed("Windows error \(GetLastError())")
+        }
+        return FileHandle(handle: handle, closeOnDealloc: true)
         #else
         let descriptor = open(file.path, O_WRONLY | O_CREAT | O_APPEND, 0o666)
-        #endif
         guard descriptor >= 0 else {
             return failed(String(cString: strerror(errno)))
         }
         return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        #endif
     }
 
     func start() { lock.withLock { paused = false } }
