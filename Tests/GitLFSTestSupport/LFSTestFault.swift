@@ -10,6 +10,8 @@ public enum LFSTestFault: Sendable, Equatable {
     case unauthorized
     /// The batch object for `oid` carries `error.code` (404, 410, or 422).
     case objectStatus(oid: String, code: Int)
+    /// A successful batch object with no transfer action, even when it is absent locally.
+    case noAction(oid: String)
     /// The next request is answered `429` with this `Retry-After` value.
     case tooManyRequests(retryAfter: String)
     /// The next request is answered with this 5xx status.
@@ -32,6 +34,8 @@ public enum LFSTestFault: Sendable, Equatable {
             return "401"
         case .objectStatus(_, let code):
             return String(code)
+        case .noAction:
+            return "no-action"
         case .tooManyRequests:
             return "429"
         case .serverError(let code):
@@ -51,7 +55,8 @@ public enum LFSTestFault: Sendable, Equatable {
         switch self {
         case .unauthorized, .tooManyRequests, .serverError, .repeatingServerError:
             return nil
-        case .objectStatus(let oid, _), .expired(let oid), .wrongSize(let oid), .wrongSHA256(let oid):
+        case .objectStatus(let oid, _), .noAction(let oid), .expired(let oid),
+             .wrongSize(let oid), .wrongSHA256(let oid):
             return oid
         }
     }
@@ -60,7 +65,7 @@ public enum LFSTestFault: Sendable, Equatable {
         switch self {
         case .unauthorized, .tooManyRequests, .serverError, .repeatingServerError:
             return true
-        case .objectStatus, .expired, .wrongSize, .wrongSHA256:
+        case .objectStatus, .noAction, .expired, .wrongSize, .wrongSHA256:
             return false
         }
     }

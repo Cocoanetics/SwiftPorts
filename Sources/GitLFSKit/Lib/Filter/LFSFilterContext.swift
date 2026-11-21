@@ -11,6 +11,7 @@ struct LFSFilterContext: Sendable {
     let skipSmudge: Bool
     let shell: Shell
     let remotes: LFSFilterRemotes
+    var processCommand: String?
 
     static func command(_ git: SwiftGit.GitClient, direction: GitFilterDirection) async throws -> String? {
         // convert.c gives process presence precedence, including an empty value.
@@ -27,8 +28,13 @@ struct LFSFilterContext: Sendable {
     ) async throws -> LFSFilterContext? {
         let required = try await git.configBool("filter.lfs.required") == true
         guard let command = try await command(git, direction: direction) else {
-            // convert.c fails a required driver even when this direction has no command.
-            if required { throw LFSClientError("") }
+            if required {
+                // Git's streamable checkout bypasses an absent smudge/process command.
+                // Empty values still select its in-core conversion, which fails as required.
+                let process = try await git.configGet("filter.lfs.process")
+                let smudge = try await git.configGet("filter.lfs.smudge")
+                if direction == .clean || process != nil || smudge != nil { throw LFSClientError("") }
+            }
             return nil
         }
         do {
@@ -37,7 +43,8 @@ struct LFSFilterContext: Sendable {
                 required: required,
                 skipSmudge: command.split(whereSeparator: \.isWhitespace).contains("--skip")
                     || LFSConfiguration.bool(Shell.env("GIT_LFS_SKIP_SMUDGE"), fallback: false),
-                shell: Shell.current, remotes: remotes)
+                shell: Shell.current, remotes: remotes,
+                processCommand: try await git.configGet("filter.lfs.process"))
         } catch {
             guard !required else { throw error }
             return nil

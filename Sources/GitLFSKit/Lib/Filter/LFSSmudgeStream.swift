@@ -8,6 +8,9 @@ final class LFSSmudgeStream: GitFilterStream {
     private var probe = Data()
     private var passthrough = false
 
+    /// Internal regression probe: only a possible pointer is retained between writes.
+    var bufferedByteCount: Int { probe.count }
+
     init(context: LFSFilterContext, path: String, output: @escaping (UnsafeRawBufferPointer) throws -> Void) {
         self.context = context
         self.path = path
@@ -59,10 +62,13 @@ final class LFSSmudgeStream: GitFilterStream {
             }
             reader = opened
         } catch {
-            let failure = LFSFilterFailure(path: path, pointer: pointer, underlying: error)
+            let failure = LFSFilterFailure(path: path, pointer: pointer, underlying: error,
+                optionalProcessCommand: context.required ? nil : context.processCommand)
             // Diagnostics use the captured Shell, including when suppressed.
             context.shell.stderr.write(Data((failure.localizedDescription + "\n").utf8))
-            guard !context.required || configuration.skipDownloadErrors else { throw failure }
+            // Git's delayed checkout fails if filter-process exits, even for an optional driver.
+            guard configuration.skipDownloadErrors || (!context.required && context.processCommand == nil)
+            else { throw failure }
             let fallback = configuration.skipDownloadErrors ? Data(pointer.encoded.utf8) : probe
             try fallback.withUnsafeBytes(output)
             return

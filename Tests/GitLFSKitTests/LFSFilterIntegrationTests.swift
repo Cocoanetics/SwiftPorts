@@ -1,0 +1,193 @@
+import Foundation
+import Crypto
+import Testing
+import ShellKit
+import SwiftGit
+import GitLFSTestSupport
+@testable import GitLFSKit
+
+extension LFSFilterTests {
+    @Suite("LFS checkout, clone and status integration")
+    struct LFSFilterIntegrationTests {
+        @Test("local checkout and linked worktree share default or configured storage",
+               arguments: ["", "shared-lfs"])
+        func local(storage: String) async throws {
+            try await LFSFilterFixture.run { host in
+                let data = Data(repeating: 0x71, count: 200_003)
+                let config = storage.isEmpty ? [] : [("lfs.storage", storage)]
+                let made = try await LFSFilterFixture.seed(host, data: data, config: config)
+                let stored = try await LocalStore.open(made.client)
+                #expect(try Data(contentsOf: stored.objectPathname(made.pointer.oid)) == data)
+                #expect(try await made.client.catFileBlob("HEAD:a.lfs") == Data(made.pointer.encoded.utf8))
+                try await LFSFilterFixture.restore(made.client, directory: made.directory, expected: data)
+                let linked = host.root.appendingPathComponent("linked")
+                try await made.client.worktreeAdd(path: linked, branch: "linked")
+                let client = SwiftGit.GitClient(workingDirectory: linked)
+                let shared = try await LocalStore.open(client)
+                #expect(shared.objectsDirectory.standardizedFileURL == stored.objectsDirectory.standardizedFileURL)
+                #expect(try Data(contentsOf: linked.appendingPathComponent("a.lfs")) == data)
+                #expect(try await client.status().isClean)
+                try await LFSFilterFixture.restore(client, directory: linked, expected: data)
+
+                LFSFilterFixture.configureClone([("lfs.storage", stored.storageDirectory.path)])
+                let destination = host.root.appendingPathComponent("clone")
+                try await SwiftGit.GitClient(workingDirectory: host.root)
+                    .clone(url: made.directory, directory: destination)
+                let clone = SwiftGit.GitClient(workingDirectory: destination)
+                #expect(try Data(contentsOf: destination.appendingPathComponent("a.lfs")) == data)
+                #expect(try await clone.status().isClean)
+            }
+        }
+
+        @Test("checkout and clone download missing objects, including a 401 credential retry",
+               arguments: [false, true])
+        func server(authenticate: Bool) async throws {
+            try await LFSTestServer.withServer { server in
+                try await LFSFilterFixture.run { host in
+                    let data = Data(repeating: 0x72, count: 200_003)
+                    let made = try await LFSFilterFixture.seed(host, data: data,
+                        config: [("lfs.url", server.endpoint.absoluteString)])
+                    server.store(data, oid: made.pointer.oid)
+                    let store = try await LocalStore.open(made.client)
+                    try FileManager.default.removeItem(at: store.objectPathname(made.pointer.oid))
+                    if authenticate { server.inject(.unauthorized) }
+                    let client = SwiftGit.GitClient(workingDirectory: made.directory, credentials: { _, _, _ in
+                        .userPassword(username: "filter", password: "secret")
+                    })
+                    try await LFSFilterFixture.restore(client, directory: made.directory, expected: data)
+                    if authenticate {
+                        #expect(server.requests().contains { $0.status == 401 })
+                        #expect(server.requests().contains {
+                            $0.requestHeaders["authorization"] == "Basic ZmlsdGVyOnNlY3JldA=="
+                        })
+                    }
+                    LFSFilterFixture.configureClone([("lfs.url", server.endpoint.absoluteString)])
+                    let destination = host.root.appendingPathComponent("clone")
+                    try await SwiftGit.GitClient(workingDirectory: host.root)
+                        .clone(url: made.directory, directory: destination)
+                    let clone = SwiftGit.GitClient(workingDirectory: destination)
+                    #expect(try Data(contentsOf: destination.appendingPathComponent("a.lfs")) == data)
+                    #expect(try await clone.status().isClean)
+                    #expect(server.requests().filter { $0.method == "GET" && $0.status == 200 }.count == 2)
+                }
+            }
+        }
+
+        @Test("64 MiB is generated, cleaned, staged and smudged with bounded stream buffers")
+        func boundedMemory() async throws {
+            try await LFSFilterFixture.run { host in
+                let made = try await LFSFixture.make(host, "large", config: LFSFilterFixture.commands)
+                try Data("*.lfs filter=lfs -text\n".utf8)
+                    .write(to: made.directory.appendingPathComponent(".gitattributes"))
+                let client = await LFSClient(git: made.client)
+                let store = try await LocalStore.open(made.client)
+                let context = LFSFilterContext(client: client, store: store, required: true,
+                    skipSmudge: false, shell: Shell.current, remotes: LFSFilterRemotes())
+                let file = made.directory.appendingPathComponent("a.lfs")
+                #expect(FileManager.default.createFile(atPath: file.path, contents: nil))
+                let writer = try FileHandle(forWritingTo: file)
+                defer { try? writer.close() }
+                var hasher = SHA256()
+                var pointerBytes = Data()
+                var largestWrite = 0
+                let stream = LFSCleanStream(context: context, fileWrite: { handle, bytes in
+                    largestWrite = max(largestWrite, bytes.count)
+                    try handle.write(contentsOf: bytes)
+                }, output: { pointerBytes.append(contentsOf: $0) })
+                // Only one 64 KiB block is alive per iteration; never materialize the file in Data.
+                for index in 0..<1024 {
+                    let block = Data(repeating: UInt8(index % 251), count: 64 * 1024)
+                    hasher.update(data: block)
+                    try writer.write(contentsOf: block)
+                    try block.withUnsafeBytes(stream.write)
+                    #expect(pointerBytes.isEmpty)
+                    #expect(stream.bufferedByteCount <= Pointer.blobSizeCutoff)
+                }
+                try writer.close()
+                try stream.close()
+                let oid = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+                let pointer = Pointer(oid: oid, size: 64 * 1024 * 1024)
+                #expect(pointerBytes == Data(pointer.encoded.utf8))
+                #expect(largestWrite <= 64 * 1024)
+                try await made.client.add(paths: [".gitattributes", "a.lfs"])
+                let entry = try #require(try await made.client.indexedEntries().first { $0.path == "a.lfs" })
+                #expect(try await made.client.catFileBlob(entry.oid) == pointerBytes)
+                var outputHash = SHA256()
+                var outputCount = 0
+                let smudge = LFSSmudgeStream(context: context, path: "a.lfs") {
+                    #expect($0.count <= 64 * 1024)
+                    outputCount += $0.count
+                    outputHash.update(bufferPointer: $0)
+                }
+                try pointerBytes.withUnsafeBytes(smudge.write)
+                #expect(smudge.bufferedByteCount <= Pointer.blobSizeCutoff)
+                try smudge.close()
+                #expect(outputCount == Int(pointer.size))
+                #expect(outputHash.finalize().map { String(format: "%02x", $0) }.joined() == oid)
+            }
+        }
+
+        @Test("cancelling a clean task removes its partial temporary file")
+        func cancellationCleanup() async throws {
+            try await LFSStreamFixture.run { (context, _, _) async throws in
+                let ready = LFSTransferSignal()
+                let task = Task {
+                    let stream = LFSCleanStream(context: context) { _ in
+                        Issue.record("cancelled transform must not emit a pointer")
+                    }
+                    try Data(repeating: 0x73, count: 128 * 1024).withUnsafeBytes(stream.write)
+                    await ready.signal()
+                    try await Task.sleep(for: .seconds(30))
+                    try stream.close()
+                }
+                await ready.wait()
+                #expect(try FileManager.default.contentsOfDirectory(atPath:
+                    context.store.temporaryDirectory.path).count == 1)
+                task.cancel()
+                await #expect(throws: CancellationError.self) { try await task.value }
+                #expect(try FileManager.default.contentsOfDirectory(atPath:
+                    context.store.temporaryDirectory.path).isEmpty)
+            }
+        }
+
+        #if os(macOS) || os(Linux)
+        @Test("built git installs the filter at startup in concurrent isolated shells")
+        func startup() async throws {
+            let executable = try LFSFilterProcess.builtGit()
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for token in ["first", "second"] {
+                    group.addTask {
+                        let host = IsolatedLFSHost()
+                        defer { try? FileManager.default.removeItem(at: host.root) }
+                        let directory = host.root.appendingPathComponent("repo")
+                        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                        func run(_ arguments: [String]) throws -> String {
+                            let result = try LFSFilterProcess.run(executable, arguments, host: host, cwd: directory)
+                            #expect(result.status == 0, "\(arguments): \(result.stderr)")
+                            return result.stdout
+                        }
+                        _ = try run(["init", "-b", "main"])
+                        for (key, value) in LFSFilterFixture.commands
+                            + [("user.name", "Test"), ("user.email", "test@example.com")] {
+                            _ = try run(["config", key, value])
+                        }
+                        let data = Data("isolated \(token) content\n".utf8)
+                        try Data("*.lfs filter=lfs -text\n".utf8)
+                            .write(to: directory.appendingPathComponent(".gitattributes"))
+                        try data.write(to: directory.appendingPathComponent("a.lfs"))
+                        _ = try run(["add", ".gitattributes", "a.lfs"])
+                        let pointer = Pointer(oid: LFSFilterFixture.hash(data), size: Int64(data.count))
+                        _ = try run(["commit", "-m", "startup"])
+                        #expect(try run(["cat-file", "-p", "HEAD:a.lfs"]) == pointer.encoded)
+                        try FileManager.default.removeItem(at: directory.appendingPathComponent("a.lfs"))
+                        _ = try run(["checkout", "--", "a.lfs"])
+                        #expect(try Data(contentsOf: directory.appendingPathComponent("a.lfs")) == data)
+                        #expect(try run(["status", "--porcelain"]).isEmpty)
+                    }
+                }
+                try await group.waitForAll()
+            }
+        }
+        #endif
+    }
+}
