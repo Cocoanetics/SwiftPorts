@@ -189,8 +189,10 @@ struct LFSConfigSourceTests {
                 .appendingPathComponent("server.git", isDirectory: true)
             try await GitClient(workingDirectory: server).initRepository(initialBranch: "main")
             // git-lfs RewriteLocalPathAsURL inserts a slash before a Windows
-            // drive letter and uses forward slashes on every platform.
-            let gitPath = server.appendingPathComponent(".git").path.replacingOccurrences(of: "\\", with: "/")
+            // drive letter, uses forward slashes, and joins onto the physical
+            // working directory (`/private/var` on Darwin).
+            let gitPath = LFSRepositoryPaths.canonical(server.appendingPathComponent(".git").path)
+                .replacingOccurrences(of: "\\", with: "/")
             let wanted = "file://\(gitPath.hasPrefix("/") ? "" : "/")\(gitPath)"
             try await made.client.configSet("remote.origin.url", "../server.git")
             let remote = await LFSEndpointFinder(made.client).endpoint(operation: "download").url

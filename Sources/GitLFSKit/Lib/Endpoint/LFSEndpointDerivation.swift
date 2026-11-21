@@ -1,4 +1,13 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#elseif os(Android)
+import Android
+#endif
 
 /// `lfsapi.endpointGitFinder.NewEndpoint` and `lfshttp.EndpointFrom*`.
 enum LFSEndpointDerivation {
@@ -128,9 +137,11 @@ enum LFSEndpointDerivation {
         FileManager.default.fileExists(atPath: located(path, base: base))
     }
 
-    /// `filepath.Abs` without resolving symlinks, then `filepath.Clean`.
-    /// A relative path joins `base`, the repository directory git-lfs would
-    /// have been run in, rather than the process's current directory.
+    /// `filepath.Abs`, then `filepath.Clean`. A relative path joins `base`,
+    /// the repository directory git-lfs would have been run in, rather than
+    /// the process's current directory. That join uses the physical
+    /// directory (`os.Getwd`): on Darwin, `/var` is `/private/var`.
+    /// Symlinks inside the relative path itself are left alone.
     static func absolutePath(_ path: String, base: String) -> String {
         clean(located(path, base: base))
     }
@@ -139,7 +150,21 @@ enum LFSEndpointDerivation {
     /// the way `filepath.Abs` joins onto the process directory.
     static func located(_ path: String, base: String) -> String {
         if (path as NSString).isAbsolutePath || base.isEmpty { return path }
-        return (base as NSString).appendingPathComponent(path)
+        let root = physical(base) ?? base
+        return (root as NSString).appendingPathComponent(path)
+    }
+
+    /// `os.Getwd` for a directory that exists. Foundation shortens
+    /// `/private/var` to `/var`; the kernel and Go do not.
+    private static func physical(_ path: String) -> String? {
+        #if os(Windows)
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        return resolved.isEmpty ? nil : resolved
+        #else
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+        #endif
     }
 
     /// `filepath.Clean`. A Windows drive or UNC share is a volume, so `..`
