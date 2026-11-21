@@ -29,11 +29,12 @@ struct LFSFilterContext: Sendable {
         let required = try await git.configBool("filter.lfs.required") == true
         guard let command = try await command(git, direction: direction) else {
             if required {
-                // Git's streamable checkout bypasses an absent smudge/process command.
-                // Empty values still select its in-core conversion, which fails as required.
+                // Git's streamable checkout bypasses a driver only when all commands are absent.
+                // Any configured command, even empty or clean-only, selects in-core conversion.
                 let process = try await git.configGet("filter.lfs.process")
                 let smudge = try await git.configGet("filter.lfs.smudge")
-                if direction == .clean || process != nil || smudge != nil { throw LFSClientError("") }
+                let clean = try await git.configGet("filter.lfs.clean")
+                if direction == .clean || process != nil || smudge != nil || clean != nil { throw LFSClientError("") }
             }
             return nil
         }

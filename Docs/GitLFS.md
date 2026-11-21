@@ -93,8 +93,10 @@ The default attribute is `filter=lfs`. A configured, nonempty
 `filter.lfs.clean` and `filter.lfs.smudge`, including when process is empty.
 When process is absent, clean and smudge enable their respective directions.
 An optional unconfigured direction passes through. Required clean fails without
-a command; Git's streamable checkout bypasses an absent smudge/process command,
-but explicitly empty values fail. Attributes that are absent, unset or select
+a command; Git's streamable checkout bypasses a driver only when all three
+commands are absent. Configuring any command, including an empty value or a
+clean-only command, selects in-core conversion and fails required checkout
+without a working smudge command. Attributes that are absent, unset or select
 another driver do not invoke LFS.
 
 Clean hashes content incrementally into temporary storage, verifies and inserts

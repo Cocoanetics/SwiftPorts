@@ -57,8 +57,8 @@ struct LFSFilterOracleTests {
     }
 
     @Test("checkout attributes and direction-specific commands match the reference",
-           arguments: ["absent", "unset", "other", "none", "clean", "smudge", "required"])
-    func checkoutGating(mode: String) throws {
+           arguments: ["absent", "unset", "other", "none", "clean", "clean-empty", "smudge"], [false, true])
+    func checkoutGating(mode: String, required: Bool) throws {
         let fixture = try LFSFilterOracleFixture()
         defer { fixture.cleanup() }
         try fixture.seed(Data("content\n".utf8))
@@ -68,14 +68,19 @@ struct LFSFilterOracleTests {
         for command in ["clean", "smudge", "process"] {
             _ = try fixture.run(["config", "--unset", "filter.lfs.\(command)"], reference: true)
         }
-        try fixture.configure(["filter.lfs.required": mode == "required" ? "true" : "false"])
+        try fixture.configure(["filter.lfs.required": required ? "true" : "false"])
         if ["clean", "smudge"].contains(mode) {
             try fixture.configure(["filter.lfs.\(mode)": "git-lfs " + mode + " -- %f"])
         }
+        if mode == "clean-empty" { try fixture.configure(["filter.lfs.clean": ""]) }
         let actual = try fixture.checkout(reference: false)
         let reference = try fixture.checkout(reference: true)
         #expect(actual.status == reference.status)
         #expect(actual.stderr == reference.stderr)
+        if required && ["clean", "clean-empty"].contains(mode) {
+            #expect(reference.status == 128)
+            #expect(reference.stderr == "fatal: a.lfs: smudge filter lfs failed\n")
+        }
         if actual.status == 0 { #expect(actual.bytes == reference.bytes) }
     }
 
