@@ -39,8 +39,9 @@ struct LFSPlainUploadTests {
         }
     }
 
-    @Test("redirects retain configured headers and follow the platform method rules", arguments: [303, 307])
-    func redirects(code: Int) async throws {
+    @Test("redirects retain configured headers and follow the platform method rules",
+          arguments: [303, 307], ["file", "data"])
+    func redirects(code: Int, kind: String) async throws {
         let server = try await LFSPlainUploadServer.start()
         defer { server.stop() }
         let url = try #require(server.endpoint).appendingPathComponent("redirect\(code)")
@@ -49,8 +50,13 @@ struct LFSPlainUploadTests {
         request.setValue("Basic Z2l0OnNlY3JldA==", forHTTPHeaderField: "Authorization")
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpAdditionalHeaders = ["X-LFS-Configured": "preserved"]
+        let bytes = Data(repeating: 0x61, count: 1_000_000)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try bytes.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let body: LFSRequestBody = kind == "file" ? .file(file) : .data(bytes)
         let result = try await LFSTransferDelegate(stream: LFSTransferStream()).execute(
-            request, body: .data(Data(repeating: 0x61, count: 1_000_000)), configuration: configuration)
+            request, body: body, configuration: configuration)
         let receipt = try JSONDecoder().decode(LFSPlainUploadReceipt.self, from: result.body)
         #expect(result.status == 200)
         #expect(receipt.method == (code == 303 ? "GET" : "PUT"))

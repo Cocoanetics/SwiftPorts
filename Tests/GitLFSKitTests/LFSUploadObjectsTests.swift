@@ -134,7 +134,7 @@ struct LFSUploadObjectsTests {
                 try await repo.storeLocally(large)
                 let tip = try await repo.commit([("large.dat", large)])
                 let result = try await repo.uploadObjects(for: [update(tip)], git: repo.git)
-                #expect(result.status == 0)
+                #expect(result.status == 0, "\(result.stdout)\n\(result.stderr)")
                 #expect(result.stdout.hasPrefix("Uploading LFS objects: 100% (1/1), 1.0 MB | "))
                 let puts = server.requests().filter { $0.method == "PUT" }
                 #expect(puts.map(\.status) == [503, 200])
