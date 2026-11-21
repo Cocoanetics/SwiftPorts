@@ -69,5 +69,35 @@ extension GitClientDiffIndexRefreshTests {
         }
         #expect(try Data(contentsOf: dir.appendingPathComponent(".git/index")) == indexBefore)
     }
+
+    @Test("diffIndex preserves ASCII byte order and does not split typechanges into renames")
+    func byteOrderAndSwappedTypeChanges() async throws {
+        let dir = try makeRepo()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data("target".utf8).write(to: dir.appendingPathComponent("target.txt"))
+        try Data("regular-content".utf8).write(to: dir.appendingPathComponent("to-link.txt"))
+        try FileManager.default.createSymbolicLink(
+            atPath: dir.appendingPathComponent("from-link.txt").path, withDestinationPath: "target.txt")
+        try runGit(["add", "target.txt", "to-link.txt", "from-link.txt"], in: dir)
+        try runGit(["commit", "-m", "types"], in: dir)
+
+        try FileManager.default.removeItem(at: dir.appendingPathComponent("to-link.txt"))
+        try FileManager.default.removeItem(at: dir.appendingPathComponent("from-link.txt"))
+        try FileManager.default.createSymbolicLink(
+            atPath: dir.appendingPathComponent("to-link.txt").path, withDestinationPath: "target.txt")
+        try Data("regular-content".utf8).write(to: dir.appendingPathComponent("from-link.txt"))
+        try Data("upper".utf8).write(to: dir.appendingPathComponent("Z.txt"))
+        try Data("lower".utf8).write(to: dir.appendingPathComponent("a-added.txt"))
+        try runGit(["add", "to-link.txt", "from-link.txt", "Z.txt", "a-added.txt"], in: dir)
+
+        let client = GitClient(workingDirectory: dir)
+        for cached in [true, false] {
+            let entries = try await client.diffIndex(cached: cached, refresh: !cached)
+            let expected = try parse(gitDiffIndex(cached: cached, ref: "HEAD", in: dir))
+            #expect(entries == expected)
+            #expect(entries.map(\.destinationPath) == ["Z.txt", "a-added.txt", "from-link.txt", "to-link.txt"])
+            #expect(entries.filter { $0.destinationPath.hasSuffix("link.txt") }.map(\.status) == ["T", "T"])
+        }
+    }
 }
 #endif
