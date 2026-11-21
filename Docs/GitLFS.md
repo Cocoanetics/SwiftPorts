@@ -503,6 +503,18 @@ environment defaults), redirects and bounded reads. Redirects follow the
 URLSession method rules (303 to GET, 307/308 retaining PUT); curl does not
 forward authorization to another origin.
 
+The old file reader queried `streamError` after opening successfully: Swift 6.4.2's
+[corelibs getter](https://github.com/swiftlang/swift-corelibs-foundation/blob/swift-6.4.2-RELEASE/Sources/Foundation/Stream.swift#L147-L149)
+force-unwraps the absent underlying error after a successful open. Querying it
+unconditionally trapped in Windows `parallelTransfers`. File uploads now own
+independent `CreateFileW` handles with read/write/delete sharing, obtain their
+length through `GetFileSizeEx` and read at most 64 KiB through `ReadFile` per
+callback. Redirect rewinds use `SetFilePointerEx` after validating the offset
+against the known length. No Foundation file handle or stream is used for file
+bodies. Explicit stream bodies retain their bounded InputStream reader.
+The Windows curl regression uploads empty and 1 MB files concurrently from the
+same path and checks exact bodies, framing and bounded progress.
+
 `Tests/GitLFSKitTests/`:
 
 - `LFSURLSessionUploadTests` — 1 MB file/Data/stream PUTs to the NIO fixture,
