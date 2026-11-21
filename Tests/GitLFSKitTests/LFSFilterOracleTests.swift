@@ -248,6 +248,7 @@ struct LFSFilterOracleTests {
                 "filter.lfs.required": "false", "lfs.skipdownloaderrors": "false"
             ])
             var results: [(files: [String: Data], stderr: String, status: Int32)] = []
+            var states: [(diff: String, status: String)] = []
             for reference in [false, true] {
                 let file = fixture.directory.appendingPathComponent("a.lfs")
                 try? FileManager.default.removeItem(at: file)
@@ -258,6 +259,11 @@ struct LFSFilterOracleTests {
                 files["a.lfs"] = FileManager.default.contents(atPath: file.path)
                 files["z.txt"] = FileManager.default.contents(atPath: ordinaryFile.path)
                 results.append((files, result.stderr, result.status))
+                let diff = try fixture.run(["diff", "--", "a.lfs"], reference: reference)
+                let status = try fixture.run(["status", "--porcelain"], reference: reference)
+                #expect(diff.status == 0)
+                #expect(status.status == 0)
+                states.append((diff.stdout, status.stdout))
             }
             let actual = results[0]
             let reference = results[1]
@@ -265,6 +271,10 @@ struct LFSFilterOracleTests {
             #expect(reference.files["z.txt"] == ordinary)
             #expect(actual.status == reference.status)
             #expect(actual.files == reference.files)
+            #expect(states[1].status == " M a.lfs\n")
+            #expect(!states[1].diff.isEmpty)
+            #expect(states[0].status == states[1].status)
+            #expect(states[0].diff == states[1].diff)
             let diagnostics: (String) -> [Substring] = { stderr in
                 stderr.split(separator: "\n").filter {
                     $0.hasPrefix("Error downloading object:") || $0.hasPrefix("error: external filter")

@@ -25,7 +25,7 @@ public enum GitLFSKit {
         case .clean: return LFSCleanStream(context: context, output: output.write)
         case .smudge:
             return LFSSmudgeStream(context: context, path: source.path,
-                deferFailure: { try operation.deferFailure($0) }, output: output.write)
+                deferFailure: { try operation.deferFailure($0, source: source) }, output: output.write)
         }
     }
 

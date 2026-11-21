@@ -50,8 +50,9 @@ extension LFSFilterTests {
             }
         }
 
-        @Test("optional process failure finishes other paths and does not leak into later operations")
-        func mixedPathFailure() async throws {
+        @Test("optional process failure finishes other paths and does not leak into later operations",
+               arguments: [false, true])
+        func mixedPathFailure(statusFirst: Bool) async throws {
             try await LFSTestServer.withServer { server in
                 try await LFSFilterFixture.run { host in
                     let data = Data("missing object\n".utf8)
@@ -74,6 +75,18 @@ extension LFSFilterTests {
                     }
                     #expect(try Data(contentsOf: file) == ordinary)
                     #expect(try Data(contentsOf: made.directory.appendingPathComponent("a.lfs")).isEmpty)
+                    // Inspect the untouched failed file, before deleting or
+                    // restoring it can invalidate checkout's cached stat data.
+                    if statusFirst {
+                        #expect(try await made.client.status().unstagedEntries.map(\.path) == ["a.lfs"])
+                    }
+                    let diff = try await made.client.diff(.workdirVsIndex, paths: ["a.lfs"])
+                    #expect(!diff.isEmpty)
+                    let status = try await made.client.status()
+                    #expect(!status.isClean)
+                    #expect(status.unstagedEntries.map(\.path) == ["a.lfs"])
+                    let indexed = try #require(try await made.client.indexedEntries().first { $0.path == "a.lfs" })
+                    #expect(try await made.client.catFileBlob(indexed.oid) == Data(made.pointer.encoded.utf8))
                     server.store(data, oid: made.pointer.oid)
                     try await LFSFilterFixture.restore(made.client, directory: made.directory, expected: data)
                 }

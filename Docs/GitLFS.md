@@ -116,6 +116,8 @@ smudge failures replay the original input. An optional process driver that exits
 during delayed checkout still fails with status 1 and Git's external-filter
 diagnostics after the other checkout paths have been restored; clone adds
 `fatal: unable to checkout working tree` and exits 128.
+Failed paths have their index stat cache invalidated before the error returns,
+so the empty failed output remains visible as modified in status and diff.
 Deferral is limited to explicit checkout and clone operations. Composite
 operations such as stash pop and stash branch fail immediately, before the
 stash can be dropped, so restoring object access allows the entry to be retried.
