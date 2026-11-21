@@ -8,7 +8,7 @@ struct LFSCommand: AsyncParsableCommand {
         abstract: "Git Large File Storage.",
         subcommands: [LFSVersionCommand.self, LFSEnvCommand.self, LFSPointerCommand.self, LFSInstall.self,
                       LFSUninstall.self, LFSTrack.self, LFSUntrack.self, LFSLsFiles.self, LFSStatus.self,
-                      LFSFetch.self, LFSPush.self, LFSPrePush.self],
+                      LFSFetch.self, LFSPush.self, LFSPrePush.self, LFSCheckout.self, LFSPull.self],
         helpNames: [])
 
     @Flag(name: [.customShort("v"), .long]) var version = false
@@ -39,7 +39,11 @@ struct LFSCommand: AsyncParsableCommand {
         let name = arguments.first ?? ""
         if let type = configuration.subcommands.first(where: { $0.configuration.commandName == name }) {
             let args = Array(arguments.dropFirst())
-            return try type.parseAsRoot(name == "fetch" ? LFSFetch.parserArguments(args) : args)
+            let rewritten: [String]
+            if name == "fetch" { rewritten = LFSFetch.parserArguments(args) }
+            else if name == "pull" { rewritten = LFSPull.parserArguments(args) }
+            else { rewritten = args }
+            return try type.parseAsRoot(rewritten)
         }
         throw CLIError.stderr(
             "Error: unknown command \"\(name)\" for \"git-lfs\"\nRun 'git-lfs --help' for usage.",

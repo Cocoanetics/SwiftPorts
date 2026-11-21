@@ -48,6 +48,16 @@ struct LFSProgressMeterTests {
         #expect(sink.drain() == "Uploading LFS objects: 100% (2/2), 30 B | 0 B/s, done.\n")
     }
 
+    @Test("local checkout has its own progress label")
+    func checkout() {
+        let sink = Sink()
+        let meter = LFSProgressMeter(direction: .checkout, display: true, logsProgress: false, write: sink.write)
+        meter.add(10)
+        meter.skip(10)
+        meter.finish()
+        #expect(sink.drain() == "Checking out LFS objects: 100% (1/1), 10 B | 0 B/s, done.\n")
+    }
+
     @Test("on a terminal updates are padded, end in a carriage return, and are throttled")
     func terminal() {
         let clock = Clock()

@@ -28,6 +28,25 @@ public struct GitScanner: Sendable {
         return result
     }
 
+    /// `ScanLFSFiles` (`git ls-files --cached --exclude-standard --full-name --sparse -z ':(top,attr:filter=lfs)'`):
+    /// scans cached index entries matching `filter=lfs`, preserving all stages.
+    public func scanLFSFiles() async throws -> [WrappedPointer] {
+        let entries = try await client.indexedEntries().filter { entry in
+            let kind = entry.mode & 0o170000
+            return kind != 0o160000 && kind != 0o040000 && filter.allows(entry.path)
+        }
+        guard !entries.isEmpty else { return [] }
+        let attributes = try await client.filterAttribute(for: entries.map(\.path))
+        var result: [WrappedPointer] = []
+        for entry in entries where attributes[entry.path] == "lfs" {
+            try Task.checkCancellation()
+            if let pointer = try await readPointer(entry.oid, name: entry.path) {
+                result.append(pointer)
+            }
+        }
+        return result
+    }
+
     /// Cached diff destinations first, then the ref tree. Only destinations
     /// emitted as pointers override tree paths; staged deletions remain in
     /// the ref tree. `workingDirectory` is reserved for the status consumer.
