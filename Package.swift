@@ -59,7 +59,7 @@ let androidDroppedTargets: Set<String> = [
     "GitHubTests", "SSHKitTests", "GitKitSSHTests",
     // GitLFSKitTests links swift-crypto's BoringSSL C++ target too (through
     // GitLFSKit's `Crypto` dependency), so it's dropped for the same reason.
-    // `GitLFSKit` itself stays on Android. Its manifest dependencies are unchanged.
+    // `GitLFSKit` itself stays on Android.
     // GitLFSTestSupport is the in-process LFS server (NIOHTTP1, issue #199):
     // a test-only target, not a library product. It links swift-crypto so
     // verify can check the object id. GitLFSTestSupportTests links that
@@ -67,6 +67,10 @@ let androidDroppedTargets: Set<String> = [
     "GitLFSKitTests",
     "GitLFSTestSupport",
     "GitLFSTestSupportTests",
+    // Windows/macOS/Linux libcurl adapter. GitLFSKit must not name this
+    // target on Android either: SwiftPM requires a `.target` dependency to
+    // be declared even when a platform condition excludes it, and a dropped
+    // target that is still named fails loading with a Sources/CLFSCurl hint.
     "CLFSCurl",
 ]
 
@@ -1207,8 +1211,10 @@ let package = Package(
         .target(
             name: "GitLFSKit",
             dependencies: [
-                "CGitLFSEnvironment",
-                .target(name: "CLFSCurl", condition: .when(platforms: [.macOS, .linux, .windows])),
+                "CGitLFSEnvironment"
+            ] + (buildingForAndroid ? [] : [
+                .target(name: "CLFSCurl", condition: .when(platforms: [.macOS, .linux, .windows]))
+            ]) + [
                 "SwiftGit",
                 .product(name: "CGitKit", package: "GitKit"),
                 "SSHKit",
