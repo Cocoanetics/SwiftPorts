@@ -28,6 +28,23 @@ struct LFSTestServerTests {
         }
     }
 
+    @Test("putRedirect answers once with the redirect status and Location, then stores the follow-up PUT")
+    func putRedirectFault() async throws {
+        let bytes = Data("redirected\n".utf8)
+        let oid = sha256Hex(bytes)
+        try await LFSWireClient.withServer { server, client in
+            let href = server.endpoint.absoluteString + "/objects/" + oid
+            server.inject(.putRedirect(oid: oid, code: 307, location: href))
+            let first = try await client.put(href, body: bytes)
+            #expect(first.status == 307)
+            #expect(first.headers["location"] == href)
+            #expect(server.bytes(for: oid) == nil)
+            let second = try await client.put(href, body: bytes)
+            #expect(second.status == 200)
+            #expect(server.bytes(for: oid) == bytes)
+        }
+    }
+
     @Test("a batch, GET, PUT, and verify round trip")
     func roundTrip() async throws {
         let bytes = Data("hello\n".utf8)

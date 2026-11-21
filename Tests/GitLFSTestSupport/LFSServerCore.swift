@@ -67,6 +67,12 @@ private struct LFSServerState {
         if parts.count == 2, parts[0] == "objects" {
             if method == "GET" { return respondGet(parts[1]) }
             if method == "PUT" {
+                if case .putRedirect(_, let code, let location)? = objectFaults[parts[1]] {
+                    objectFaults.removeValue(forKey: parts[1])
+                    return LFSWireResponse(
+                        status: code, headers: ["Location": location], body: Data(), fault: String(code)
+                    ).withLength()
+                }
                 if case .putStatus(_, let code)? = objectFaults[parts[1]] {
                     objectFaults.removeValue(forKey: parts[1])
                     return .json(status: code, message: objectMessage(code), fault: String(code))

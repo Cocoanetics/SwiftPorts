@@ -200,6 +200,40 @@ struct LFSProgressMeterTests {
         #expect(ByteFormat.formatByteRate(UInt64.max) == "18447 PB/s")
     }
 
+    @Test("a rewind delta reduces sent bytes so a subsequent failure rollback does not over-subtract")
+    func rewindThenFailureRollback() {
+        let sink = Sink()
+        let meter = LFSProgressMeter(direction: .upload, display: true, logsProgress: false, write: sink.write)
+        let size: Int64 = 1_000_000
+        meter.add(size)
+        meter.startTransfer("large.dat")
+
+        // Attempt 1: send 600 KB, curl rewinds (-600 KB), second pass sends 200 KB then fails.
+        let firstAttempt = LFSSentBytes()
+        let reportFirst: (Int64, Int64) -> Void = { read, delta in
+            firstAttempt.record(delta: delta)
+            meter.transferBytes("large.dat", read: read, total: size, current: delta)
+        }
+        reportFirst(600_000, 600_000)
+        reportFirst(600_000, -600_000)
+        #expect(firstAttempt.total == 0)
+        reportFirst(200_000, 200_000)
+        #expect(firstAttempt.total == 200_000)
+
+        let rollback = firstAttempt.total
+        if rollback > 0 { meter.transferBytes("large.dat", read: rollback, total: size, current: -rollback) }
+
+        // Attempt 2: retry uploads the full 1 MB.
+        let retryAttempt = LFSSentBytes()
+        retryAttempt.record(delta: size)
+        meter.transferBytes("large.dat", read: size, total: size, current: size)
+        meter.finishTransfer("large.dat")
+        meter.finish()
+
+        #expect(retryAttempt.total == size)
+        #expect(sink.drain() == "Uploading LFS objects: 100% (1/1), 1.0 MB | 0 B/s, done.\n")
+    }
+
     @Test("the default stdout sink is the shell that made the environment, even off its task")
     func boundStdout() async throws {
         let captured = TransferTestLock("")

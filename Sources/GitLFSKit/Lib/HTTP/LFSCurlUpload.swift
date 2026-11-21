@@ -219,8 +219,11 @@ final class LFSCurlUpload: @unchecked Sendable {
             if let file { try file.seek(to: offset) }
             else if let data, offset <= Int64(data.count) { self.offset = Int(offset) }
             else { return 2 }
-            if sent > 0 { stream.progress?(sent, -sent) }
-            sent = 0
+            let rewind = sent - offset
+            if rewind > 0 {
+                stream.progress?(sent, -rewind)
+                sent -= rewind
+            }
             return 0
         } catch { failure = error; return 1 }
     }

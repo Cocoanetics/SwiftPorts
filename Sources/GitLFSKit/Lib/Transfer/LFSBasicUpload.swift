@@ -32,7 +32,7 @@ extension LFSTransferQueue {
                 authenticated: object.authenticated,
                 accessURL: request.url?.absoluteString.components(separatedBy: object.oid).first,
                 stream: LFSTransferStream(progress: { total, delta in
-                    sent.record(total)
+                    sent.record(delta: delta)
                     progress(total, delta)
                 }, success: success))
         } catch {

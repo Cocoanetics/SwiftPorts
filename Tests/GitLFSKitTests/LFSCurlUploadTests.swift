@@ -92,5 +92,45 @@ struct LFSCurlUploadTests {
             }
         }
     }
+
+    @Test("a 307 redirect rewinds curl progress and takes back sent bytes", arguments: ["file", "data"])
+    func redirectRewind(kind: String) async throws {
+        let bytes = Data(repeating: 0x62, count: 200_000)
+        let oid = LFSServerRepository.oid(bytes)
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LFS rewind \(UUID().uuidString)")
+        try bytes.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        try await LFSTestServer.withServer { server in
+            let url = server.endpoint.appendingPathComponent("objects/\(oid)")
+            server.inject(.putRedirect(oid: oid, code: 307, location: url.absoluteString))
+            var request = URLRequest(url: url)
+            request.httpMethod = "PUT"
+            request.setValue(String(bytes.count), forHTTPHeaderField: "Content-Length")
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.connectionProxyDictionary = ["HTTPEnable": 0]
+            configuration.timeoutIntervalForRequest = 5
+            configuration.timeoutIntervalForResource = 10
+            let sent = LFSSentBytes()
+            let deltas = TransferTestLock<[Int64]>([])
+            let totals = TransferTestLock<[Int64]>([])
+            let transport = LFSCurlUpload(stream: LFSTransferStream(progress: { _, delta in
+                sent.record(delta: delta)
+                deltas.withLock { $0.append(delta) }
+                totals.withLock { $0.append(sent.total) }
+            }))
+            let body: LFSRequestBody = kind == "file" ? .file(file) : .data(bytes)
+            let result = try await transport.execute(request, body: body, configuration: configuration)
+            #expect(result.status == 200)
+            let puts = server.requests().filter { $0.method == "PUT" }
+            #expect(puts.map(\.status) == [307, 200])
+            #expect(server.bytes(for: oid) == bytes)
+            #expect(deltas.withLock { $0.contains { $0 < 0 } })
+            #expect(deltas.withLock { $0.reduce(0, +) } == Int64(bytes.count))
+            #expect(totals.withLock { $0.contains(0) })
+            #expect(sent.total == Int64(bytes.count))
+        }
+    }
 }
 #endif
