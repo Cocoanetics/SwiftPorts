@@ -41,8 +41,12 @@ extension LFSFilterContext {
     private func checkedFile(_ file: URL, pointer: Pointer) throws -> URL {
         guard LocalStore.isObject(at: file, size: pointer.size) else {
             // Reopen to preserve the original OS error for a missing object.
-            let reader = try FileHandle(forReadingFrom: file)
-            try reader.close()
+            do {
+                let reader = try FileHandle(forReadingFrom: file)
+                try reader.close()
+            } catch {
+                throw LFSClientError("error opening media file: " + lfsFileError(error, path: file.path))
+            }
             throw CocoaError(.fileReadCorruptFile)
         }
         return file

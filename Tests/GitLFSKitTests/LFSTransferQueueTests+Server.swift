@@ -60,7 +60,7 @@ extension LFSTransferQueueTests {
         }
     }
 
-    @Test("retry exhaustion returns only the server's JSON message")
+    @Test("retry exhaustion preserves the batch response and fatal error context")
     func serverRetryExhaustion() async throws {
         let body = Data(#"{"message":"Server error"}"#.utf8)
         try await LFSTestServer.withServer { server in
@@ -72,7 +72,7 @@ extension LFSTransferQueueTests {
                 ],
                 sessionConfiguration: .ephemeral
             ) { client, store, _ in
-                await #expect(throws: LFSClientError("Server error")) {
+                await #expect(throws: LFSClientError("batch response: Fatal error: Server error")) {
                     try await queue(client, store).transfer([LFSBatchObject(oid: oid, size: Int64(data.count))])
                 }
             }

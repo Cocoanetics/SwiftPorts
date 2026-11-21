@@ -9,11 +9,13 @@ private struct LFSServerState {
     var log: [LFSRecordedRequest] = []
     var statusFault: LFSTestFault?
     var objectFaults: [String: LFSTestFault] = [:]
+    var gitHead: String?
+    var gitAuthorization = ""
 
     mutating func handle(
         method: String, uri: String, headers: [String: String], body: Data, record: Bool = true
     ) -> LFSWireResponse {
-        let response = route(method: method, uri: uri, body: body)
+        let response = route(method: method, uri: uri, headers: headers, body: body)
         if record { remember(method: method, uri: uri, headers: headers, body: body, response: response) }
         return response
     }
@@ -39,7 +41,18 @@ private struct LFSServerState {
         return parts.count == 2 && parts[0] == "objects"
     }
 
-    private mutating func route(method: String, uri: String, body: Data) -> LFSWireResponse {
+    private mutating func route(method: String, uri: String, headers: [String: String], body: Data) -> LFSWireResponse {
+        if method == "GET", uri == "/repo.git/info/refs?service=git-upload-pack", let gitHead {
+            guard headers["authorization"] == gitAuthorization else {
+                return .json(status: 401, message: "Unauthorized", fault: nil)
+            }
+            func packet(_ text: String) -> String { String(format: "%04x", text.utf8.count + 4) + text }
+            let advertisement = packet("# service=git-upload-pack\n") + "0000"
+                + packet("\(gitHead) refs/heads/main\0multi_ack thin-pack side-band-64k ofs-delta\n") + "0000"
+            return LFSWireResponse(
+                status: 200, headers: ["Content-Type": "application/x-git-upload-pack-advertisement"],
+                body: Data(advertisement.utf8), fault: nil).withLength()
+        }
         if let fault = statusFault {
             if case .repeatingServerError = fault {
                 return statusResponse(fault)
@@ -88,6 +101,10 @@ private struct LFSServerState {
     private mutating func batchObject(
         _ operation: String, _ object: BatchObjectRequest
     ) -> (ObjectBody, String?) {
+        if case .noAction = objectFaults[object.oid] {
+            objectFaults.removeValue(forKey: object.oid)
+            return (ObjectBody(oid: object.oid, size: object.size, actions: nil, error: nil), "no-action")
+        }
         if let code = consumeObjectStatus(object.oid) {
             let error = ErrorBody(code: code, message: objectMessage(code))
             let item = ObjectBody(oid: object.oid, size: object.size, actions: nil, error: error)
@@ -247,6 +264,13 @@ final class LFSServerCore: @unchecked Sendable {
         lock.lock()
         state.endpoint = text
         lock.unlock()
+    }
+
+    func advertiseGitHead(_ oid: String, authorization: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        state.gitHead = oid
+        state.gitAuthorization = authorization
     }
 
     func store(_ bytes: Data, oid: String) {

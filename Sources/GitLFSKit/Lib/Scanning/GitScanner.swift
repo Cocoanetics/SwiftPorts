@@ -5,10 +5,18 @@ import SwiftGit
 public struct GitScanner: Sendable {
     private let client: GitClient
     private let filter: FilepathFilter
+    private let locks: LFSLockVerifier?
 
     public init(client: GitClient, filter: FilepathFilter = FilepathFilter()) {
         self.client = client
         self.filter = filter
+        locks = nil
+    }
+
+    init(client: GitClient, locks: LFSLockVerifier?) {
+        self.client = client
+        filter = FilepathFilter()
+        self.locks = locks
     }
 
     /// Depth-first Git tree order, retaining every path even for shared blobs.
@@ -188,7 +196,10 @@ public struct GitScanner: Sendable {
         _ oid: String, name: String, sourceName: String = "", status: String = ""
     ) async throws -> WrappedPointer? {
         guard filter.allows(name) else { return nil }
-        guard let pointer = try await PointerScanner(client: client).readPointer(oid) else { return nil }
+        guard let pointer = try await PointerScanner(client: client).readPointer(oid) else {
+            locks?.foundNonPointer(name)
+            return nil
+        }
         return WrappedPointer(pointer: pointer, oid: oid,
                               name: name, sourceName: sourceName, status: status)
     }

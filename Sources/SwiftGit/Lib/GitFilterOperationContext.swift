@@ -9,10 +9,13 @@ package final class GitFilterOperationContext: @unchecked Sendable {
     private static let threadKey = "SwiftGit.filterOperation"
     private let lock = NSLock()
     private var active = true
+    private var deferredFailure: (any Error)?
+    private var failedPaths: [URL: Set<String>] = [:]
     private let shell: Shell
     private let credentials: CredentialProvider?
     private let environment: EnvironmentConfig
     private let gate: ConfigIncludeGate
+    private let deferFilterFailures: Bool
 
     enum Failure: Error, Equatable {
         case expired
@@ -20,11 +23,13 @@ package final class GitFilterOperationContext: @unchecked Sendable {
         case noOperation
     }
 
-    init(shell: Shell, credentials: CredentialProvider?, environment: EnvironmentConfig, gate: ConfigIncludeGate) {
+    init(shell: Shell, credentials: CredentialProvider?, environment: EnvironmentConfig, gate: ConfigIncludeGate,
+         deferFilterFailures: Bool = false) {
         self.shell = shell
         self.credentials = credentials
         self.environment = environment
         self.gate = gate
+        self.deferFilterFailures = deferFilterFailures
     }
 
     /// Capture on the libgit2 callback thread, before starting async work.
@@ -35,14 +40,39 @@ package final class GitFilterOperationContext: @unchecked Sendable {
         return context
     }
 
-    func run<T>(_ body: () throws -> T) rethrows -> T {
+    func run<T>(_ body: () throws -> T) throws -> T {
         let previous = Thread.current.threadDictionary[Self.threadKey]
         Thread.current.threadDictionary[Self.threadKey] = self
         defer {
-            lock.withLock { active = false }
+            lock.withLock {
+                active = false
+                deferredFailure = nil
+                failedPaths.removeAll()
+            }
             Thread.current.threadDictionary[Self.threadKey] = previous
         }
-        return try body()
+        let result = Result { try body() }
+        // Checkout has finished writing its index. Do not leave empty failed
+        // output cached against the original blob, even if another path threw.
+        let paths = lock.withLock { failedPaths }
+        let repair = Result { try gate.run { try GitFilterIndex.invalidate(paths) } }
+        let value = try result.get()
+        try repair.get()
+        if let failure = lock.withLock({ deferredFailure }) { throw failure }
+        return value
+    }
+
+    /// Delayed process filters report failure after the other checkout entries
+    /// have been written. Only explicit checkout/clone operations opt in;
+    /// composite operations such as stash pop must fail before dropping data.
+    /// Retain only the first error, never file contents.
+    package func deferFailure(_ error: any Error, source: GitFilterSource? = nil) throws {
+        try lock.withLock {
+            guard active else { throw Failure.expired }
+            guard deferFilterFailures else { throw error }
+            if let source { failedPaths[source.gitDirectory, default: []].insert(source.path) }
+            if deferredFailure == nil { deferredFailure = error }
+        }
     }
 
     /// The source may be clone's newly created repository or a linked

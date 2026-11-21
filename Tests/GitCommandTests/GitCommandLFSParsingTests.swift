@@ -99,5 +99,83 @@ struct GitCommandLFSParsingTests {
         let plain = try #require(parse(["lfs", "status"]) as? LFSStatus)
         #expect(!plain.porcelain && !plain.json && plain.arguments.isEmpty)
     }
+
+    @Test(arguments: [
+        ["-a", "-I", "*.bin", "-X", "skip/**", "-d", "-j"],
+        ["-a", "-I*.bin", "-Xskip/**", "-d", "-j"],
+        ["--all", "--include=*.bin", "--exclude=skip/**", "--dry-run", "--json"]
+    ])
+    func fetchFlags(_ flags: [String]) throws {
+        let command = try #require(parse(["lfs", "fetch", "origin"] + flags + ["main", "tag"]) as? LFSFetch)
+        #expect(command.all && command.dryRun && command.json)
+        #expect(command.include == "*.bin" && command.exclude == "skip/**")
+        #expect(command.arguments == ["origin", "main", "tag"])
+        let defaults = try #require(parse(["lfs", "fetch"]) as? LFSFetch)
+        #expect(defaults.arguments.isEmpty && defaults.include == nil && defaults.exclude == nil)
+        let empty = try #require(parse(["lfs", "fetch", "--include="]) as? LFSFetch)
+        #expect(empty.include == "")
+        let literal = try #require(parse(["lfs", "fetch", "--", "--include="]) as? LFSFetch)
+        #expect(literal.arguments == ["--include="] && literal.include == nil)
+        let value = try #require(parse(["lfs", "fetch", "-I", "--include="]) as? LFSFetch)
+        #expect(value.include == "--include=")
+    }
+
+    @Test(arguments: ["--recent", "-r", "--prune", "-p", "--refetch"])
+    func unsupportedFetchOptions(_ flag: String) {
+        #expect(throws: (any Error).self) { try parse(["lfs", "fetch", flag]) }
+    }
+
+    @Test(arguments: [["-a", "-d", "-o"], ["--all", "--dry-run", "--object-id"]])
+    func pushFlags(_ flags: [String]) throws {
+        let command = try #require(parse(["lfs", "push", "origin"] + flags + ["--stdin"]) as? LFSPush)
+        #expect(command.all && command.dryRun && command.objectID && command.stdin)
+        #expect(command.arguments == ["origin"])
+        // Cobra accepts these together; the SDK emits the status-1 stdout diagnostic at runtime.
+        let conflict = try #require(parse(["lfs", "push", "origin", "main", "--stdin"]) as? LFSPush)
+        #expect(conflict.stdin && conflict.arguments == ["origin", "main"])
+    }
+
+    @Test(arguments: ["-d", "--dry-run"])
+    func prePushFlags(_ flag: String) throws {
+        let command = try #require(parse(["lfs", "pre-push", "origin", "url", flag]) as? LFSPrePush)
+        #expect(command.dryRun && command.arguments == ["origin", "url"])
+        #expect(throws: (any Error).self) { try parse(["lfs", "pre-push", "--stdin"]) }
+    }
+
+    #if os(macOS) || os(Linux)
+    @Test func transferDispatchAndDiagnostics() async throws {
+        let fixture = try LFSCommandFixture()
+        defer { fixture.cleanup() }
+        #expect(try fixture.system(["config", "remote.origin.url", "https://example.invalid/repo.git"],
+                                   in: fixture.ours).status == 0)
+        let push = try await fixture.run(["push"])
+        #expect(push.status == 1 && push.stderr.isEmpty)
+        #expect(push.stdout == "Specify a remote and a remote branch name (`git lfs push origin main`)\n")
+        let conflict = try await fixture.run(["push", "origin", "main", "--stdin"])
+        #expect(conflict.status == 1 && conflict.stderr.isEmpty)
+        #expect(conflict.stdout == "Further command line arguments are ignored with --stdin\n")
+        let noRefs = try await fixture.run(["push", "origin"])
+        #expect(noRefs.status == 1 && noRefs.stderr.isEmpty)
+        #expect(noRefs.stdout == "At least one ref must be supplied without --all\n")
+        let noOIDs = try await fixture.run(["push", "origin", "--object-id"])
+        #expect(noOIDs.status == 1 && noOIDs.stderr.isEmpty)
+        #expect(noOIDs.stdout == "At least one object ID must be supplied with --object-id\n")
+        let hook = try await fixture.run(["pre-push"])
+        #expect(hook.status == 1 && hook.stderr.isEmpty)
+        #expect(hook.stdout == "This should be run through Git's pre-push hook.  Run `git lfs update` to install it.\n")
+        let invalid = try await fixture.run(["fetch", "main"])
+        #expect(invalid.status == 2 && invalid.stdout.isEmpty)
+        let cwd = fixture.ours.path
+        #expect(invalid.stderr == "Invalid remote name \"main\": invalid remote name: \"\(cwd)/main\"\n")
+        let fetch = try await fixture.run(["fetch", "--all", "--json"])
+        #expect(fetch.status == 0 && fetch.stdout == "{\n \"transfers\": []\n}\n")
+        let emptyInput = try await fixture.run(["push", "origin", "--stdin", "--object-id"])
+        #expect(emptyInput.status == 0)
+        let deletion = "refs/heads/main \(String(repeating: "0", count: 40)) refs/heads/main "
+            + String(repeating: "0", count: 40) + "\n"
+        let prePush = try await fixture.run(["pre-push", "origin", "ignored-url", "-d"], input: Data(deletion.utf8))
+        #expect(prePush.status == 0 && prePush.stdout.isEmpty && prePush.stderr.isEmpty)
+    }
+    #endif
 }
 #endif

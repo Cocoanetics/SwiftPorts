@@ -146,7 +146,7 @@ extension LFSFilterTests {
                     catch let error as LFSFilterFailure {
                         #expect(error.localizedDescription.hasPrefix(
                             "Error downloading object: dir/a.lfs (\(pointer.oid.prefix(7))): Smudge error: "))
-                        #expect(error.underlying is CocoaError)
+                        #expect(error.underlying is LFSClientError)
                     }
                     #expect(result.isEmpty)
                 } else {

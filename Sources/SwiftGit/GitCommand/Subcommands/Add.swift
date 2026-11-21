@@ -40,6 +40,11 @@ struct Add: AsyncParsableCommand {
     }
 
     func run() async throws {
+        do { try await stage() }
+        catch let error as GitFilterError { throw CLIError(filter: error) }
+    }
+
+    private func stage() async throws {
         let client = CommandContext.gitClient()
 
         if all {

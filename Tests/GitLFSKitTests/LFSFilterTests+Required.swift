@@ -4,7 +4,7 @@ import SwiftGit
 @testable import GitLFSKit
 
 extension LFSFilterTests {
-    @Test("required alone does not activate an unconfigured direction",
+    @Test("required command gating matches clean and streamable checkout",
            arguments: [GitFilterDirection.clean, .smudge])
     func requiredDirection(_ direction: GitFilterDirection) async throws {
         try await LFSStreamFixture.run { _, git, directory in
@@ -21,7 +21,8 @@ extension LFSFilterTests {
             let opposite = direction == .clean ? "smudge" : "clean"
             let configurations: [[String: String]] = [
                 [:], [key: ""], ["process": ""], ["process": "", key: ""],
-                [opposite: "git-lfs " + opposite], [opposite: "git-lfs " + opposite, key: ""]
+                [opposite: "git-lfs " + opposite], [opposite: ""],
+                [opposite: "git-lfs " + opposite, key: ""]
             ]
             for configuration in configurations {
                 for name in ["clean", "smudge", "process"] {
@@ -30,6 +31,15 @@ extension LFSFilterTests {
                 }
                 for required in [false, true] {
                     try await git.configSet("filter.lfs.required", required ? "true" : "false")
+                    if required && (direction == .clean || !configuration.isEmpty) {
+                        if direction == .clean {
+                            await #expect(throws: GitFilterError.self) { try await git.add(paths: ["a.lfs"]) }
+                        } else {
+                            try FileManager.default.removeItem(at: file)
+                            await #expect(throws: GitFilterError.self) { try await git.checkoutPaths(["a.lfs"]) }
+                        }
+                        continue
+                    }
                     if direction == .clean {
                         try await git.add(paths: ["a.lfs"])
                         let entry = try #require(try await git.indexedEntries().first { $0.path == "a.lfs" })

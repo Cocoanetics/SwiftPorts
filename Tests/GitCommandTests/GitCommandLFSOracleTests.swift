@@ -4,6 +4,21 @@ import Testing
 
 @Suite("git lfs command oracle", .enabled(if: LFSCommandFixture.isAvailable, "git-lfs is not on PATH"))
 struct GitCommandLFSOracleTests {
+    @Test func transferUsage() async throws {
+        let fixture = try LFSCommandFixture()
+        defer { fixture.cleanup() }
+        for repo in [fixture.ours, fixture.theirs] {
+            #expect(try fixture.system(["config", "remote.origin.url", fixture.theirs.path], in: repo).status == 0)
+        }
+        for args in [["push"], ["pre-push"], ["push", "origin"],
+                     ["push", "origin", "--object-id"], ["push", "origin", "main", "--stdin"],
+                     ["push", "origin", "--all"], ["push", "origin", "--stdin"],
+                     ["fetch", "not-a-remote"], ["push", "not-a-remote", "main"],
+                     ["push", "origin", "--object-id", "short"], ["push", "origin", "--object-id", "x"]] {
+            try await fixture.compare(args)
+        }
+    }
+
     @Test func rootAndVersion() async throws {
         let fixture = try LFSCommandFixture()
         defer { fixture.cleanup() }

@@ -26,6 +26,22 @@ struct EndpointResolutionTests {
 
     private static let rows: [EndpointRow] = [
         EndpointRow(
+            name: "a direct upload URL does not fall back to origin",
+            operation: "upload", remote: "https://backup.example/repo.git",
+            url: "https://backup.example/repo.git/info/lfs"),
+        EndpointRow(
+            name: "a direct download URL does not fall back to origin",
+            remote: "https://backup.example/repo.git",
+            url: "https://backup.example/repo.git/info/lfs"),
+        EndpointRow(
+            name: "a direct SSH operand retains its destination",
+            remote: "git@backup.example:group/repo.git",
+            url: "https://backup.example/group/repo.git/info/lfs",
+            user: "git", host: "backup.example", port: "", path: "group/repo.git", userAndHost: "git@backup.example"),
+        EndpointRow(
+            name: "a direct file URL retains its destination",
+            remote: "file:///backup/repo.git", url: "file:///backup/repo.git"),
+        EndpointRow(
             name: "lfs.url wins over a named remote's lfsurl",
             remote: "upstream",
             remotes: [
@@ -205,6 +221,26 @@ struct EndpointResolutionTests {
                     #expect(endpoint.ssh.userAndHost == row.userAndHost, "\(row.name) userAndHost")
                 }
             }
+        }
+    }
+
+    @Test("the local-path validation retry preserves the operand, as git-lfs 3.7.1 does")
+    func localPathRetry() async throws {
+        try await host.run {
+            let made = try await LFSFixture.make(host, "path-retry", remotes: [
+                ("origin", "https://origin.example/repo.git")
+            ])
+            let path = made.directory.appendingPathComponent("backup/.git")
+            try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+            let finder = await LFSEndpointFinder(made.client)
+            // SetValidRemote/SetValidPushRemote shadow `name` during the retry,
+            // then store the original operand, not the rewritten file URL.
+            try await finder.validateRemote("backup")
+            #expect(finder.gitRemoteURL("backup", upload: true).isEmpty)
+            #expect(finder.endpoint(operation: "upload", remote: "backup").url
+                    == "https://origin.example/repo.git/info/lfs")
+            let fileURL = LFSEndpointDerivation.rewriteLocalPath("backup", base: made.directory.path)
+            #expect(finder.endpoint(operation: "upload", remote: fileURL).url == fileURL)
         }
     }
 }
