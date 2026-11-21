@@ -64,6 +64,9 @@ extension StatusOptions {
             bumped = false
             for target in targets {
                 for source in sources {
+                    // Nothing beats 100, so a side holding an identical match skips scoring.
+                    guard targetMatch[target]?.score ?? 0 < 100,
+                          sourceMatch[source]?.score ?? 0 < 100 else { continue }
                     let score: Int
                     if let known = scores[[source, target]] {
                         score = known
