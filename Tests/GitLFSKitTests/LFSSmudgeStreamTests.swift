@@ -54,7 +54,8 @@ extension LFSFilterTests {
             }
         }
 
-        @Test("skip and fetch rejection never request a missing object", arguments: ["skip", "include", "exclude"])
+        @Test("skip and fetch rejection preserve missing and cached pointers",
+               arguments: ["skip", "include", "exclude"])
         func skip(mode: String) async throws {
             let config = mode == "include" ? [("lfs.fetchinclude", "other/**")]
                 : mode == "exclude" ? [("lfs.fetchexclude", "*.lfs")] : []
@@ -64,11 +65,36 @@ extension LFSFilterTests {
             }, []) }
             defer { LFSStreamURLProtocol.state.withLock { $0 = nil } }
             try await LFSStreamFixture.run(config: config, skip: mode == "skip") { context, _, _ in
+                for cached in [false, true] {
+                    if cached { _ = try await context.store.store(data, oid: pointer.oid) }
+                    var result = Data()
+                    let stream = LFSSmudgeStream(context: context, path: "a.lfs") { result.append(contentsOf: $0) }
+                    try Data(pointer.encoded.utf8).withUnsafeBytes(stream.write)
+                    try stream.close()
+                    #expect(result == Data(pointer.encoded.utf8))
+                }
+                #expect(LFSStreamURLProtocol.state.withLock { $0?.1.isEmpty == true })
+            }
+        }
+
+        @Test("size-zero pointer text smudges to empty output, including skip and fetch rejection",
+               arguments: ["none", "skip", "include", "exclude"])
+        func emptyPointer(mode: String) async throws {
+            let config = mode == "include" ? [("lfs.fetchinclude", "other/**")]
+                : mode == "exclude" ? [("lfs.fetchexclude", "*.lfs")] : []
+            LFSStreamURLProtocol.state.withLock { $0 = ({ _ in
+                Issue.record("empty objects must not access the network")
+                return LFSTransferReply(status: 500)
+            }, []) }
+            defer { LFSStreamURLProtocol.state.withLock { $0 = nil } }
+            try await LFSStreamFixture.run(config: config, skip: mode == "skip") { context, _, _ in
+                let input = Data(("version \(Pointer.latestVersion)\n"
+                    + "oid sha256:\(Pointer.emptyObjectSHA256)\nsize 0\n").utf8)
                 var result = Data()
                 let stream = LFSSmudgeStream(context: context, path: "a.lfs") { result.append(contentsOf: $0) }
-                try Data(pointer.encoded.utf8).withUnsafeBytes(stream.write)
+                try input.withUnsafeBytes(stream.write)
                 try stream.close()
-                #expect(result == Data(pointer.encoded.utf8))
+                #expect(result.isEmpty)
                 #expect(LFSStreamURLProtocol.state.withLock { $0?.1.isEmpty == true })
             }
         }
