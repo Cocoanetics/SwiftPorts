@@ -183,6 +183,11 @@ in the SDK's `Commands/` directory:
   only, debug and JSON output, and explicit include/exclude filters. Checkout
   markers compare the working file's size; JSON reports downloaded objects
   independently through `LocalStore`. Scanning rules are below.
+- `status`: `StatusOptions` reports unpushed LFS objects for the current
+  branch's remote-tracking ref, staged changes, and unstaged work-tree changes
+  in human, porcelain (`-p`/`--porcelain`), and JSON (`-j`/`--json`) forms.
+  `LFSStatus` is a thin ArgumentParser adapter in `GitCommand`; the SDK remains
+  ArgumentParser-free. Status rules are below.
 
 All filesystem paths go through `Shell.authorize`; production code does not
 launch a system Git or git-lfs process. The hooks are scripts for real Git to
@@ -298,6 +303,130 @@ status match exactly: nothing is sorted, rewritten, or reformatted. The only
 normalization replaces a `git-lfs/<digits…>` line and a `git version` line,
 and only when a command prints one. The suite runs only when the first token
 of `git lfs version` is `git-lfs/3.7.1`. It does not call `LFSCommandFixture.compare`.
+
+## Status (`git lfs status`, #206)
+
+`StatusOptions` (`Sources/GitLFSKit/Lib/Commands/StatusOptions*.swift`) implements
+git-lfs 3.7.1's `commands/command_status.go` over `SwiftGit.GitClient`, without
+ArgumentParser or external processes. `LFSStatus` in `GitCommand` is a thin
+adapter supporting `-p`/`--porcelain` and `-j`/`--json` and ignoring extra
+positional arguments. `GitLFSKit` remains ArgumentParser-free and builds on
+Android; `GitLFSKitTests` and `GitCommandTests` remain in `androidDroppedTargets`.
+
+Status requires a work tree (`LFSRepository.open(client, workTree: true)`).
+Outside a repository it writes `Not in a Git repository.\n` to stdout with
+status 128; in a bare repository it writes
+`This operation must be run in a work tree.\n` to stdout with status 128. Both
+diagnostics apply before format selection (`--porcelain` and `--json` included).
+
+### Tracking-ref resolution
+
+In default (human) mode, status resolves `HEAD` (tolerating an unborn `HEAD` by
+omitting the branch banner and pushed section). A detached `HEAD` prints
+`On branch HEAD`. For a named branch, `trackingRef(branch:client:)` follows
+git-lfs's `RemoteRefNameForCurrentBranch` using only fetch tracking
+configuration:
+
+- Read `branch.<name>.remote`; if absent or empty, omit the pushed section.
+- Read `branch.<name>.merge`; strip a `refs/heads/` prefix if present,
+  otherwise fall back to the local branch name (covering missing, empty,
+  unqualified, and non-`refs/heads/` values such as `refs/tags/...`).
+- Check `refs/remotes/<remote>/<trackingBranch>`; if it resolves, print
+  `Objects to be pushed to <remote>/<trackingBranch>:` and scan
+  `HEAD` excluding that ref via `GitScanner.scanRefs`, listing full 64-hex LFS
+  OIDs (`\t<path> (<oid>)`).
+- `branch.<name>.pushRemote` and `remote.pushDefault` are ignored.
+- If the tracking scan fails after emitting some pointers (for example on a
+  corrupt later Git blob), already-scanned pointers remain in stdout and the
+  command exits with status 2 and `Could not scan for Git LFS objects: …` on
+  stderr.
+
+### Index scanning, pointer comparison and deduplication
+
+`StatusOptions.scanIndex` uses typed full-OID `GitClient.diffIndex` records:
+
+1. Check for unmerged index entries (stage != 0). Upstream `git.DiffIndex`
+   runs `git update-index -q --refresh` before diffing, which exits 1 with
+   `<path>: needs merge` lines on any conflict; `status` matches that by
+   failing with status 2 after printing the human branch/pushed header (or
+   with empty stdout in `--porcelain` / `--json`).
+2. Run refreshed uncached `diff-index -M HEAD` (`cached: false, refresh: true`)
+   before cached `diff-index --cached -M HEAD` (`cached: true`), sorted in raw
+   UTF-8 byte order (even under `core.ignoreCase = true`) and without splitting
+   `T` typechanges into cross-file renames. An unborn `HEAD` uses the empty
+   tree baseline.
+3. `comparePointers` compares each regular uncached work-tree change against
+   its stage-zero indexed pointer by streaming the work-tree file's SHA-256
+   directly without invoking a clean filter. Clean smudged LFS files are
+   suppressed when they also match `HEAD`, or rewritten to their indexed pointer
+   OID when staged ahead of `HEAD`. Corrected additions are re-paired against
+   unpaired deletions using libgit2's 50% similarity threshold. Conflicted
+   entries (no stage-zero entry) are never compared against conflict stages.
+4. Cached entries are drained first, then uncached entries, deduplicating by
+   `(oldOID, newOID, destination-or-source path)` bytes so a clean staged change
+   reported by both diffs appears once under staged.
+5. Paths are formatted with Git's C-style quoting (`core.quotepath`, defaulting
+   to `true`) at the presentation boundary after raw-path pointer comparison,
+   and joined as raw UTF-8 strings (without `URL` Unicode normalization).
+
+### Output forms
+
+- **Default (human)**: prints the branch banner and optional pushed section,
+  then `Objects to be committed:` and `Objects not staged for commit:`. Paths
+  are relativized against the current working directory (without quoting the
+  prefix, matching upstream's `relativize`). Staged renames and copies print
+  `<source> -> <destination>`; unstaged entries print `<source>`.
+- **Porcelain (`-p`, `--porcelain`)**: takes precedence when combined with
+  `--json`. Omits the branch banner and pushed section, visits unstaged entries
+  before staged entries, deduplicates by destination-or-source path, and emits
+  repository-relative paths using ` M <path>` for modifications,
+  `<S>  <source> -> <destination>` for `R`/`C`, and `<S>  <path>` for other
+  statuses (including ordinary tracked files).
+- **JSON (`-j`, `--json`)**: emits `{"files":{...}}\n` (or `{"files":{}}\n`
+  when empty) with repository-relative paths. Visits unstaged then staged,
+  keeping an entry only when `blobInfoFrom` (its source side, or destination
+  for additions whose `oldOID` is all zeros) classifies as `.lfs`. Staged
+  entries overwrite unstaged entries for the same path key. Keys are sorted by
+  raw UTF-8 bytes and strings apply Go's JSON/HTML escaping (`<`, `>`, `&`,
+  `U+2028`, `U+2029`).
+
+### Hash and annotation rules
+
+`PointerScanner.annotation(_:name:repositoryRoot:)` classifies each status side
+and `StatusOptions` formats the leading seven hex digits (`from -> to`, or just
+`from` for status `A`):
+
+- **Valid small pointer (`< 1024` bytes)**: `LFS: <7-hex>` using the pointer's
+  target SHA-256.
+- **Ordinary, malformed, or `>= 1024`-byte Git blob**: `Git: <7-hex>` using the
+  SHA-256 of the blob's raw contents (not its Git SHA-1).
+- **Zero destination OID**: streams the work-tree file at the repository root
+  (following symlinks after `Shell.authorize`) and emits `File: <7-hex>`, or
+  `File: deleted` when the path is absent or replaced by a directory.
+- **Missing Git ODB object**: `?: <missing>` (corrupt Git blobs still fail).
+- **Missing local LFS payload**: absent files under `.git/lfs/objects/` do not
+  affect `git lfs status`, which reads only Git blobs and work-tree files.
+
+### Status test and oracle coverage
+
+- Non-oracle tests in `Tests/GitLFSKitTests/` run without `git-lfs` using
+  `IsolatedLFSHost`, `LFSFixture`, `GitClient`, and direct SHA-256 expectations:
+  `PointerScannerTests`, `StatusOptionsTests`, `StatusRenderingTests`, and
+  `StatusPathQuotingTests`. CLI flag parsing lives in `GitCommandLFSParsingTests`.
+- `GitCommandLFSStatusOracleTests` (with `GitCommandLFSStatusOracleTests+Matrix`)
+  reuses `Support/LFSSamePathOracle.swift` on macOS and Linux, gated on
+  `LFSSamePathOracle.isAvailable` (exact `git-lfs/3.7.1`). It compares complete
+  stdout, stderr, and exit status at the same path and environment with no path,
+  line-order, JSON, or whitespace normalization across human, porcelain, and
+  JSON forms: tracking refs (none, missing, renamed merge, fallback merge,
+  competing `pushRemote`/`remote.pushDefault`), detached/unborn HEAD, clean
+  smudged/pointer-only/permission-only states, ordinary tracked and untracked
+  files, same-size edits, partially staged changes and baseline reversions,
+  LFS↔Git transitions, deletions and file-to-directory replacements, renames,
+  symlink type changes, merge conflicts, missing Git blobs versus missing local
+  LFS payloads, partial tracking corruption, subdirectory invocation, C-quoted
+  paths, Unicode sorting and Go JSON escaping, and bare/outside-repository
+  diagnostics.
 
 ## Environment report (`git lfs env`, #207)
 
@@ -485,3 +614,12 @@ the assertion through #187's batch client/server remains open for that work.
   (`Support/LFSSamePathOracle.swift`). Only a `git-lfs/` version line and a
   `git version` line are normalized. Skipped unless `git lfs version` starts
   with `git-lfs/3.7.1`.
+- `PointerScannerTests`, `StatusOptionsTests`, `StatusRenderingTests`, and
+  `StatusPathQuotingTests` — non-oracle `git lfs status` blob annotations,
+  pointer-aware work-tree comparison, rename re-pairing, tracking-ref
+  resolution, human/porcelain/JSON rendering, and C-style path quoting without
+  a `git-lfs` binary.
+- `GitCommandLFSStatusOracleTests` (macOS / Linux) — `status`, `--porcelain`,
+  and `--json` same-path oracle matrix against pinned `git-lfs/3.7.1` via
+  `Support/LFSSamePathOracle.swift`, with no normalization beyond version lines
+  where printed. Skipped unless `git lfs version` starts with `git-lfs/3.7.1`.
