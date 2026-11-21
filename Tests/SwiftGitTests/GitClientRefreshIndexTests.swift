@@ -132,6 +132,14 @@ struct GitClientRefreshIndexTests {
         #expect(changed == (trusted ? ["a.txt", "b.txt"] : ["b.txt"]))
         #expect(try support.runGit(["ls-files", "-s"], in: dir) == staged)
         #expect(try gitExit(["diff-index", "--quiet", "HEAD", "--", "a.txt"], in: dir) == (trusted ? 1 : 0))
+
+        // Git also exposes this path-scoped stat-refresh primitive through add.
+        try before.0.write(to: dir.appendingPathComponent(".git/index"))
+        try support.runGit(["add", "--refresh", "--", "a.txt"], in: dir)
+        let oracle = try support.runGit(["diff-index", "--name-only", "HEAD", "--"], in: dir)
+            .split(separator: "\n").map(String.init)
+        #expect(oracle == changed)
+        #expect(try support.runGit(["ls-files", "-s"], in: dir) == staged)
     }
 
     @Test("a symlink refresh hashes the link text, not its target")
@@ -179,6 +187,43 @@ struct GitClientRefreshIndexTests {
             #expect(denial?.url.lastPathComponent == denied)
         }
         try expectUnchanged(before, in: dir)
+    }
+
+    @Test("core.symlinks=false refreshes a regular link placeholder using raw target text",
+          arguments: [true, false], ["a.txt", "b.txt"])
+    func symlinkPlaceholder(hasSymlinks: Bool, target: String) async throws {
+        let dir = try support.makeRepo()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let link = dir.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "a.txt")
+        try support.runGit(["add", "link"], in: dir)
+        try support.runGit(["commit", "-m", "symlink"], in: dir)
+        try support.runGit(["config", "core.symlinks", hasSymlinks ? "true" : "false"], in: dir)
+        try support.runGit(["config", "core.filemode", "true"], in: dir)
+        try FileManager.default.removeItem(at: link)
+        try Data(target.utf8).write(to: link)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: link.path)
+        try touch("link", in: dir)
+
+        let driver = "refresh-link-" + UUID().uuidString
+        try Data("link filter=\(driver)\n".utf8).write(to: dir.appendingPathComponent(".git/info/attributes"))
+        try GitFilters.register(name: driver, GitFilter(clean: { _, _ in
+            Issue.record("an indexed symlink must hash its raw target text without a clean filter")
+            return nil
+        }))
+        defer { try? GitFilters.unregister(name: driver) }
+        let staged = try support.runGit(["ls-files", "-s"], in: dir)
+        let before = try snapshot(in: dir)
+        let matches = !hasSymlinks && target == "a.txt"
+        #expect(try gitExit(["diff-index", "--quiet", "HEAD", "--", "link"], in: dir) == 1)
+        try await GitClient(workingDirectory: dir).refreshIndex(paths: ["link"])
+        if !matches { try expectUnchanged(before, in: dir) }
+        let status = try gitExit(["diff-index", "--quiet", "HEAD", "--", "link"], in: dir)
+        #expect(status == (matches ? 0 : 1))
+        #expect(try support.runGit(["ls-files", "-s"], in: dir) == staged)
+        _ = try support.runGit(["update-index", "-q", "--refresh"], in: dir, allowsFailure: true)
+        #expect(try gitExit(["diff-index", "--quiet", "HEAD", "--", "link"], in: dir) == status)
+        #expect(try support.runGit(["ls-files", "-s"], in: dir) == staged)
     }
 
     private func filteredRepo() throws -> URL {

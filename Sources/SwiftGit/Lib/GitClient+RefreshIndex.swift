@@ -3,9 +3,11 @@ import CGitKit
 import ShellKit
 
 extension GitClient {
-    /// Refresh only the stat metadata of the given repository-relative paths,
-    /// as `git update-index -q --refresh` does. Content is hashed through clean
-    /// filters without writing objects; the index's OIDs, modes and stages stay.
+    /// Apply the stat-refresh operation of `git update-index -q --refresh`
+    /// to the given repository-relative paths, like `git add --refresh -- <paths>`.
+    /// Positional operands to `update-index` also stage content. Content is
+    /// hashed through clean filters without writing objects;
+    /// the index's OIDs, modes and stages stay.
     /// Unmerged, missing, skip-worktree and assume-unchanged entries are skipped.
     ///
     /// With no LFS filter registered, a smudged LFS file stays stale, exactly
@@ -48,21 +50,25 @@ extension GitClient {
         defer { git_index_free(index) }
         let fileMode = DiffIndexStat.flag("core.filemode", repo: repo, default: DiffIndexStat.defaultFileMode)
         let trustCtime = DiffIndexStat.flag("core.trustctime", repo: repo, default: true)
+        let symlinks = DiffIndexStat.flag("core.symlinks", repo: repo, default: true)
         var changed = false
         for path in paths {
             guard let entry = git_index_get_bypath(index, path, 0)?.pointee else { continue }
             if entry.flags & 0x8000 != 0 || entry.flags_extended & DiffIndexStat.skipWorktree != 0 { continue }
             guard let location = DiffIndexStat.worktreePath(repo, path),
                   let file = DiffIndexWorktree.fileStat(location) else { continue }
-            guard DiffIndexStat.modesMatch(index: entry.mode, work: file.mode, trustFileMode: fileMode) else {
+            let linkPlaceholder = entry.mode == 0o120000 && !symlinks && file.mode & 0o170000 == 0o100000
+            guard linkPlaceholder || DiffIndexStat.modesMatch(
+                index: entry.mode, work: file.mode, trustFileMode: fileMode) else {
                 continue
             }
             if UInt64(entry.file_size) == file.size && !DiffIndexStat.statDiffers(entry, file, trustCtime: trustCtime) {
                 continue
             }
             let oid: git_oid
-            if file.mode == 0o120000 {
-                // A symlink's blob is its target text, never the file it names.
+            if entry.mode == 0o120000 {
+                // Hash a link or its core.symlinks=false placeholder as raw
+                // target text. Neither representation runs a clean filter.
                 guard let targetOID = DiffIndexStat.rawOID(file, at: location) else { continue }
                 oid = targetOID
             } else {
