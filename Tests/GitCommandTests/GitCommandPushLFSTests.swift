@@ -103,9 +103,13 @@ struct GitCommandPushLFSTests {
             #expect(actual.status == 1)
             #expect(actual.status == expected.status)
             #expect(actual.stderr == expected.stderr)
-            // The same lines; the SDK writes its meter's last line before
+            // The same lines, the progress meter's aside: git-lfs prints its
+            // last line only some of the time, and the SDK writes it before
             // the failure block rather than after it.
-            #expect(Set(actual.stdout.split(separator: "\n")) == Set(expected.stdout.split(separator: "\n")))
+            func lines(_ text: String) -> [Substring] {
+                text.split(separator: "\n").filter { !$0.hasPrefix("Uploading LFS objects:") }
+            }
+            #expect(lines(actual.stdout) == lines(expected.stdout))
             #expect(actual.stdout.contains("Git LFS upload failed:\n  (missing) a.bin (\(fixture.oid))\n"))
             #expect(actual.stderr.hasSuffix("error: failed to push some refs to '\(fixture.remote.path)'\n"))
             #expect(try fixture.remoteMain() == nil)

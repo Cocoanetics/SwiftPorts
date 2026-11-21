@@ -16,7 +16,7 @@ extension Push {
     static func lfsPrePush(
         client: SwiftGit.GitClient, remote: String
     ) async throws -> (@Sendable ([PushUpdate], SwiftGit.GitClient) async throws -> Void)? {
-        guard await Hook.lfsPrePush(client) != nil else { return nil }
+        guard try await Hook.lfsPrePush(client) != nil else { return nil }
         let url = try await client.displayName(ofRemote: remote)
         let credentials = CommandContext.envCredentialProvider()
         let terminal = TTY.isStderrTTY
