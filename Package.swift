@@ -1,5 +1,8 @@
 // swift-tools-version:6.2
 import PackageDescription
+#if os(Windows)
+import Foundation
+#endif
 
 // Platforms where ArgumentParser-bearing command targets may enter a
 // TEST target's module graph. Excludes Android: its explicit-module
@@ -59,7 +62,7 @@ let androidDroppedTargets: Set<String> = [
     "GitHubTests", "SSHKitTests", "GitKitSSHTests",
     // GitLFSKitTests links swift-crypto's BoringSSL C++ target too (through
     // GitLFSKit's `Crypto` dependency), so it's dropped for the same reason.
-    // `GitLFSKit` itself stays on Android. Its manifest dependencies are unchanged.
+    // `GitLFSKit` itself stays on Android.
     // GitLFSTestSupport is the in-process LFS server (NIOHTTP1, issue #199):
     // a test-only target, not a library product. It links swift-crypto so
     // verify can check the object id. GitLFSTestSupportTests links that
@@ -172,6 +175,49 @@ let lz4KitShimDependencies: [Target.Dependency] = [
 let compressionShimTargets: [Target] = []
 let xzKitShimDependencies: [Target.Dependency] = []
 let lz4KitShimDependencies: [Target.Dependency] = []
+#endif
+
+// Only Windows compiles the temporary FoundationNetworking #5532 workaround.
+// Use the SDK's static Schannel curl, not a separately installed DLL or curl.
+#if os(Windows)
+#if arch(arm64)
+let lfsCurlArchitecture = "aarch64"
+#else
+let lfsCurlArchitecture = "x86_64"
+#endif
+let lfsCurlSDK = Context.environment["SDKROOT"] ?? ""
+let lfsCurlSDKURL = URL(fileURLWithPath: lfsCurlSDK)
+let lfsCurlDirectories = [
+    lfsCurlSDKURL.appendingPathComponent("usr/lib/swift_static/windows/\(lfsCurlArchitecture)"),
+    lfsCurlSDKURL.deletingLastPathComponent().appendingPathComponent(
+        "WindowsExperimental.sdk/usr/lib/swift_static/windows/\(lfsCurlArchitecture)"),
+    lfsCurlSDKURL.appendingPathComponent("usr/lib/swift/windows/\(lfsCurlArchitecture)")
+]
+guard let lfsCurlDirectory = lfsCurlDirectories.first(where: {
+    FileManager.default.fileExists(atPath: $0.appendingPathComponent("libcurl.lib").path)
+}) else {
+    fatalError("The Swift Windows SDK (SDKROOT) must include static libcurl.lib for the #5532 workaround")
+}
+let lfsUploadTargets: [Target] = [
+    .target(
+        name: "CLFSCurl",
+        path: "Sources/GitLFSKit/CLFSCurl",
+        publicHeadersPath: "include",
+        // Absolute -l operands select only these SDK archives without adding
+        // the static Swift runtime directory to the general library search.
+        linkerSettings: ["libcurl", "zlibstatic", "brotlidec", "brotlicommon"].map {
+            .linkedLibrary(lfsCurlDirectory.appendingPathComponent($0).path)
+        } + [
+            .linkedLibrary("ws2_32"), .linkedLibrary("crypt32"),
+            .linkedLibrary("secur32"), .linkedLibrary("normaliz"),
+            .linkedLibrary("bcrypt"), .linkedLibrary("advapi32")
+        ]
+    )
+]
+let lfsUploadDependencies: [Target.Dependency] = [.target(name: "CLFSCurl", condition: .when(platforms: [.windows]))]
+#else
+let lfsUploadTargets: [Target] = []
+let lfsUploadDependencies: [Target.Dependency] = []
 #endif
 
 // SwiftPorts is a monorepo of pure-Swift, cross-platform
@@ -1196,7 +1242,7 @@ let package = Package(
         // No ArgumentParser dependency; stays in the Android build.
         .target(
             name: "GitLFSKit",
-            dependencies: [
+            dependencies: lfsUploadDependencies + [
                 "CGitLFSEnvironment",
                 "SwiftGit",
                 .product(name: "CGitKit", package: "GitKit"),
@@ -1501,5 +1547,5 @@ let package = Package(
     // probed there. None are in `androidDroppedTargets`, so the filter passes
     // them through on the Android (Linux-host) build, where their
     // `.when(platforms:)` consuming edges prune them for the Android slice.
-    ], plus: secretTargets + compressionShimTargets)
+    ], plus: secretTargets + compressionShimTargets + lfsUploadTargets)
 )

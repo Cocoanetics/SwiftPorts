@@ -3,8 +3,31 @@ import Foundation
 import GitLFSTestSupport
 import Testing
 
-@Suite("LFSTestServerTests")
+@Suite("LFSTestServerTests", .timeLimit(.minutes(2)))
 struct LFSTestServerTests {
+    @Test("100 Continue precedes a drained 1 MB PUT and its final status",
+          arguments: [200, 503, 401], [false, true])
+    func largeUpload(code: Int, chunked: Bool) async throws {
+        let bytes = Data(repeating: 0x61, count: 1_000_000)
+        let oid = sha256Hex(bytes)
+        // Keep this control independent of URLSession. The same server must read
+        // the entire body even when it is about to return an error.
+        try await LFSWireClient.withServer { server, client in
+            if code != 200 { server.inject(.putStatus(oid: oid, code: code)) }
+            let href = server.endpoint.absoluteString + "/objects/" + oid
+            // The client waits for 100 before sending the first 32 KiB chunk.
+            let response = try await client.put(href, body: bytes, expectContinue: true, chunked: chunked)
+            #expect(response.status == code)
+            let put = try #require(server.requests().first { $0.method == "PUT" })
+            #expect(put.status == code)
+            #expect(put.requestBody == bytes)
+            #expect(put.requestHeaders["expect"] == "100-continue")
+            #expect(put.requestHeaders["content-length"] == (chunked ? nil : String(bytes.count)))
+            #expect(put.requestHeaders["transfer-encoding"] == (chunked ? "chunked" : nil))
+            #expect(server.bytes(for: oid) == (code == 200 ? bytes : nil))
+        }
+    }
+
     @Test("a batch, GET, PUT, and verify round trip")
     func roundTrip() async throws {
         let bytes = Data("hello\n".utf8)

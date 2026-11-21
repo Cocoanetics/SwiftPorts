@@ -617,8 +617,34 @@ the assertion through #187's batch client/server remains open for that work.
 
 ## Tests
 
+### Temporary Windows upload transport (#243)
+
+Windows PUT bodies use the Swift 6.4 SDK's static `libcurl.lib` (Schannel),
+driven by curl's polling loop. This works around
+[swift-corelibs-foundation #5532](https://github.com/swiftlang/swift-corelibs-foundation/issues/5532):
+URLSession loses write readiness after a socket-buffer fill. Known-length
+file/Data PUTs stall before a response even when the receiver drains every
+chunk; fixing the separate stream probe's conflicting framing cannot fix
+that runtime driver. The adapter preserves Content-Length and explicit
+Expect headers rather than forcing chunked encoding.
+
+This is temporary: remove both Windows switches and `CLFSCurl` when the
+toolchain fixes #5532. Only Windows compiles/uses the adapter; macOS, Linux,
+Android and iOS retain URLSession. No curl package, source, DLL loading or
+alternate TLS implementation is added. The manifest resolves the SDK's
+static curl, zlib and Brotli archives; Schannel uses Windows certificate trust.
+LFSClient still prepares credentials and handles the 401 resend, while the
+adapter keeps configured headers/cookies, HTTP(S) proxy settings (or curl's
+environment defaults), redirects and bounded reads. Redirects follow the
+URLSession method rules (303 to GET, 307/308 retaining PUT); curl does not
+forward authorization to another origin.
+
 `Tests/GitLFSKitTests/`:
 
+- `LFSURLSessionUploadTests` — 1 MB file/Data/stream PUTs to the NIO fixture,
+  including 200/503/401, cancellation, and an idle response timeout. Explicit
+  framing assertions check the received headers and complete body. Windows
+  exercises the temporary static curl path; other platforms use URLSession.
 - `PointerTests` — round-trips, the empty file, the 1024-byte boundary,
   extension ordering, every rejection with its text.
 - `LocalStoreTests` — store paths in a plain repository, a linked worktree and

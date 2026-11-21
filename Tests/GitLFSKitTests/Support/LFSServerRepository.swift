@@ -31,9 +31,16 @@ struct LFSServerRepository {
                 host, "server", remotes: [("origin", remote.path)],
                 config: [("lfs.url", server.endpoint.absoluteString), ("lfs.locksverify", "false")] + config)
             let client = await LFSClient(git: made.client, credentials: credentials, configuration: .ephemeral)
-            try await body(LFSServerRepository(
+            let repository = LFSServerRepository(
                 directory: made.directory, git: made.client, client: client,
-                store: LocalStore(gitStorageDirectory: made.directory.appendingPathComponent(".git"))))
+                store: LocalStore(gitStorageDirectory: made.directory.appendingPathComponent(".git")))
+            #if os(Windows)
+            try await LFSUploadDiagnostics.$sink.withValue({ print("[LFS upload probe] \($0)") }, operation: {
+                try await body(repository)
+            })
+            #else
+            try await body(repository)
+            #endif
         }
     }
 

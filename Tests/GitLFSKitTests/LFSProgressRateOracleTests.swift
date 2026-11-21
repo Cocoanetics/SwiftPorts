@@ -5,7 +5,7 @@ import Testing
 import GitLFSTestSupport
 #endif
 
-@Suite("LFS progress rate (git-lfs 3.7.1 tq/meter.go)")
+@Suite("LFS progress rate (git-lfs 3.7.1 tq/meter.go)", .timeLimit(.minutes(2)))
 struct LFSProgressRateOracleTests {
     /// A clock tests advance deterministically without sleeping.
     private final class Clock: @unchecked Sendable {

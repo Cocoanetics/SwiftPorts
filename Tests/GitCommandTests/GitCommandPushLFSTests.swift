@@ -7,7 +7,7 @@ import GitLFSTestSupport
 import Testing
 
 @Suite("git push with git-lfs's pre-push hook",
-       .enabled(if: LFSSamePathOracle.isAvailable, "git-lfs 3.7.1 is not on PATH"))
+       .enabled(if: LFSSamePathOracle.isAvailable, "git-lfs 3.7.1 is not on PATH"), .timeLimit(.minutes(2)))
 struct GitCommandPushLFSTests {
     /// A repository with one LFS object committed on `main` and the hook
     /// installed, an empty bare `origin`, and the server as `lfs.url`.
