@@ -25,6 +25,7 @@ extension StatusOptions {
             guard Self.isContentChange(entry),
                   let indexed = index[Array(entry.destinationPath.utf8)],
                   indexed.mode == entry.newMode,
+                  entry.newOID != indexed.oid,
                   let pointer = try await scanner.readPointer(indexed.oid),
                   try await Self.worktree(entry.destinationPath, root: repositoryRoot, matches: pointer)
             else {

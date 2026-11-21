@@ -109,6 +109,23 @@ struct StatusOptionsTests {
         }
     }
 
+    @Test("a clean indexed addition with a missing blob remains renderable")
+    func missingCleanAddition() async throws {
+        try await withRepo { _, dir, client in
+            let oid = try await stage(Data("ordinary file".utf8), "x.dat", in: dir, client: client)
+            let object = dir.appendingPathComponent(".git/objects/\(oid.prefix(2))/\(oid.dropFirst(2))")
+            try FileManager.default.removeItem(at: object)
+            #expect(try await scan(client, dir) == StatusIndex(
+                staged: [entry("A", Self.zero, oid, "x.dat", oldMode: 0)], unstaged: []))
+            var options = StatusOptions()
+            let human = try await options.status(client: client)
+            #expect(human.status == 0 && human.stderr.isEmpty && human.stdout.contains("(?: <missing>)"))
+            options.porcelain = true
+            let porcelain = try await options.status(client: client)
+            #expect(porcelain.status == 0 && porcelain.stderr.isEmpty && porcelain.stdout == "A  x.dat\n")
+        }
+    }
+
     @Test("staged pointer additions with smudged bytes are only staged")
     func stagedAdditions() async throws {
         try await withRepo { _, dir, client in

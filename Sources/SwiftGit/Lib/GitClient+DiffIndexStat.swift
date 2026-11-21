@@ -228,7 +228,7 @@ enum DiffIndexStat {
         if rules.refresh {
             guard let oid = rawOID(file, at: location) else { return }
             if oidEqual(oid, entry.id) {
-                try rewriteStat(index, path: path, file: file)
+                rewriteStat(index, path: path, file: file)
                 refreshed = true
                 return
             }
@@ -352,14 +352,14 @@ enum DiffIndexStat {
         #endif
     }
 
-    private static func rewriteStat(_ index: OpaquePointer?, path: String, file: WorktreeStat) throws {
+    private static func rewriteStat(_ index: OpaquePointer?, path: String, file: WorktreeStat) {
         guard let current = git_index_get_bypath(index, path, 0) else { return }
-        var copy = current.pointee
-        apply(file, to: &copy)
-        try path.withCString { cString in
-            copy.path = cString
-            try GitClient.check(git_index_add(index, &copy))
-        }
+        // Only stat data changes; git_index_add would revalidate the existing
+        // OID and reject a missing blob that git update-index --refresh accepts.
+        // Mark it up-to-date just as index_insert does, without replacing it.
+        let entry = UnsafeMutablePointer(mutating: current)
+        apply(file, to: &entry.pointee)
+        entry.pointee.flags_extended |= UInt16(GIT_INDEX_ENTRY_UPTODATE.rawValue)
     }
 
     private static func apply(_ file: WorktreeStat, to entry: inout git_index_entry) {
