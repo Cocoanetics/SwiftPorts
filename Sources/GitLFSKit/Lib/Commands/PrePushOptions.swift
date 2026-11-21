@@ -11,6 +11,33 @@ public struct PrePushOptions: Sendable {
     public func run(
         _ arguments: [String], client: LFSClient, git: GitClient, terminal: Bool = false
     ) async throws -> LFSCommandResult {
+        try await run(arguments, client: client, git: git, terminal: terminal) {
+            let data = await Shell.current.stdin.readAllData()
+            var updates: [LFSRefUpdate] = []
+            for line in String(decoding: data, as: UTF8.self).components(separatedBy: "\n") {
+                let line = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if line.isEmpty { continue }
+                var fields = line.components(separatedBy: " ")
+                while fields.count < 4 { fields.append("") }
+                updates.append(LFSRefUpdate(localRef: fields[0], localOID: fields[1],
+                                            remoteRef: fields[2], remoteOID: fields[3]))
+            }
+            return updates
+        }
+    }
+
+    /// The hook as `git push` runs it in-process: `updates` are the lines git
+    /// would write on its stdin.
+    public func run(
+        _ arguments: [String], updates: [LFSRefUpdate], client: LFSClient, git: GitClient, terminal: Bool = false
+    ) async throws -> LFSCommandResult {
+        try await run(arguments, client: client, git: git, terminal: terminal) { updates }
+    }
+
+    private func run(
+        _ arguments: [String], client: LFSClient, git: GitClient, terminal: Bool,
+        updates read: () async -> [LFSRefUpdate]
+    ) async throws -> LFSCommandResult {
         do {
             guard let argument = arguments.first else {
                 throw LFSFailure(
@@ -25,17 +52,7 @@ public struct PrePushOptions: Sendable {
                 return urls == [argument]
             } ?? argument
             try await client.finder.validateRemote(remote, argument: argument)
-            let data = await Shell.current.stdin.readAllData()
-            var updates: [LFSRefUpdate] = []
-            for line in String(decoding: data, as: UTF8.self).components(separatedBy: "\n") {
-                let line = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                if line.isEmpty { continue }
-                var fields = line.components(separatedBy: " ")
-                while fields.count < 4 { fields.append("") }
-                if LFSRefUpdate.isZero(fields[1]) { continue }
-                updates.append(LFSRefUpdate(localRef: fields[0], localOID: fields[1],
-                                            remoteRef: fields[2], remoteOID: fields[3]))
-            }
+            let updates = await read().filter { !LFSRefUpdate.isZero($0.localOID) }
             return try await client.pushUpdates(updates, remote: remote,
                                                dryRun: dryRun, terminal: terminal, git: git)
         } catch let failure as LFSFailure {
