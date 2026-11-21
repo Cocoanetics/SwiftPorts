@@ -46,6 +46,27 @@ struct StatusRenderingTests {
         }
     }
 
+    #if os(macOS) || os(Linux)
+    @Test("filesystem-root paths retain git-lfs 3.7.1's relativize behavior")
+    func filesystemRootPathsMatchUpstream() async throws {
+        try await withRepo { host, dir, client in
+            let oid = try await stage(Self.pointer.encoded, "file.bin", in: dir, client: client)
+            let index = StatusIndex(staged: [entry("A", Self.zero, oid, "file.bin")], unstaged: [])
+            let shell = Shell(environment: Environment(variables: host.variables, workingDirectory: "/"))
+            shell.sandbox = host.sandbox
+            try await shell.withCurrent {
+                var output = ""
+                // The pinned source splits "/" into ["", ""], retaining one extra
+                // component relative to "/file.bin". Preserve its observable output.
+                try await StatusOptions().renderHuman(index, client: client, root: URL(fileURLWithPath: "/"),
+                                                      output: &output)
+                #expect(output == "\nObjects to be committed:\n\n\t../file.bin (LFS: aaaaaaa)\n"
+                        + "\nObjects not staged for commit:\n\n\n")
+            }
+        }
+    }
+    #endif
+
     @Test func additionsAndBothSidesOfModification() async throws {
         try await withRepo { _, dir, client in
             _ = try await stage(Self.pointer.encoded, "a.bin", in: dir, client: client)
