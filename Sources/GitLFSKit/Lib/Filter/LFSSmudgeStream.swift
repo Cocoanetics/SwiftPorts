@@ -5,16 +5,20 @@ final class LFSSmudgeStream: GitFilterStream {
     private let context: LFSFilterContext
     private let path: String
     private let output: (UnsafeRawBufferPointer) throws -> Void
+    private let deferFailure: ((LFSFilterFailure) throws -> Void)?
     private var probe = Data()
     private var passthrough = false
 
     /// Internal regression probe: only a possible pointer is retained between writes.
     var bufferedByteCount: Int { probe.count }
 
-    init(context: LFSFilterContext, path: String, output: @escaping (UnsafeRawBufferPointer) throws -> Void) {
+    init(context: LFSFilterContext, path: String,
+         deferFailure: ((LFSFilterFailure) throws -> Void)? = nil,
+         output: @escaping (UnsafeRawBufferPointer) throws -> Void) {
         self.context = context
         self.path = path
         self.output = output
+        self.deferFailure = deferFailure
     }
 
     func write(_ chunk: UnsafeRawBufferPointer) throws {
@@ -66,6 +70,13 @@ final class LFSSmudgeStream: GitFilterStream {
                 processCommand: context.processCommand, required: context.required)
             // Diagnostics use the captured Shell, including when suppressed.
             context.shell.stderr.write(Data((failure.localizedDescription + "\n").utf8))
+            if !configuration.skipDownloadErrors, !context.required, context.processCommand != nil,
+               let deferFailure {
+                // Git resolves delayed smudges after visiting every checkout
+                // entry. Leave this file empty and let unrelated paths finish.
+                try deferFailure(failure)
+                return
+            }
             // Git's delayed checkout fails if filter-process exits, even for an optional driver.
             guard configuration.skipDownloadErrors || (!context.required && context.processCommand == nil)
             else { throw failure }

@@ -3,12 +3,22 @@ import GitLFSKit
 
 extension CLIError {
     init(filter error: GitFilterError, clone: Bool = false) {
+        self.init(driver: error.driver, path: error.path, direction: error.direction,
+                  failure: error.underlying as? LFSFilterFailure, clone: clone)
+    }
+
+    init(filter failure: LFSFilterFailure, clone: Bool = false) {
+        self.init(driver: "lfs", path: failure.path, direction: .smudge, failure: failure, clone: clone)
+    }
+
+    private init(driver: String, path: String, direction: GitFilterDirection,
+                 failure: LFSFilterFailure?, clone: Bool) {
         // convert.c quotes the clean driver's name, but not the smudge driver's.
-        let driver = error.direction == .clean ? "'\(error.driver)'" : error.driver
-        let fatal = "fatal: \(error.path): \(error.direction) filter \(driver) failed"
+        let driver = direction == .clean ? "'\(driver)'" : driver
+        let fatal = "fatal: \(path): \(direction) filter \(driver) failed"
         var lines = [fatal]
         var status: Int32 = 128
-        if let failure = error.underlying as? LFSFilterFailure, let command = failure.processCommand {
+        if let failure, let command = failure.processCommand {
             lines = ["error: external filter '\(command)' failed"]
             if failure.required {
                 lines.append(fatal)

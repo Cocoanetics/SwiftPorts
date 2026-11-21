@@ -9,6 +9,36 @@ import GitLFSTestSupport
 extension LFSFilterTests {
     @Suite("LFS checkout, clone and status integration")
     struct LFSFilterIntegrationTests {
+        @Test("optional process failure finishes other paths and does not leak into later operations")
+        func mixedPathFailure() async throws {
+            try await LFSTestServer.withServer { server in
+                try await LFSFilterFixture.run { host in
+                    let data = Data("missing object\n".utf8)
+                    let made = try await LFSFilterFixture.seed(host, data: data, config: [
+                        ("lfs.url", server.endpoint.absoluteString), ("filter.lfs.required", "false"),
+                        ("lfs.skipdownloaderrors", "false")
+                    ])
+                    let ordinary = Data("ordinary tracked content\n".utf8)
+                    let file = made.directory.appendingPathComponent("z.txt")
+                    try ordinary.write(to: file)
+                    try await made.client.add(paths: ["z.txt"])
+                    _ = try await made.client.commit(message: "ordinary", author: nil, allowEmpty: false)
+                    let store = try await LocalStore.open(made.client)
+                    try FileManager.default.removeItem(at: store.objectPathname(made.pointer.oid))
+                    try FileManager.default.removeItem(at: made.directory.appendingPathComponent("a.lfs"))
+                    try FileManager.default.removeItem(at: file)
+                    server.inject(.objectStatus(oid: made.pointer.oid, code: 404))
+                    await #expect(throws: LFSFilterFailure.self) {
+                        try await made.client.checkoutPaths(["a.lfs", "z.txt"])
+                    }
+                    #expect(try Data(contentsOf: file) == ordinary)
+                    #expect(try Data(contentsOf: made.directory.appendingPathComponent("a.lfs")).isEmpty)
+                    server.store(data, oid: made.pointer.oid)
+                    try await LFSFilterFixture.restore(made.client, directory: made.directory, expected: data)
+                }
+            }
+        }
+
         @Test("local checkout and linked worktree share default or configured storage",
                arguments: ["", "shared-lfs"])
         func local(storage: String) async throws {

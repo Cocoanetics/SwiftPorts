@@ -23,7 +23,9 @@ public enum GitLFSKit {
         guard let context else { return nil }
         switch source.direction {
         case .clean: return LFSCleanStream(context: context, output: output.write)
-        case .smudge: return LFSSmudgeStream(context: context, path: source.path, output: output.write)
+        case .smudge:
+            return LFSSmudgeStream(context: context, path: source.path,
+                deferFailure: { try operation.deferFailure($0) }, output: output.write)
         }
     }
 

@@ -9,6 +9,7 @@ package final class GitFilterOperationContext: @unchecked Sendable {
     private static let threadKey = "SwiftGit.filterOperation"
     private let lock = NSLock()
     private var active = true
+    private var deferredFailure: (any Error)?
     private let shell: Shell
     private let credentials: CredentialProvider?
     private let environment: EnvironmentConfig
@@ -35,14 +36,28 @@ package final class GitFilterOperationContext: @unchecked Sendable {
         return context
     }
 
-    func run<T>(_ body: () throws -> T) rethrows -> T {
+    func run<T>(_ body: () throws -> T) throws -> T {
         let previous = Thread.current.threadDictionary[Self.threadKey]
         Thread.current.threadDictionary[Self.threadKey] = self
         defer {
-            lock.withLock { active = false }
+            lock.withLock {
+                active = false
+                deferredFailure = nil
+            }
             Thread.current.threadDictionary[Self.threadKey] = previous
         }
-        return try body()
+        let result = try body()
+        if let failure = lock.withLock({ deferredFailure }) { throw failure }
+        return result
+    }
+
+    /// Delayed process filters report failure after the other checkout entries
+    /// have been written. Retain only the first error, never file contents.
+    package func deferFailure(_ error: any Error) throws {
+        try lock.withLock {
+            guard active else { throw Failure.expired }
+            if deferredFailure == nil { deferredFailure = error }
+        }
     }
 
     /// The source may be clone's newly created repository or a linked

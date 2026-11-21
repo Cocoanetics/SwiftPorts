@@ -114,7 +114,8 @@ are not inherited by clones.
 preserve pointers even when the content is already cached. Optional single-shot
 smudge failures replay the original input. An optional process driver that exits
 during delayed checkout still fails with status 1 and Git's external-filter
-diagnostics; clone adds `fatal: unable to checkout working tree` and exits 128.
+diagnostics after the other checkout paths have been restored; clone adds
+`fatal: unable to checkout working tree` and exits 128.
 Required process-driver failures report the external-filter error before the
 path-specific fatal. Required download failures report git-lfs's diagnostic
 and fail checkout/clone with Git's fatal text and status 128; this is distinct
@@ -132,7 +133,8 @@ incrementally, and verifies the staged pointer. Task cancellation releases
 the clean stream's temporary file.
 
 Another libgit2 limitation is failed-clone cleanup: it removes the destination
-after a checkout error, whereas Git retains it. The failure oracle checks the
+after an immediate checkout error, whereas Git retains it. Deferred optional
+process-filter failures retain the destination. The failure oracle checks the
 LFS diagnostic, Git fatal/warning text and exit status; it does not establish
 parity for retaining a failed clone's repository.
 

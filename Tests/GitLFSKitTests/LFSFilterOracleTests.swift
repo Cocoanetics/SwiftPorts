@@ -230,6 +230,51 @@ struct LFSFilterOracleTests {
         }
     }
 
+    @Test("optional process failure restores later ordinary checkout paths before failing")
+    func mixedPathFailure() async throws {
+        try await LFSTestServer.withServer { server in
+            let fixture = try LFSFilterOracleFixture()
+            defer { fixture.cleanup() }
+            let bytes = Data("missing object\n".utf8)
+            try fixture.seed(bytes)
+            let ordinary = Data("ordinary tracked content\n".utf8)
+            let ordinaryFile = fixture.directory.appendingPathComponent("z.txt")
+            try ordinary.write(to: ordinaryFile)
+            try fixture.system(["add", "z.txt"])
+            try fixture.system(["-c", "core.hooksPath=/dev/null", "commit", "-qm", "ordinary"])
+            try FileManager.default.removeItem(at: fixture.directory.appendingPathComponent(".git/lfs/objects"))
+            try fixture.configure([
+                "lfs.url": server.endpoint.absoluteString, "lfs.transfer.maxretries": "1",
+                "filter.lfs.required": "false", "lfs.skipdownloaderrors": "false"
+            ])
+            var results: [(files: [String: Data], stderr: String, status: Int32)] = []
+            for reference in [false, true] {
+                let file = fixture.directory.appendingPathComponent("a.lfs")
+                try? FileManager.default.removeItem(at: file)
+                try? FileManager.default.removeItem(at: ordinaryFile)
+                server.inject(.objectStatus(oid: LFSFilterFixture.hash(bytes), code: 404))
+                let result = try fixture.run(["checkout", "--", "a.lfs", "z.txt"], reference: reference)
+                var files: [String: Data] = [:]
+                files["a.lfs"] = FileManager.default.contents(atPath: file.path)
+                files["z.txt"] = FileManager.default.contents(atPath: ordinaryFile.path)
+                results.append((files, result.stderr, result.status))
+            }
+            let actual = results[0]
+            let reference = results[1]
+            #expect(reference.status == 1)
+            #expect(reference.files["z.txt"] == ordinary)
+            #expect(actual.status == reference.status)
+            #expect(actual.files == reference.files)
+            let diagnostics: (String) -> [Substring] = { stderr in
+                stderr.split(separator: "\n").filter {
+                    $0.hasPrefix("Error downloading object:") || $0.hasPrefix("error: external filter")
+                        || $0.hasPrefix("fatal:")
+                }
+            }
+            #expect(diagnostics(actual.stderr) == diagnostics(reference.stderr))
+        }
+    }
+
     @Test("checkout selects branch, default, autodetected and fallback remotes",
            arguments: ["branch", "default", "autodetect", "search-all"])
     func remotes(mode: String) async throws {

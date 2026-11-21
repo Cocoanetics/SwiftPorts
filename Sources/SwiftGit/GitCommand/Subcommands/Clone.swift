@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import ShellKit
 import SwiftGit
+import GitLFSKit
 
 struct Clone: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -77,6 +78,8 @@ struct Clone: AsyncParsableCommand {
         } catch let error as UnsupportedTransportError {
             throw CLIError(error)
         } catch let error as GitFilterError {
+            throw CLIError(filter: error, clone: true)
+        } catch let error as LFSFilterFailure {
             throw CLIError(filter: error, clone: true)
         }
 

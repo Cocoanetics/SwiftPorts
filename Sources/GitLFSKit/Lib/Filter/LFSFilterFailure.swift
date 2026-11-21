@@ -2,7 +2,7 @@ import Foundation
 
 /// Retain the original error across the synchronous libgit2 callback boundary.
 package struct LFSFilterFailure: Error, LocalizedError {
-    let path: String
+    package let path: String
     let pointer: Pointer
     let underlying: any Error
     package var processCommand: String?
