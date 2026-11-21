@@ -19,7 +19,9 @@ public struct StatusOptions: Sendable {
                 try await renderTracking(client: client, output: &result.stdout)
             }
             // diffIndex's typed HEAD primitive supplies the empty tree for an unborn HEAD.
-            let index = try await scanIndex(client: client, repositoryRoot: root)
+            let scanned = try await scanIndex(client: client, repositoryRoot: root)
+            let quotePath = try await client.configBool("core.quotepath") ?? true
+            let index = Self.quotePaths(scanned, quotePath: quotePath)
             if porcelain {
                 result.stdout += Self.renderPorcelain(index)
             } else if json {

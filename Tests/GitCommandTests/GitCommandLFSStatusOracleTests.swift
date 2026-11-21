@@ -70,5 +70,49 @@ struct GitCommandLFSStatusOracleTests {
         #expect(result.stdout.contains(annotation))
         #expect(result.status == 0 && result.stderr.isEmpty)
     }
+
+    @Test func missingCleanIndexedBlobStillRenders() async throws {
+        let oracle = try LFSSamePathOracle()
+        defer { oracle.cleanup() }
+        let repo = try oracle.repository("missing-clean")
+        try oracle.write("x.dat", "ordinary file", in: repo)
+        try oracle.add(["x.dat"], in: repo)
+        let oid = try oracle.git(["rev-parse", ":x.dat"], in: repo).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let object = repo.appendingPathComponent(".git/objects/\(oid.prefix(2))/\(oid.dropFirst(2))")
+        try FileManager.default.removeItem(at: object)
+        for flags in [[], ["-p"], ["-j"]] {
+            let result = try await oracle.compare(["status"] + flags, in: repo)
+            #expect(result.status == 0 && result.stderr.isEmpty)
+            if flags.isEmpty { #expect(result.stdout.contains("\tx.dat (?: <missing>)\n")) }
+        }
+    }
+
+    @Test(arguments: [true, false])
+    func quotedPaths(quotePath: Bool) async throws {
+        let oracle = try LFSSamePathOracle()
+        defer { oracle.cleanup() }
+        let repo = try oracle.repository("quoted")
+        if !quotePath { try oracle.git(["config", "core.quotePath", "false"], in: repo) }
+        try oracle.track(["*.dat"], in: repo)
+        let names = ["a\nb.dat", "a\tb.dat", "a\"b.dat", "a\\b.dat", "café.dat", "space name.dat",
+                     "nested/a\nb.dat", "bell\u{07}.dat", "delete\u{7F}.dat"]
+        for (offset, name) in names.enumerated() {
+            try oracle.write(name, "media \(offset)", in: repo)
+        }
+        try oracle.add([".gitattributes"] + names, in: repo)
+        let subdir = repo.appendingPathComponent("nested")
+        for cwd in [repo, subdir] {
+            for flags in [[], ["-p"], ["-j"]] { try await oracle.compare(["status"] + flags, in: cwd) }
+        }
+        try oracle.commit("names", in: repo)
+        try oracle.git(["mv", names[0], "renamed\tfile.dat"], in: repo)
+        try oracle.write(names[1], "dirty media", in: repo)
+        try oracle.write(names[4], "staged media", in: repo)
+        try oracle.add([names[4]], in: repo)
+        for cwd in [repo, subdir] {
+            for flags in [[], ["-p"], ["-j"]] { try await oracle.compare(["status"] + flags, in: cwd) }
+        }
+    }
 }
 #endif
