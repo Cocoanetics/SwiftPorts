@@ -9,7 +9,7 @@ extension StatusOptions {
     /// given the stage-zero index blob instead, and the record is dropped
     /// once it matches `ref` as well. Anything else is kept as diffed.
     func comparePointers(
-        _ uncached: [DiffIndexEntry], client: GitClient, repositoryRoot: URL
+        _ uncached: [DiffIndexEntry], cached: [DiffIndexEntry], client: GitClient, repositoryRoot: URL
     ) async throws -> [DiffIndexEntry] {
         guard uncached.contains(where: Self.isContentChange) else { return uncached }
         // Conflicted paths have no stage-zero entry and are never compared.
@@ -39,28 +39,40 @@ extension StatusOptions {
                 status: entry.status, similarity: entry.similarity,
                 sourcePath: entry.sourcePath, destinationPath: entry.destinationPath), true))
         }
-        return Self.pairExactRenames(compared)
+        return Self.pairRenames(compared, cached: cached)
     }
 
-    /// Rename detection ran before the correction. git's exact pass pairs a
-    /// deletion with an addition of the same blob, listed at the addition.
-    private static func pairExactRenames(
-        _ compared: [(entry: DiffIndexEntry, corrected: Bool)]
+    /// Rename detection ran before the correction. A corrected addition now
+    /// has its index blob, as the cached diff does, so the cached diff's
+    /// rename of that blob (git's 50% similarity pass) pairs it with the
+    /// deletion of the same source. Otherwise git's exact pass pairs it with
+    /// a deletion of the same blob. Either is listed at the addition.
+    private static func pairRenames(
+        _ compared: [(entry: DiffIndexEntry, corrected: Bool)], cached: [DiffIndexEntry]
     ) -> [DiffIndexEntry] {
         var paired = Set<Int>()
         var renamed: [Int: DiffIndexEntry] = [:]
         for (position, item) in compared.enumerated() where item.corrected && item.entry.status == "A" {
+            let added = item.entry
+            let rename = cached.first {
+                $0.status == "R" && $0.newOID == added.newOID
+                    && Array($0.destinationPath.utf8) == Array(added.destinationPath.utf8)
+            }
+            let deletion: (DiffIndexEntry) -> Bool = { deleted in
+                guard let rename else { return deleted.oldOID == added.newOID }
+                return deleted.oldOID == rename.oldOID
+                    && Array(deleted.sourcePath.utf8) == Array(rename.sourcePath.utf8)
+            }
             guard let source = compared.indices.first(where: {
-                !paired.contains($0) && compared[$0].entry.status == "D"
-                    && compared[$0].entry.oldOID == item.entry.newOID
+                !paired.contains($0) && compared[$0].entry.status == "D" && deletion(compared[$0].entry)
             }) else { continue }
             paired.insert(source)
             let deleted = compared[source].entry
             renamed[position] = DiffIndexEntry(
-                oldMode: deleted.oldMode, newMode: item.entry.newMode,
-                oldOID: deleted.oldOID, newOID: item.entry.newOID,
-                status: "R", similarity: 100,
-                sourcePath: deleted.sourcePath, destinationPath: item.entry.destinationPath)
+                oldMode: deleted.oldMode, newMode: added.newMode,
+                oldOID: deleted.oldOID, newOID: added.newOID,
+                status: "R", similarity: rename?.similarity ?? 100,
+                sourcePath: deleted.sourcePath, destinationPath: added.destinationPath)
         }
         return compared.indices.compactMap { position in
             paired.contains(position) ? nil : renamed[position] ?? compared[position].entry

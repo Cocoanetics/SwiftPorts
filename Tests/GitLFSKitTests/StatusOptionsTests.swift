@@ -152,6 +152,35 @@ struct StatusOptionsTests {
         }
     }
 
+    @Test("a renamed pointer with a new target pairs by the staged rename's similarity")
+    func renamedChangedPointer() async throws {
+        try await withRepo { _, dir, client in
+            // Shared extension lines keep the two pointers above 50% similar.
+            let extensions = (0..<6).map {
+                PointerExtension(name: "ext\($0)", priority: $0, oid: String(repeating: "\($0)", count: 64))
+            }
+            func pointer(_ file: (bytes: Data, pointer: Data)) throws -> Data {
+                let plain = try Pointer.decode(file.pointer)
+                return Data(Pointer(oid: plain.oid, size: plain.size, extensions: extensions).encoded.utf8)
+            }
+            let first = media(17)
+            let second = media(18)
+            let oldOID = try await stage(try pointer(first), "old.bin", in: dir, client: client)
+            try await commit(client)
+            try await client.move(from: "old.bin", to: "new.bin")
+            let newOID = try await stage(try pointer(second), "new.bin", in: dir, client: client)
+            let cached = try await client.diffIndex(cached: true)
+            let similarity = try #require(cached.first?.similarity)
+            #expect(cached == [entry("R", oldOID, newOID, "new.bin", from: "old.bin", similarity: similarity)])
+            #expect(similarity < 100)
+
+            try write(second.bytes, "new.bin", in: dir)
+            #expect(try await scan(client, dir) == StatusIndex(staged: cached, unstaged: []))
+            try write(media(19).bytes, "new.bin", in: dir)
+            #expect(try await scan(client, dir).unstaged.map(\.status) == ["A", "D"])
+        }
+    }
+
     #if !os(Windows)
     @Test("mode and type changes are kept")
     func modeAndTypeChanges() async throws {
@@ -197,7 +226,7 @@ struct StatusOptionsTests {
             let uncached = try await client.diffIndex(cached: false, refresh: true)
             #expect(uncached == [entry("M", oursOID, Self.zero, "a.bin")])
             #expect(try await StatusOptions().comparePointers(
-                uncached, client: client, repositoryRoot: dir) == uncached)
+                uncached, cached: [], client: client, repositoryRoot: dir) == uncached)
             // The cached U shares the work-tree record's key, as in upstream.
             let status = try await scan(client, dir)
             #expect(status.staged.map(\.status) == ["U"])

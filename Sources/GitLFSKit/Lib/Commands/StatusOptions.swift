@@ -12,7 +12,8 @@ struct StatusOptions: Sendable {
     ) async throws -> StatusIndex {
         let uncached = try await client.diffIndex(ref: ref, cached: false, refresh: true)
         let cached = try await client.diffIndex(ref: ref, cached: true)
-        let compared = try await comparePointers(uncached, client: client, repositoryRoot: repositoryRoot)
+        let compared = try await comparePointers(
+            uncached, cached: cached, client: client, repositoryRoot: repositoryRoot)
         var seen = Set<[UInt8]>()
         let staged = Self.drain(cached, seen: &seen)
         let unstaged = Self.drain(compared, seen: &seen)
