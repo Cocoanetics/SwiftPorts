@@ -84,6 +84,18 @@ struct LFSUploadObjectsTests {
         }
     }
 
+    // Windows Swift 6.4.2 reproduces the URLSession write-readiness stall tracked at
+    // https://github.com/swiftlang/swift-corelibs-foundation/issues/5532
+    // CI job 136784548448: plain file/Data PUTs stopped at 98,304/130,843 bytes;
+    // the server drained all reported bytes and had not chosen a response yet.
+    // No faithful URLSession workaround is validated; do not mask it by shrinking
+    // bodies or changing the basic adapter's Content-Length upload to chunked.
+    // Draft upstream follow-up (not posted): Swift 6.4.2 x86_64/windows-2022 still
+    // reproduces #5532 against an in-process HTTP server with 1 MB bodies, including
+    // plain 200 PUTs. Both fromFile and Data stall before the full body arrives;
+    // 503 retry and 401 resend are therefore never reached. A disk-stream change
+    // also failed. Re-enable these tests after the runtime fix is available.
+    #if !os(Windows)
     @Test("a plain 1 MB PUT completes without a retry or authentication challenge",
           .timeLimit(.minutes(1)), arguments: ["file", "stream", "data"])
     func largeUploadBody(kind: String) async throws {
@@ -100,24 +112,27 @@ struct LFSUploadObjectsTests {
                 }
                 let url = try #require(URL(string: server.endpoint.absoluteString + "/objects/" + oid(large)))
                 var request = HTTPRequest(method: .put, url: url)
-                request.headerFields[.contentLength] = String(large.count)
-                let messages = TransferTestLock<[String]>([])
-                let result = try await LFSTransferDelegate.$uploadDiagnostic.withValue({ message in
-                    messages.withLock { $0.append(message) }
-                    #if os(Windows)
-                    print(message)
-                    #endif
-                }, operation: {
-                    try await repo.client.transfer(
-                        request, body: body, operation: "upload", remote: nil, authenticated: true)
-                })
+                if kind == "stream" {
+                    // FoundationNetworking cannot infer an InputStream's length
+                    // and uses chunked framing. Do not also send Content-Length.
+                    request.headerFields[.transferEncoding] = "chunked"
+                } else {
+                    request.headerFields[.contentLength] = String(large.count)
+                }
+                let result = try await repo.client.transfer(
+                    request, body: body, operation: "upload", remote: nil, authenticated: true)
                 #expect(result.status == 200)
-                #expect(server.requests().filter { $0.method == "PUT" }.map(\.status) == [200])
+                let put = try #require(server.requests().first { $0.method == "PUT" })
+                #expect(put.status == 200)
+                #expect(put.requestBody == large)
+                if kind == "stream" {
+                    #expect(put.requestHeaders["content-length"] == nil)
+                    #expect(put.requestHeaders["transfer-encoding"] == "chunked")
+                } else {
+                    #expect(put.requestHeaders["content-length"] == String(large.count))
+                    #expect(put.requestHeaders["transfer-encoding"] == nil)
+                }
                 #expect(server.bytes(for: oid(large)) == large)
-                let trace = messages.withLock { $0 }
-                #expect(trace.contains { $0.contains("starting PUT body=\(kind)") })
-                #expect(trace.contains { $0.contains("response status=200") })
-                #expect(trace.contains { $0.contains("completed sent=") && $0.hasSuffix("errorCode=0") })
             }
         }
     }
@@ -169,6 +184,8 @@ struct LFSUploadObjectsTests {
             }
         }
     }
+    #endif
+
     #if !os(Windows)
     @Test("an object that can't be statted is an error, even with lfs.allowincompletepush")
     func unreadableObject() async throws {

@@ -16,11 +16,6 @@ private struct LFSServerState {
         method: String, uri: String, headers: [String: String], body: Data, record: Bool = true
     ) -> LFSWireResponse {
         let response = route(method: method, uri: uri, headers: headers, body: body)
-        #if os(Windows)
-        if method == "PUT", body.count >= 1_000_000 {
-            print("[LFS #243 server \(uri.suffix(12))] replying status=\(response.status) read=\(body.count)")
-        }
-        #endif
         if record { remember(method: method, uri: uri, headers: headers, body: body, response: response) }
         return response
     }

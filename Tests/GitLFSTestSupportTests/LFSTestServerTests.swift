@@ -5,6 +5,25 @@ import Testing
 
 @Suite("LFSTestServerTests")
 struct LFSTestServerTests {
+    @Test("a 1 MB PUT is drained before success or an injected error", arguments: [200, 503, 401])
+    func largeUpload(code: Int) async throws {
+        let bytes = Data(repeating: 0x61, count: 1_000_000)
+        let oid = sha256Hex(bytes)
+        // Keep this control independent of FoundationNetworking's Windows upload
+        // bug (#243 / swift-corelibs-foundation#5532). The same server must read
+        // the entire body even when it is about to return an error.
+        try await LFSWireClient.withServer { server, client in
+            if code != 200 { server.inject(.putStatus(oid: oid, code: code)) }
+            let href = server.endpoint.absoluteString + "/objects/" + oid
+            let response = try await client.put(href, body: bytes)
+            #expect(response.status == code)
+            let put = try #require(server.requests().first { $0.method == "PUT" })
+            #expect(put.status == code)
+            #expect(put.requestBody == bytes)
+            #expect(server.bytes(for: oid) == (code == 200 ? bytes : nil))
+        }
+    }
+
     @Test("a batch, GET, PUT, and verify round trip")
     func roundTrip() async throws {
         let bytes = Data("hello\n".utf8)

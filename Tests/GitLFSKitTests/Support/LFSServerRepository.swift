@@ -31,17 +31,9 @@ struct LFSServerRepository {
                 host, "server", remotes: [("origin", remote.path)],
                 config: [("lfs.url", server.endpoint.absoluteString), ("lfs.locksverify", "false")] + config)
             let client = await LFSClient(git: made.client, credentials: credentials, configuration: .ephemeral)
-            let repository = LFSServerRepository(
+            try await body(LFSServerRepository(
                 directory: made.directory, git: made.client, client: client,
-                store: LocalStore(gitStorageDirectory: made.directory.appendingPathComponent(".git")))
-            #if os(Windows)
-            // Explicitly opt this fixture into the temporary #243 CI trace.
-            try await LFSTransferDelegate.$uploadDiagnostic.withValue({ print($0) }, operation: {
-                try await body(repository)
-            })
-            #else
-            try await body(repository)
-            #endif
+                store: LocalStore(gitStorageDirectory: made.directory.appendingPathComponent(".git"))))
         }
     }
 

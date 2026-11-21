@@ -6,12 +6,7 @@ import FoundationNetworking
 /// Serial URLSession callbacks write object chunks directly to disk. Only
 /// non-object response bodies (API errors and upload responses) are buffered.
 final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-    // Temporary test-only opt-in for #243. Capture the sink before entering
-    // URLSession callbacks, which do not inherit the caller's task locals.
-    @TaskLocal static var uploadDiagnostic: (@Sendable (String) -> Void)?
-
     private let stream: LFSTransferStream
-    private let diagnostic: (@Sendable (String) -> Void)?
     private let lock = NSLock()
     private var task: URLSessionTask?
     private var cancelled = false
@@ -23,13 +18,8 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
     private var failure: Error?
     private var accepted = false
     private var uploadFile: URL?
-    private var tracesUpload = false
-    private var uploadTraceID = ""
 
-    init(stream: LFSTransferStream) {
-        self.stream = stream
-        diagnostic = Self.uploadDiagnostic
-    }
+    init(stream: LFSTransferStream) { self.stream = stream }
 
     func execute(
         _ request: URLRequest, body: LFSRequestBody?, configuration: URLSessionConfiguration
@@ -39,20 +29,6 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
                 self.continuation = continuation
                 let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
                 var request = request
-                tracesUpload = diagnostic != nil && request.httpMethod == "PUT"
-                    && (Int64(request.value(forHTTPHeaderField: "Content-Length") ?? "") ?? 0) >= 1_000_000
-                if tracesUpload {
-                    uploadTraceID = String(request.url?.lastPathComponent.suffix(12) ?? "")
-                    let kind: String
-                    switch body {
-                    case .file: kind = "file"
-                    case .stream: kind = "stream"
-                    case .data: kind = "data"
-                    case nil: kind = "none"
-                    }
-                    let length = request.value(forHTTPHeaderField: "Content-Length") ?? "unset"
-                    diagnostic?("[LFS #243 client \(uploadTraceID)] starting PUT body=\(kind) length=\(length)")
-                }
                 let task: URLSessionTask
                 switch body {
                 case .file(let url):
@@ -108,7 +84,6 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
             return
         }
         self.response = http
-        if tracesUpload { diagnostic?("[LFS #243 client \(uploadTraceID)] response status=\(http.statusCode)") }
         accepted = stream.accepts(http)
         do {
             if accepted, let destination = stream.destination {
@@ -149,10 +124,6 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
         _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
         totalBytesSent: Int64, totalBytesExpectedToSend: Int64
     ) {
-        if tracesUpload {
-            diagnostic?("[LFS #243 client \(uploadTraceID)] sent=\(totalBytesSent) delta=\(bytesSent)"
-                + " expected=\(totalBytesExpectedToSend)")
-        }
         stream.progress?(totalBytesSent, bytesSent)
     }
 
@@ -160,17 +131,10 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
         _ session: URLSession, task: URLSessionTask,
         needNewBodyStream completionHandler: @escaping (InputStream?) -> Void
     ) {
-        if tracesUpload {
-            diagnostic?("[LFS #243 client \(uploadTraceID)] needNewBodyStream file=\(uploadFile != nil)")
-        }
         completionHandler(uploadFile.flatMap { InputStream(url: $0) })
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if tracesUpload {
-            let code = (error as NSError?)?.code ?? 0
-            diagnostic?("[LFS #243 client \(uploadTraceID)] completed sent=\(task.countOfBytesSent) errorCode=\(code)")
-        }
         do { try file?.close() } catch { failure = failure ?? error }
         file = nil
         if let error = failure ?? error {
