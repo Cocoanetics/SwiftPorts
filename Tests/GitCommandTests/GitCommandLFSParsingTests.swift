@@ -90,5 +90,14 @@ struct GitCommandLFSParsingTests {
         let range = try #require(parse(["lfs", "ls-files", "A", "B"]) as? LFSLsFiles)
         #expect(range.refs == ["A", "B"])
     }
+
+    @Test(arguments: [["-p", "-j"], ["--porcelain", "--json"]])
+    func statusFlags(_ flags: [String]) throws {
+        let command = try #require(parse(["lfs", "status", "ignored"] + flags + ["arguments"]) as? LFSStatus)
+        #expect(command.porcelain && command.json)
+        #expect(command.arguments == ["ignored", "arguments"])
+        let plain = try #require(parse(["lfs", "status"]) as? LFSStatus)
+        #expect(!plain.porcelain && !plain.json && plain.arguments.isEmpty)
+    }
 }
 #endif
