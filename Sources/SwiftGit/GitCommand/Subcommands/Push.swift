@@ -26,8 +26,9 @@ struct Push: AsyncParsableCommand {
             (absent, if empty). An update whose lease no longer holds is
             refused as `stale info`; `--force` overrides the lease.
 
-            `-d`/`--delete` deletes the named refs. The option may come
-            before or after the repository. A plain name is pushed as
+            `-d`/`--delete` deletes the named refs. `--no-delete` takes
+            it back. The option may come before or after the repository.
+            A plain name is pushed as
             `:<name>`, and `tag <name>` as `:refs/tags/<name>`. An empty
             name, or one containing `:`, is refused. With no names it
             refuses, rather than pushing what `remote.<name>.push` or
@@ -44,7 +45,7 @@ struct Push: AsyncParsableCommand {
           help: "Force updates, even ones that aren't fast-forwards.")
     var force: Bool = false
 
-    @Flag(name: [.customShort("d"), .long],
+    @Flag(name: [.customShort("d"), .long], inversion: .prefixedNo,
           help: "Delete the listed refs from the remote.")
     var delete: Bool = false
 
@@ -76,14 +77,16 @@ struct Push: AsyncParsableCommand {
         let client = CommandContext.gitClient(quiet: quiet)
         let settings = try await DefaultPush.Settings(client: client)
         let (remoteName, given) = RemoteArguments.split(arguments, remote: remote)
-        // git's cmd_push: `--delete` with no refs dies before a lease is
-        // resolved or a remote is read, so `remote.<name>.push` and
+        // git resolves `--force-with-lease=<ref>:<expect>` while parsing
+        // options, before `--delete` with no refs is refused. A lease that
+        // names no object therefore fails first. The refusal itself still
+        // comes before a remote is read, so `remote.<name>.push` and
         // `push.default` are never pushed in its place.
+        let leases = try await Self.leases(from: leaseOptions, client: client)
         if delete, given.isEmpty {
             throw CLIError.stderr(
                 "fatal: --delete doesn't make sense without any refs", exitCode: 128)
         }
-        let leases = try await Self.leases(from: leaseOptions, client: client)
         // git reads every remote's config before it looks for the remote
         // to push to, and refuses a push refspec written without a value
         // or malformed, whether or not it's pushed.

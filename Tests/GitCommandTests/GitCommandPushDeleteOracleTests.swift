@@ -317,6 +317,35 @@ struct GitCommandPushDeleteOracleTests {
         }
     }
 
+    @Test("a lease git cannot parse fails before --delete with no refs")
+    func unparsableLeaseBeatsDeleteWithoutRefs() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.remove() }
+        let before = try listedRefs(fixture.remote)
+        for arguments in [
+            ["push", "--force-with-lease=main:bogus", "--delete", "origin"],
+            ["push", "--delete", "--force-with-lease=main:bogus", "origin"],
+            ["push", "--force-with-lease=main:bogus", "--delete"],
+            ["push", "--force-with-lease", "--delete", "origin"]
+        ] {
+            try await compare(arguments, in: fixture)
+        }
+        #expect(try listedRefs(fixture.remote) == before)
+    }
+
+    @Test("--no-delete takes --delete back and is accepted on its own")
+    func noDeleteCancelsDelete() async throws {
+        for arguments in [
+            ["push", "--no-delete", "origin", "topic"],
+            ["push", "--delete", "--no-delete", "origin", "topic"],
+            ["push", "--no-delete", "--delete", "origin", "topic"]
+        ] {
+            let fixture = try makeFixture()
+            defer { fixture.remove() }
+            try await compare(arguments, in: fixture)
+        }
+    }
+
     @Test("a raw deletion refspec, with force or a lease, still matches git")
     func rawDeletionForceAndLeaseStillMatch() async throws {
         for arguments in [
