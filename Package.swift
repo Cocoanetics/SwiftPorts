@@ -463,8 +463,10 @@ let package = Package(
         // 2026-11-20: 2.12.0 adds the streaming GitFilters contract for
         // opt-in, in-process LFS filters and callback repository metadata.
         // 2.12.1 hides dynamic OpenSSL pointers to prevent Linux TLS symbol collisions.
+        // 2.13.0's `push(…, beforeSending:)` hands over the updates git
+        // gives its pre-push hook, which `git push` uploads LFS objects for.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.12.1",
+                 from: "2.13.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
