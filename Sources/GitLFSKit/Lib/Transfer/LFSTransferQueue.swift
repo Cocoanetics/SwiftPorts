@@ -116,10 +116,7 @@ public final class LFSTransferQueue: Sendable {
             try Task.checkCancellation()
             var retries: [LFSTransferPending] = []
             for (item, error) in results {
-                guard let error else {
-                    finished(item.object)
-                    continue
-                }
+                guard let error else { continue }
                 if error.unsupportedContentType { unsupported = true }
                 if error.retry, let retry = scheduledRetry(item, delay: error.delay) {
                     retries.append(retry)
@@ -193,7 +190,8 @@ public final class LFSTransferQueue: Sendable {
     }
 
     /// `partitionTransfers`: an upload whose file is absent is missing, and
-    /// one of the wrong size is corrupt.
+    /// one of the wrong size is corrupt. Any other `stat` failure is an
+    /// ordinary error, which `lfs.allowincompletepush` does not excuse.
     private static func malformed(_ object: LFSBatchObject) async -> LFSTransferFailure? {
         guard object.size >= 0 else { return nil }
         do {
@@ -201,8 +199,13 @@ public final class LFSTransferQueue: Sendable {
         } catch {
             return .message(String(describing: error))
         }
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: object.path) else {
+        let attributes: [FileAttributeKey: Any]
+        do {
+            attributes = try FileManager.default.attributesOfItem(atPath: object.path)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
             return .malformed(name: object.name, oid: object.oid, missing: true)
+        } catch {
+            return .message("stat \(object.path): \(error.localizedDescription)")
         }
         guard (attributes[.size] as? NSNumber)?.int64Value == object.size else {
             return .malformed(name: object.name, oid: object.oid, missing: false)
@@ -230,6 +233,9 @@ public final class LFSTransferQueue: Sendable {
                     while !Task.isCancelled, let item = workers.next() {
                         do {
                             try await self.perform(item.object) { workers.success() }
+                            // `handleTransferResult`: counted as each transfer
+                            // succeeds, not when the whole batch is done.
+                            self.finished(item.object)
                             results.append((item, nil))
                         } catch let error as LFSTransferError {
                             results.append((item, error))

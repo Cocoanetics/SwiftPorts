@@ -1,5 +1,7 @@
 import Foundation
 import GitLFSTestSupport
+import HTTPTypes
+import SwiftGit
 import Testing
 @testable import GitLFSKit
 
@@ -98,6 +100,58 @@ struct LFSUploadObjectsTests {
             }
         }
     }
+
+    @Test("an upload resent after a 401 counts its bytes once", .timeLimit(.minutes(1)))
+    func unauthorizedResendProgress() async throws {
+        let large = Data(repeating: 0x62, count: 1_000_000)
+        let credentials: CredentialProvider = { _, _, allowed in
+            allowed.contains(.userPassword) ? .userPassword(username: "git", password: "secret") : nil
+        }
+        try await LFSTestServer.withServer { server in
+            try await LFSServerRepository.run(server, credentials: credentials) { repo in
+                let file = repo.directory.appendingPathComponent("large.bin")
+                try large.write(to: file)
+                server.inject(.unauthorized)
+                let counted = TransferTestLock<Int64>(0)
+                let url = try #require(URL(string: server.endpoint.absoluteString + "/objects/" + oid(large)))
+                var request = HTTPRequest(method: .put, url: url)
+                request.headerFields[.contentLength] = String(large.count)
+                let result = try await repo.client.transfer(
+                    request, body: .file(file), operation: "upload", remote: nil, authenticated: false,
+                    stream: LFSTransferStream(progress: { _, delta in counted.withLock { $0 += delta } }))
+                #expect(result.status == 200)
+                #expect(server.requests().filter { $0.method == "PUT" }.map(\.status) == [401, 200])
+                // Only the first attempt reports bytes, as git-lfs's resend has no callback.
+                #expect(counted.withLock { $0 } <= Int64(large.count))
+            }
+        }
+    }
+
+    #if !os(Windows)
+    @Test("an object that can't be statted is an error, even with lfs.allowincompletepush")
+    func unreadableObject() async throws {
+        try await LFSTestServer.withServer { server in
+            try await LFSServerRepository.run(server, config: [("lfs.allowincompletepush", "true")]) { repo in
+                try await repo.storeLocally(first)
+                let tip = try await repo.commit([("a.dat", first)])
+                let object = repo.store.objectPathname(oid(first))
+                let directory = object.deletingLastPathComponent()
+                try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: directory.path)
+                defer {
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+                }
+                // Permissions don't stop root (the Linux CI container), so there is no failure to see.
+                guard (try? FileManager.default.attributesOfItem(atPath: object.path)) == nil else { return }
+                let result = try await repo.uploadObjects(for: [update(tip)], git: repo.git)
+                #expect(result.status == 2)
+                #expect(result.stderr.hasPrefix("stat "))
+                #expect(result.stderr.contains(oid(first)))
+                #expect(!result.stdout.contains("missing"))
+                #expect(puts(server).isEmpty)
+            }
+        }
+    }
+    #endif
 
     @Test("a non-zero remote OID is excluded")
     func nonZeroRemote() async throws {

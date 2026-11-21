@@ -19,7 +19,7 @@ struct LFSServerRepository {
 
     /// `config` is in place before the client reads it.
     static func run(
-        _ server: LFSTestServer, config: [(String, String)] = [],
+        _ server: LFSTestServer, config: [(String, String)] = [], credentials: CredentialProvider? = nil,
         _ body: (LFSServerRepository) async throws -> Void
     ) async throws {
         let host = IsolatedLFSHost()
@@ -28,7 +28,7 @@ struct LFSServerRepository {
             let made = try await LFSFixture.make(
                 host, "server", remotes: [("origin", "https://example.com/repo.git")],
                 config: [("lfs.url", server.endpoint.absoluteString)] + config)
-            let client = await LFSClient(git: made.client, configuration: .ephemeral)
+            let client = await LFSClient(git: made.client, credentials: credentials, configuration: .ephemeral)
             try await body(LFSServerRepository(
                 directory: made.directory, git: made.client, client: client,
                 store: LocalStore(gitStorageDirectory: made.directory.appendingPathComponent(".git"))))
