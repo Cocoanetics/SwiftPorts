@@ -3,6 +3,7 @@
 final class LFSUploadContext {
     let allowMissing: Bool
     let meter: LFSProgressMeter
+    private let locks: LFSLockVerifier?
     private var uploaded: Set<String> = []
     private var stdout = ""
     /// Name → OID, in first-seen order (git-lfs keeps a map).
@@ -10,9 +11,10 @@ final class LFSUploadContext {
     private var corrupt: [(name: String, oid: String)] = []
     private var otherErrors: [String] = []
 
-    init(allowMissing: Bool, meter: LFSProgressMeter) {
+    init(allowMissing: Bool, meter: LFSProgressMeter, locks: LFSLockVerifier? = nil) {
         self.allowMissing = allowMissing
         self.meter = meter
+        self.locks = locks
     }
 
     /// `UploadPointers` under `--dry-run`.
@@ -26,7 +28,10 @@ final class LFSUploadContext {
     /// each counted by the meter.
     func prepare(_ pointers: [WrappedPointer]) -> [WrappedPointer] {
         var result: [WrappedPointer] = []
+        var seen: Set<String> = []
         for pointer in pointers where pointer.pointer.size != 0 && !uploaded.contains(pointer.pointer.oid) {
+            guard seen.insert(pointer.pointer.oid).inserted else { continue }
+            guard locks?.canUpload(pointer.name) != false else { continue }
             uploaded.insert(pointer.pointer.oid)
             meter.add(pointer.pointer.size)
             result.append(pointer)
@@ -51,7 +56,7 @@ final class LFSUploadContext {
         else { list.append((name, oid)) }
     }
 
-    /// `ReportErrors`, without lock verification.
+    /// `ReportErrors`, including lock diagnostics for command-layer pushes.
     func report() -> LFSCommandResult {
         meter.finish()
         var result = LFSCommandResult(stdout: stdout)
@@ -70,7 +75,8 @@ final class LFSUploadContext {
                 return result
             }
         }
-        if !otherErrors.isEmpty { result.status = 2 }
+        if !otherErrors.isEmpty { result.status = 2; return result }
+        locks?.report(into: &result)
         return result
     }
 }

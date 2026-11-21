@@ -462,8 +462,9 @@ let package = Package(
         // writes mergetag headers when merging annotated tags.
         // 2026-11-20: 2.12.0 adds the streaming GitFilters contract for
         // opt-in, in-process LFS filters and callback repository metadata.
+        // 2.12.1 hides dynamic OpenSSL pointers to prevent Linux TLS symbol collisions.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.12.0",
+                 from: "2.12.1",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
