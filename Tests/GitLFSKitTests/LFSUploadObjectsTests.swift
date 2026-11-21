@@ -82,6 +82,23 @@ struct LFSUploadObjectsTests {
         }
     }
 
+    @Test("a failed PUT takes back its bytes, so the retry is counted once")
+    func retriedUploadProgress() async throws {
+        let large = Data(repeating: 0x61, count: 1_000_000)
+        try await LFSTestServer.withServer { server in
+            server.inject(.putStatus(oid: oid(large), code: 503))
+            try await LFSServerRepository.run(server) { repo in
+                try await repo.storeLocally(large)
+                let tip = try await repo.commit([("large.dat", large)])
+                let result = try await repo.uploadObjects(for: [update(tip)], git: repo.git)
+                #expect(result.status == 0)
+                #expect(result.stdout.hasPrefix("Uploading LFS objects: 100% (1/1), 1.0 MB | "))
+                #expect(server.requests().filter { $0.method == "PUT" }.map(\.status) == [503, 200])
+                #expect(server.bytes(for: oid(large)) == large)
+            }
+        }
+    }
+
     @Test("a non-zero remote OID is excluded")
     func nonZeroRemote() async throws {
         try await LFSTestServer.withServer { server in

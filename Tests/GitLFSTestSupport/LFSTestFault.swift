@@ -24,6 +24,8 @@ public enum LFSTestFault: Sendable, Equatable {
     /// A non-empty body keeps its length. The empty object grows by one byte,
     /// because the empty digest is unique.
     case wrongSHA256(oid: String)
+    /// The next `PUT` of `oid` is answered with this status, without storing it.
+    case putStatus(oid: String, code: Int)
 
     /// Token written on the ``LFSRecordedRequest`` this fault shapes.
     public var logToken: String {
@@ -44,6 +46,8 @@ public enum LFSTestFault: Sendable, Equatable {
             return "size"
         case .wrongSHA256:
             return "sha256"
+        case .putStatus(_, let code):
+            return String(code)
         }
     }
 
@@ -51,7 +55,8 @@ public enum LFSTestFault: Sendable, Equatable {
         switch self {
         case .unauthorized, .tooManyRequests, .serverError, .repeatingServerError:
             return nil
-        case .objectStatus(let oid, _), .expired(let oid), .wrongSize(let oid), .wrongSHA256(let oid):
+        case .objectStatus(let oid, _), .expired(let oid), .wrongSize(let oid), .wrongSHA256(let oid),
+             .putStatus(let oid, _):
             return oid
         }
     }
@@ -60,7 +65,7 @@ public enum LFSTestFault: Sendable, Equatable {
         switch self {
         case .unauthorized, .tooManyRequests, .serverError, .repeatingServerError:
             return true
-        case .objectStatus, .expired, .wrongSize, .wrongSHA256:
+        case .objectStatus, .expired, .wrongSize, .wrongSHA256, .putStatus:
             return false
         }
     }

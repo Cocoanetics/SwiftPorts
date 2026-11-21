@@ -33,6 +33,12 @@ extension LFSTransferQueue {
         }
         let progress = report(object)
         let sent = LFSSentBytes()
+        // `BodyWithCallback.ResetProgress`: a failed attempt, other than a 422,
+        // takes back the bytes it reported, so a retry doesn't count them twice.
+        func resetProgress() {
+            let total = sent.total
+            if total > 0 { progress(total, -total) }
+        }
         let result: LFSTransferHTTPResult
         do {
             result = try await client.transfer(
@@ -45,6 +51,7 @@ extension LFSTransferQueue {
                 }, success: success))
         } catch {
             try Task.checkCancellation()
+            resetProgress()
             throw LFSTransferError(message: String(describing: error))
         }
         if result.status == 422 {
@@ -54,6 +61,7 @@ extension LFSTransferQueue {
             throw error
         }
         guard result.accepted else {
+            resetProgress()
             throw LFSTransferError(result, url: request.url, now: environment.now())
         }
         if sent.total < object.size { progress(object.size, object.size - sent.total) }
