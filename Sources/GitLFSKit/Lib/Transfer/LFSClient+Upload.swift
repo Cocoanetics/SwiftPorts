@@ -7,10 +7,17 @@ extension LFSClient {
     ///
     /// An update whose local OID is zero (a deletion) is skipped. Each other
     /// update scans the objects reachable from its local OID and not from
-    /// any update's differing remote OID or any `refs/remotes/<remote>/*` tip
-    /// (`ScanMultiRangeToRemote` without a reachable remote to refine that
-    /// set). No path filter applies. Every object goes through the upload
-    /// queue once; the server skips the ones it already has.
+    /// any update's differing remote OID or the remote's cached branches
+    /// (`ScanMultiRangeToRemote`). No path filter applies. Every object goes
+    /// through the upload queue once; the server skips the ones it already has.
+    ///
+    /// `remoteBranches` is what `git ls-remote --heads <remote>` lists
+    /// (`git.RemoteRefs`), as `main` or `refs/heads/main`. As in
+    /// `calcSkippedRefs`, only the `refs/remotes/<remote>/*` tips whose branch
+    /// the remote still has are excluded, so a branch deleted on the server
+    /// (whose objects it may have collected) is uploaded again. When none of
+    /// them is listed — `nil` included, as when `ls-remote` fails — git-lfs
+    /// falls back to excluding every tip (`--not --remotes=<remote>`).
     ///
     /// An object absent from the local store fails the push with the
     /// `Git LFS upload failed:` block on stdout and status 2, unless
@@ -18,17 +25,19 @@ extension LFSClient {
     /// `Git LFS upload missing objects:` and the present objects are uploaded.
     /// `dryRun` prints `push <oid> => <path>` lines and contacts no server.
     /// `terminal` says whether stdout is a terminal, for the progress meter.
+    /// The meter's text is written to the shell's stdout as it is logged;
+    /// the result holds everything else.
     /// Lock verification is not performed.
     public func uploadObjects(
-        for updates: [LFSRefUpdate], remote: String = "", dryRun: Bool = false, terminal: Bool = false,
-        git: GitClient
+        for updates: [LFSRefUpdate], remote: String = "", remoteBranches: [String]? = nil,
+        dryRun: Bool = false, terminal: Bool = false, git: GitClient
     ) async throws -> LFSCommandResult {
-        try await uploadObjects(for: updates, remote: remote, dryRun: dryRun, terminal: terminal,
-                                git: git, environment: LFSTransferEnvironment())
+        try await uploadObjects(for: updates, remote: remote, remoteBranches: remoteBranches, dryRun: dryRun,
+                                terminal: terminal, git: git, environment: LFSTransferEnvironment())
     }
 
     func uploadObjects(
-        for updates: [LFSRefUpdate], remote: String, dryRun: Bool, terminal: Bool,
+        for updates: [LFSRefUpdate], remote: String, remoteBranches: [String]?, dryRun: Bool, terminal: Bool,
         git: GitClient, environment: LFSTransferEnvironment
     ) async throws -> LFSCommandResult {
         let remote = remote.isEmpty ? finder.uploadRemote() : remote
@@ -47,9 +56,7 @@ extension LFSClient {
                 exclude.append(update.remoteOID)
             }
         }
-        // `--not --remotes=<remote>`.
-        let prefix = "refs/remotes/\(remote)/"
-        exclude += try await git.references(matching: nil).filter { $0.name.hasPrefix(prefix) }.map(\.targetSHA)
+        exclude += try await Self.cachedRemoteExclusions(remote: remote, advertised: remoteBranches, git: git)
 
         var scanError: String?
         for update in updates {
@@ -84,6 +91,22 @@ extension LFSClient {
         var result = upload.report()
         if result.status == 0, let scanError { result.fail(scanError) }
         return result
+    }
+
+    /// `calcSkippedRefs`: the cached `refs/remotes/<remote>/*` branch tips
+    /// (`git.CachedRemoteRefs`, without `HEAD`) the remote still advertises;
+    /// when there are none, every tip under the prefix (`--remotes=<remote>`).
+    static func cachedRemoteExclusions(
+        remote: String, advertised: [String]?, git: GitClient
+    ) async throws -> [String] {
+        let prefix = "refs/remotes/\(remote)/"
+        let tips = try await git.references(matching: nil).filter { $0.name.hasPrefix(prefix) }
+        let names = Set((advertised ?? []).map { $0.hasPrefix("refs/heads/") ? String($0.dropFirst(11)) : $0 })
+        let skipped = tips.filter { tip in
+            let name = String(tip.name.dropFirst(prefix.count))
+            return name != "HEAD" && names.contains(name)
+        }
+        return (skipped.isEmpty ? tips : skipped).map(\.targetSHA)
     }
 
     /// `git.ParseRef(...).Name`: a branch, tag or remote-tracking name
