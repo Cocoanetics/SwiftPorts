@@ -8,10 +8,14 @@ extension StatusOptions {
         output += "On branch \(branch ?? "HEAD")\n"
         guard let branch, let tracking = try? await trackingRef(branch: branch, client: client) else { return }
         output += "Objects to be pushed to \(tracking.name):\n\n"
-        do {
-            for pointer in try await GitScanner(client: client).scanRefs(include: [head], exclude: [tracking.oid]) {
+        var pointers: [WrappedPointer] = []
+        defer {
+            for pointer in pointers {
                 output += "\t\(pointer.name) (\(pointer.pointer.oid))\n"
             }
+        }
+        do {
+            try await GitScanner(client: client).scanRefs(include: [head], exclude: [tracking.oid], into: &pointers)
         } catch {
             throw LFSFailure("Could not scan for Git LFS objects: \(error.localizedDescription)")
         }

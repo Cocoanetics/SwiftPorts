@@ -92,6 +92,34 @@ struct StatusRenderingTests {
         }
     }
 
+    @Test("a later tracking scan error preserves earlier pushed pointers")
+    func partialTrackingFailure() async throws {
+        try await withRepo { _, dir, client in
+            _ = try await stage("base", "base.txt", in: dir, client: client)
+            let base = try await client.commit(message: "base", author: nil, allowEmpty: false)
+            let refs = dir.appendingPathComponent(".git/refs/remotes/upstream")
+            try FileManager.default.createDirectory(at: refs, withIntermediateDirectories: true)
+            try Data((base + "\n").utf8).write(to: refs.appendingPathComponent("main"))
+            try await client.configSet("branch.main.remote", "upstream")
+            try await client.configSet("branch.main.merge", "refs/heads/main")
+            _ = try await stage(Self.pointer.encoded, "a.dat", in: dir, client: client)
+            let corrupt = try await stage(String(repeating: "z", count: 900), "z.dat", in: dir, client: client)
+            _ = try await client.commit(message: "ahead", author: nil, allowEmpty: false)
+            let object = dir.appendingPathComponent(".git/objects/\(corrupt.prefix(2))/\(corrupt.dropFirst(2))")
+            // A valid zlib header and stored block expose the Git object header;
+            // the following reserved DEFLATE block type fails the payload read.
+            var compressed = Data([0x78, 0x01, 0x00, 0x6D, 0x00, 0x92, 0xFF])
+            compressed += Data(("blob 900\0" + String(repeating: "z", count: 100)).utf8)
+            compressed += Data([0x07, 0, 0, 0, 0])
+            try compressed.write(to: object, options: .atomic)
+            let result = try await StatusOptions().status(client: client)
+            #expect(result.stdout == "On branch main\nObjects to be pushed to upstream/main:\n\n"
+                    + "\ta.dat (\(Self.pointer.oid))\n")
+            #expect(result.status == 2)
+            #expect(result.stderr.hasPrefix("Could not scan for Git LFS objects: "))
+        }
+    }
+
     @Test func sourceAndDestinationAnnotationsAndPaths() async throws {
         try await withRepo { host, dir, client in
             let oid = try await stage(Self.pointer.encoded, "old.bin", in: dir, client: client)

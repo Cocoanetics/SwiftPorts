@@ -38,6 +38,41 @@ struct GitCommandLFSStatusOracleTests {
         try await oracle.compare(["status"], in: repo)
     }
 
+    @Test func partialTrackingFailure() async throws {
+        let oracle = try LFSSamePathOracle()
+        defer { oracle.cleanup() }
+        let repo = try oracle.repository("tracking-failure")
+        try oracle.write("base.txt", "base", in: repo)
+        try oracle.add(["base.txt"], in: repo)
+        try oracle.commit("base", in: repo)
+        try oracle.git(["update-ref", "refs/remotes/upstream/main", "HEAD"], in: repo)
+        try oracle.git(["config", "branch.main.remote", "upstream"], in: repo)
+        try oracle.git(["config", "branch.main.merge", "refs/heads/main"], in: repo)
+        try oracle.track(["a.dat"], in: repo)
+        try oracle.write("a.dat", "pushed media", in: repo)
+        try oracle.write("z.dat", String(repeating: "z", count: 900), in: repo)
+        try oracle.add([".gitattributes", "a.dat", "z.dat"], in: repo)
+        try oracle.commit("ahead", in: repo)
+        let corrupt = try oracle.git(["rev-parse", "HEAD:z.dat"], in: repo).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let object = repo.appendingPathComponent(".git/objects/\(corrupt.prefix(2))/\(corrupt.dropFirst(2))")
+        // A valid zlib header and stored block expose the Git object header;
+        // the following reserved DEFLATE block type fails the payload read.
+        var compressed = Data([0x78, 0x01, 0x00, 0x6D, 0x00, 0x92, 0xFF])
+        compressed += Data(("blob 900\0" + String(repeating: "z", count: 100)).utf8)
+        compressed += Data([0x07, 0, 0, 0, 0])
+        try compressed.write(to: object, options: .atomic)
+        let expected = try oracle.run(["lfs", "status"], in: repo)
+        let actual = try await oracle.port(["lfs", "status"], in: repo)
+        #expect(expected.stdout.contains("\ta.dat ("))
+        #expect(actual.stdout == expected.stdout)
+        #expect(actual.status == expected.status && actual.status == 2)
+        // Git's subprocess and libgit2 have different native corruption diagnostics.
+        for result in [expected, actual] {
+            #expect(result.stderr.contains("Could not scan for Git LFS objects"))
+        }
+    }
+
     @Test func unbornAndRepositoryErrors() async throws {
         let oracle = try LFSSamePathOracle()
         defer { oracle.cleanup() }
