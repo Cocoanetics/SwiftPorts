@@ -72,7 +72,7 @@ struct GitClientRefreshIndexTests {
         defer { git_index_free(index) }
         // Model the stat saved by an earlier successful refresh, without
         // reading or storing 5 GiB just to arrange the matching-stat case.
-        try DiffIndexStat.rewriteStat(index, path: "f", file: stat)
+        DiffIndexStat.rewriteStat(index, path: "f", file: stat)
         try GitClient.check(git_index_write(index))
         let cachedSize = try #require(git_index_get_bypath(index, "f", 0)?.pointee.file_size)
         #expect(cachedSize == UInt32(1_073_741_824))

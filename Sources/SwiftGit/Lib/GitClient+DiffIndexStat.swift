@@ -133,6 +133,25 @@ enum DiffIndexStat {
         return urls
     }
 
+    /// Discover worktree destinations before libgit2's rename detection or
+    /// our raw-id realization can read them. Even unpaired additions are hashed
+    /// when a source exists. This pass inspects metadata without opening files.
+    static func renameInputURLs(_ diff: OpaquePointer?, repo: OpaquePointer?) -> [URL] {
+        let count = git_diff_num_deltas(diff)
+        let hasSource = (0..<count).contains { offset in
+            guard let status = git_diff_get_delta(diff, offset)?.pointee.status else { return false }
+            return status == GIT_DELTA_DELETED || status == GIT_DELTA_RENAMED
+        }
+        guard hasSource else { return [] }
+        return (0..<count).compactMap { offset in
+            guard let delta = git_diff_get_delta(diff, offset)?.pointee,
+                  delta.status == GIT_DELTA_ADDED || delta.status == GIT_DELTA_RENAMED,
+                  let path = delta.new_file.path,
+                  let full = worktreePath(repo, String(cString: path)) else { return nil }
+            return URL(fileURLWithPath: full).standardizedFileURL
+        }
+    }
+
     /// Rewrite deltas whose raw work-tree bytes match stage zero so rename
     /// detection does not see a stat-only touch as an add or a type change.
     /// Returns whether that changed the add/delete/type-change set.
@@ -157,17 +176,22 @@ enum DiffIndexStat {
         return candidateKeys(diff) != before
     }
 
-    /// `git diff-index -M` hashes a rename destination and prints that
-    /// blob. A size poke never does, so an exact rename would keep a
-    /// zero new id. Fill only a renamed record that is still zero.
+    /// Git's exact-rename pass hashes every addition when a source exists,
+    /// including destinations it cannot pair. Keep those raw ids even though
+    /// hashing a work-tree candidate does not store its blob in the ODB.
     static func realizeRenames(_ diff: OpaquePointer?, repo: OpaquePointer?) {
         let count = git_diff_num_deltas(diff)
+        let hasSource = (0..<count).contains { offset in
+            guard let status = git_diff_get_delta(diff, offset)?.pointee.status else { return false }
+            return status == GIT_DELTA_DELETED || status == GIT_DELTA_RENAMED
+        }
         let valid = UInt32(GIT_DIFF_FLAG_VALID_ID.rawValue)
         let exists = UInt32(GIT_DIFF_FLAG_EXISTS.rawValue)
         for offset in 0..<count {
             guard let pointer = git_diff_get_delta(diff, offset) else { continue }
             let delta = UnsafeMutablePointer(mutating: pointer)
-            guard delta.pointee.status == GIT_DELTA_RENAMED else { continue }
+            let status = delta.pointee.status
+            guard status == GIT_DELTA_RENAMED || (hasSource && status == GIT_DELTA_ADDED) else { continue }
             guard oidIsZero(delta.pointee.new_file.id) else { continue }
             guard let pathPointer = delta.pointee.new_file.path else { continue }
             let path = String(cString: pathPointer)
@@ -204,7 +228,7 @@ enum DiffIndexStat {
         if rules.refresh {
             guard let oid = rawOID(file, at: location) else { return }
             if oidEqual(oid, entry.id) {
-                try rewriteStat(index, path: path, file: file)
+                rewriteStat(index, path: path, file: file)
                 refreshed = true
                 return
             }
@@ -328,14 +352,14 @@ enum DiffIndexStat {
         #endif
     }
 
-    static func rewriteStat(_ index: OpaquePointer?, path: String, file: WorktreeStat) throws {
+    static func rewriteStat(_ index: OpaquePointer?, path: String, file: WorktreeStat) {
         guard let current = git_index_get_bypath(index, path, 0) else { return }
-        var copy = current.pointee
-        apply(file, to: &copy)
-        try path.withCString { cString in
-            copy.path = cString
-            try GitClient.check(git_index_add(index, &copy))
-        }
+        // Only stat data changes; git_index_add would revalidate the existing
+        // OID and reject a missing blob that git update-index --refresh accepts.
+        // Mark it up-to-date just as index_insert does, without replacing it.
+        let entry = UnsafeMutablePointer(mutating: current)
+        apply(file, to: &entry.pointee)
+        entry.pointee.flags_extended |= UInt16(GIT_INDEX_ENTRY_UPTODATE.rawValue)
     }
 
     static func apply(_ file: WorktreeStat, to entry: inout git_index_entry) {

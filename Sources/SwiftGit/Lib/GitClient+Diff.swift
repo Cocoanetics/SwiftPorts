@@ -69,9 +69,22 @@ extension GitClient {
         if refresh && !cached {
             try await authorizeIndexRefresh()
         }
-        return try await withRepository { repository in
-            try Self.performDiffIndex(
-                ref: ref, cached: cached, refresh: refresh && !cached, repository: repository)
+        var authorized: Set<URL>? = !cached && !refresh && Shell.current.sandbox != nil ? [] : nil
+        while true {
+            do {
+                return try await withRepository { repository in
+                    try Self.performDiffIndex(
+                        ref: ref, cached: cached, refresh: refresh && !cached,
+                        repository: repository, authorized: authorized)
+                }
+            } catch let request as DiffIndexReadAuthorization {
+                // Unwind the synchronous pass (including temporary index-size pokes)
+                // before awaiting the sandbox, as the config-include gate does.
+                for url in request.urls {
+                    try await Shell.authorize(url)
+                    authorized?.insert(url)
+                }
+            }
         }
     }
 
@@ -95,7 +108,7 @@ extension GitClient {
     }
 
     private static func performDiffIndex(
-        ref: String, cached: Bool, refresh: Bool, repository: Repository
+        ref: String, cached: Bool, refresh: Bool, repository: Repository, authorized: Set<URL>?
     ) throws -> [DiffIndexEntry] {
         let repo = try repositoryHandle(repository)
         let tree = try diffIndexTree(ref, repo: repo)
@@ -112,6 +125,10 @@ extension GitClient {
         var diff: OpaquePointer?
         defer { git_diff_free(diff) }
         try fillDiffIndex(&diff, repo: repo, tree: tree, cached: cached, refresh: refresh, opts: &opts)
+        if let authorized {
+            let urls = DiffIndexStat.renameInputURLs(diff, repo: repo).filter { !authorized.contains($0) }
+            if !urls.isEmpty { throw DiffIndexReadAuthorization(urls: urls) }
+        }
         try detectDiffIndexRenames(diff)
         // Detection can hash a candidate libgit2 still considers dirty.
         // When that correction changes the add/delete/type set, rebuild
@@ -124,8 +141,8 @@ extension GitClient {
                 try detectDiffIndexRenames(diff)
             }
         }
-        // A size poke leaves a rename destination with a zero id. `git
-        // diff-index -M` still prints the blob once the paths pair.
+        // A size poke leaves rename candidates with zero ids. Git's exact
+        // rename pass hashes them even when it cannot pair their paths.
         DiffIndexStat.realizeRenames(diff, repo: repo)
         let entries = diffIndexEntries(diff)
         try hold?.persist(refresh: refresh)

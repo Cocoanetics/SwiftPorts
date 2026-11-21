@@ -100,7 +100,7 @@ extension GitClient {
                 oid = filtered
             }
             guard DiffIndexStat.oidEqual(oid, entry.id) else { continue }
-            try DiffIndexStat.rewriteStat(index, path: path, file: file)
+            DiffIndexStat.rewriteStat(index, path: path, file: file)
             changed = true
         }
         if changed { try check(git_index_write(index)) }

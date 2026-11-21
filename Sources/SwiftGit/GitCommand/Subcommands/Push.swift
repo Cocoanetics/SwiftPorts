@@ -25,6 +25,11 @@ struct Push: AsyncParsableCommand {
             `--force-with-lease=<ref>:<expect>` while it is at `<expect>`
             (absent, if empty). An update whose lease no longer holds is
             refused as `stale info`; `--force` overrides the lease.
+
+            When git's pre-push hook is git-lfs's, its work is done here,
+            without running the script: the Git LFS objects the refs about
+            to be sent need are uploaded first, and the push fails if they
+            can't be. `--no-verify` skips it. Any other hook is not run.
             """
     )
 
@@ -45,6 +50,9 @@ struct Push: AsyncParsableCommand {
     @Flag(name: [.customShort("q"), .customLong("quiet")],
           help: "Suppress progress output.")
     var quiet: Bool = false
+
+    @Flag(inversion: .prefixedNo, help: "Run the pre-push hook's work (git-lfs's only).")
+    var verify: Bool = true
 
     @Option(name: [.customShort("r"), .long],
             help: "Remote to push to; every argument is then a refspec.")
@@ -96,10 +104,11 @@ struct Push: AsyncParsableCommand {
         // `--force` forces them too.
         if pushRefspecs.isEmpty { pushRefspecs = configured }
         if force { pushRefspecs = pushRefspecs.map(Self.forced) }
+        let prePush = verify ? try await Self.lfsPrePush(client: client, remote: plan.remote) : nil
         do {
             let pushed = try await client.push(
                 remote: plan.remote, refspecs: pushRefspecs, setUpstream: upstream,
-                leases: leases)
+                leases: leases, beforeSending: prePush)
             reportUpstreams(of: pushed, remote: plan.remote, upstream: upstream)
         } catch let rejected as PushRejectedError {
             // The refs that went through still got their upstream.
@@ -111,6 +120,9 @@ struct Push: AsyncParsableCommand {
             throw CLIError(error)
         } catch let error as RemoteRepositoryError {
             throw CLIError(error)
+        } catch is PrePushRefused {
+            let url = (try? await client.displayName(ofRemote: plan.remote)) ?? plan.remote
+            throw CLIError.stderr("error: failed to push some refs to '\(url)'", exitCode: 1)
         } catch let refused as PushRefusedError {
             // Refused before anything was sent, in git's words.
             throw PushRejectionAdvice.error(for: refused, switches: settings.advice)

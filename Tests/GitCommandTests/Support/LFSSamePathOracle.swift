@@ -175,7 +175,8 @@ struct LFSSamePathOracle {
             authorize: { _ in })
     }
 
-    private func run(_ arguments: [String], in directory: URL, input: Data = Data()) throws -> Output {
+    /// System `git`, whatever its exit status.
+    func run(_ arguments: [String], in directory: URL, input: Data = Data()) throws -> Output {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + arguments
@@ -196,13 +197,18 @@ struct LFSSamePathOracle {
     }
 
     private func command(_ arguments: [String], in directory: URL) async throws -> Output {
+        try await port(["lfs"] + arguments, in: directory)
+    }
+
+    /// `GitCommand` for `git <arguments>`, in the same environment as system git.
+    func port(_ arguments: [String], in directory: URL) async throws -> Output {
         let out = OutputSink(), err = OutputSink()
         let shell = Shell(stdin: InputSource.data(Data()), stdout: out, stderr: err,
                           environment: Environment(variables: commandEnvironment(),
                                                    workingDirectory: directory.path))
         shell.sandbox = sandbox
         let status = try await shell.withCurrent {
-            try await Shell.parsableCommand(GitCommand.self).run(["git", "lfs"] + arguments)
+            try await Shell.parsableCommand(GitCommand.self).run(["git"] + arguments)
         }
         out.finish()
         err.finish()
