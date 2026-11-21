@@ -82,11 +82,7 @@ struct LFSUploadObjectsTests {
         }
     }
 
-    // Needs URLSession to report a 1 MB body's sent bytes. On Windows that
-    // upload to the in-process server stalls (no PUT ever completes; CI ran
-    // into the 10-minute mark), so the test is limited to the other platforms.
-    #if !os(Windows)
-    @Test("a failed PUT takes back its bytes, so the retry is counted once")
+    @Test("a failed PUT takes back its bytes, so the retry is counted once", .timeLimit(.minutes(1)))
     func retriedUploadProgress() async throws {
         let large = Data(repeating: 0x61, count: 1_000_000)
         try await LFSTestServer.withServer { server in
@@ -102,7 +98,6 @@ struct LFSUploadObjectsTests {
             }
         }
     }
-    #endif
 
     @Test("a non-zero remote OID is excluded")
     func nonZeroRemote() async throws {

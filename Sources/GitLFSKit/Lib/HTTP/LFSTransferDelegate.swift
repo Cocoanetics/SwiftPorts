@@ -21,6 +21,16 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
 
     init(stream: LFSTransferStream) { self.stream = stream }
 
+    /// On Windows, swift-corelibs-foundation reads an `uploadTask(fromFile:)`
+    /// body through DispatchIO, and a 1 MB upload that way never reached the
+    /// server. A disk `InputStream`, reopened per attempt by
+    /// `needNewBodyStream`, sends the same bytes; `Content-Length` stays set.
+    #if os(Windows)
+    static let streamsFileUploads = true
+    #else
+    static let streamsFileUploads = false
+    #endif
+
     func execute(
         _ request: URLRequest, body: LFSRequestBody?, configuration: URLSessionConfiguration
     ) async throws -> LFSTransferHTTPResult {
@@ -33,7 +43,8 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
                 switch body {
                 case .file(let url):
                     uploadFile = url
-                    if request.value(forHTTPHeaderField: "Transfer-Encoding") == "chunked" {
+                    if request.value(forHTTPHeaderField: "Transfer-Encoding") == "chunked"
+                        || Self.streamsFileUploads {
                         // fromFile supplies a length even when the action asks
                         // for chunked encoding. A fresh disk stream preserves it.
                         request.httpBodyStream = InputStream(url: url)
