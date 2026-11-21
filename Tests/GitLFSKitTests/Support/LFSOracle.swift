@@ -39,17 +39,7 @@ struct LFSOracle: Sendable {
                 && !name.hasPrefix("GIT_LFS_")
         }
         process.environment = inherited.merging(variables) { _, new in new }
-        let stdin = Pipe(), out = Pipe(), err = Pipe()
-        process.standardInput = stdin
-        process.standardOutput = out
-        process.standardError = err
-        try process.run()
-        stdin.fileHandleForWriting.write(input ?? Data())
-        try stdin.fileHandleForWriting.close()
-        let output = out.fileHandleForReading.readDataToEndOfFile()
-        let message = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        process.waitUntilExit()
-        return (output, message, process.terminationStatus)
+        return try LFSOracleProcess.run(process, input: input, directory: root)
     }
 
     /// `git <args>` that must succeed; its stdout, trimmed.
