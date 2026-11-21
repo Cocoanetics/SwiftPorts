@@ -110,6 +110,11 @@ public final class LFSTestServer: @unchecked Sendable {
         core.requests()
     }
 
+    /// Serve one smart-HTTP branch advertisement, gated by this Authorization header.
+    public func advertiseGitHead(_ oid: String, authorization: String) {
+        core.advertiseGitHead(oid, authorization: authorization)
+    }
+
     /// Keep object `GET` and `PUT` responses unfinished until `count` of them
     /// are in flight together. The first object transfer is answered in full,
     /// because a transfer queue does not start its other workers until that

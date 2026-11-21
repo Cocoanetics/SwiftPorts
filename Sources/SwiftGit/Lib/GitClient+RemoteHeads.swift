@@ -5,31 +5,38 @@ import GitKit
 extension GitClient {
     /// `git ls-remote --heads <remote>`, used by Git LFS's `calcSkippedRefs`.
     /// Only reads the advertisement; no objects or local refs are updated.
-    @_spi(GitLFSKit) public func remoteHeads(remote: String) async throws -> [String] {
+    @_spi(GitLFSKit) public func remoteHeads(remote: String, httpHeaders: [String] = []) async throws -> [String] {
         let connection = try await resolveRemoteOperand(remote)
         return try await withRepository { repository in
             var handle: OpaquePointer?
             try Self.check(git_remote_create_anonymous(&handle, Self.handle(of: repository), connection.location))
-            defer { git_remote_disconnect(handle); git_remote_free(handle) }
+            defer { git_remote_free(handle) }
             // Connect to exactly the already-rewritten, authorized location, without applying aliases twice.
             try Self.check(git_remote_set_instance_url(handle, connection.location))
             var callbacks = git_remote_callbacks()
             try Self.check(git_remote_init_callbacks(&callbacks, UInt32(GIT_REMOTE_CALLBACKS_VERSION)))
             callbacks.credentials = Self.remoteHeadsCredentials
             var provider = credentials
+            var copies = httpHeaders.map { strdup($0) }
+            defer { for copy in copies { free(copy) } }
             return try withUnsafeMutablePointer(to: &provider) { payload in
                 callbacks.payload = UnsafeMutableRawPointer(payload)
-                try Self.check(git_remote_connect(handle, GIT_DIRECTION_FETCH, &callbacks, nil, nil))
-                var heads: UnsafeMutablePointer<UnsafePointer<git_remote_head>?>?
-                var count = 0
-                try Self.check(git_remote_ls(&heads, &count, handle))
-                var names: [String] = []
-                for index in 0..<count {
-                    guard let name = heads?[index]?.pointee.name else { continue }
-                    let ref = String(cString: name)
-                    if ref.hasPrefix("refs/heads/") { names.append(ref) }
+                return try copies.withUnsafeMutableBufferPointer { buffer in
+                    var headers = git_strarray(strings: buffer.baseAddress, count: buffer.count)
+                    // Keep both the credential payload and header storage alive through disconnect.
+                    defer { git_remote_disconnect(handle) }
+                    try Self.check(git_remote_connect(handle, GIT_DIRECTION_FETCH, &callbacks, nil, &headers))
+                    var heads: UnsafeMutablePointer<UnsafePointer<git_remote_head>?>?
+                    var count = 0
+                    try Self.check(git_remote_ls(&heads, &count, handle))
+                    var names: [String] = []
+                    for index in 0..<count {
+                        guard let name = heads?[index]?.pointee.name else { continue }
+                        let ref = String(cString: name)
+                        if ref.hasPrefix("refs/heads/") { names.append(ref) }
+                    }
+                    return names
                 }
-                return names
             }
         }
     }

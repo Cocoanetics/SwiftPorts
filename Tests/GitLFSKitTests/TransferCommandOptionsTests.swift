@@ -10,7 +10,7 @@ struct TransferCommandOptionsTests {
     let first = Data("first object\n".utf8)
     let second = Data("second object\n".utf8)
 
-    private func input(_ text: String) -> Shell {
+    func input(_ text: String) -> Shell {
         let shell = Shell(stdin: .data(Data(text.utf8)), environment: Shell.current.environment)
         shell.sandbox = Shell.current.sandbox
         return shell
