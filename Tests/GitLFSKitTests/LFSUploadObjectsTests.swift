@@ -87,7 +87,7 @@ struct LFSUploadObjectsTests {
     // Both tests send a 1 MB body to the in-process server so URLSession
     // reports its sent bytes. On Windows that upload never reaches the server
     // (CI job 136696274915: no PUT recorded after 576 s); smaller uploads work.
-    // The cause is not established, so the tests run on the other platforms.
+    // SwiftPorts #243 tracks reproducing and fixing it, then lifting this skip.
     #if !os(Windows)
     @Test("a failed PUT takes back its bytes, so the retry is counted once", .timeLimit(.minutes(1)))
     func retriedUploadProgress() async throws {
