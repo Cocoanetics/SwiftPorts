@@ -194,10 +194,15 @@ final class LFSProgressMeter: @unchecked Sendable {
         }
     }
 
-    /// `(Uploading|Downloading) LFS objects: 100% (10/10), 100 MB | 10 MB/s`.
+    /// `(Uploading|Downloading|Checking out) LFS objects: 100% (10/10), 100 MB | 10 MB/s`.
     func text() -> String {
         let percentage = 100 * Double(finishedFiles) / Double(estimatedFiles)
-        let label = direction == .download ? "Downloading LFS objects" : "Uploading LFS objects"
+        let label: String
+        switch direction {
+        case .download: label = "Downloading LFS objects"
+        case .upload: label = "Uploading LFS objects"
+        case .checkout: label = "Checking out LFS objects"
+        }
         let percent = String(format: "%3.f", locale: Locale(identifier: "en_US_POSIX"), percentage)
         // `clampf`; `Double(UInt64.max)` rounds up to 2^64, which UInt64 can't hold.
         let rate = averageBytes.isNaN || averageBytes < 0 ? 0
