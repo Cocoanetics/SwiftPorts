@@ -203,14 +203,26 @@ public struct GitClient: ForgeKit.GitClient {
     /// whose git operations run while the push waits. If it throws, the
     /// push sends nothing and rethrows.
     ///
+    /// `reportProgress` is `--progress` (`true`) or `--no-progress`
+    /// (`false`); `nil`, neither, shows the transfer meter only when not
+    /// ``quiet`` and stderr is a terminal (``PushProgressSink``).
+    ///
     /// - Returns: The refspecs pushed, one per ref and fully qualified;
     ///   empty when there was nothing to send.
     @discardableResult
     public func push(
         remote: String, refspecs: [String], setUpstream: Bool, leases: PushLeases? = nil,
+        reportProgress: Bool? = nil,
         beforeSending: (@Sendable (_ updates: [PushUpdate], _ git: GitClient) async throws -> Void)? = nil
     ) async throws -> [String] {
-        let progress = shellProgressSink()
+        // Captured eagerly, as `shellProgressSink` does, for callbacks on
+        // libgit2's thread.
+        let stderr = Shell.current.stderr
+        let writer = PushProgressSink(
+            reportProgress: reportProgress, quiet: quiet, terminal: TTY.isStderrTTY
+        ).sink { stderr.write(Data($0.utf8)) }
+        defer { writer.flush() }
+        let progress: @Sendable (String) -> Void = { writer.write($0) }
         let connection = try await resolveRemoteOperand(remote, for: .push)
         // GitKit calls it on the thread running the push, inside its
         // isolation: the async work is bridged as ShellSigner bridges
