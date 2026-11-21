@@ -380,13 +380,30 @@ struct LFSSingleCheckout {
 
     private static func createExclusive(_ path: String, mode: UInt32, displayPath: String) throws -> FileHandle {
         #if os(Windows)
-        let descriptor = path.withCString(encodedAs: UTF16.self) {
-            _wopen($0, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, Int32(mode))
+        // `_wopen` is variadic and unavailable. `O_WRONLY|O_CREAT|O_EXCL|O_BINARY`
+        // is a binary `CREATE_NEW` with write access and `_SH_DENYNO` sharing.
+        // A mode without the write bit is read-only, as `_wopen`'s `pmode` is.
+        // The CRT descriptor owns the handle, as it does for `GIT_LFS_PROGRESS`.
+        let attributes = (mode & 0o200) == 0
+            ? DWORD(FILE_ATTRIBUTE_READONLY) : DWORD(FILE_ATTRIBUTE_NORMAL)
+        let handle = path.withCString(encodedAs: UTF16.self) {
+            CreateFileW($0, DWORD(GENERIC_WRITE), DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE), nil,
+                        DWORD(CREATE_NEW), attributes, nil)
         }
-        guard descriptor >= 0 else {
+        guard let handle, handle != INVALID_HANDLE_VALUE else {
+            let reason = openFailure(GetLastError())
             throw CheckoutIOError(
                 "could not create working directory file \(displayPath.goQuoted): "
-                    + "open \(path): \(posixMessage(errno))")
+                    + "open \(path): \(reason)")
+        }
+        // Flags 0: binary, not `_O_TEXT`. `_O_BINARY` is not a valid argument here.
+        let descriptor = _open_osfhandle(Int(bitPattern: handle), 0)
+        guard descriptor >= 0 else {
+            let code = errno
+            CloseHandle(handle)
+            throw CheckoutIOError(
+                "could not create working directory file \(displayPath.goQuoted): "
+                    + "open \(path): \(posixMessage(code))")
         }
         return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         #else
@@ -399,6 +416,19 @@ struct LFSSingleCheckout {
         return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         #endif
     }
+
+    #if os(Windows)
+    /// Words for a `CreateFileW` failure, in the same form as ``posixMessage(_:)``.
+    private static func openFailure(_ error: DWORD) -> String {
+        switch Int32(error) {
+        case ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND: return "no such file or directory"
+        case ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION: return "permission denied"
+        case ERROR_DIRECTORY: return "is a directory"
+        case ERROR_FILE_EXISTS, ERROR_ALREADY_EXISTS: return "File exists"
+        default: return "Input/output error"
+        }
+    }
+    #endif
 
     private static func posixMessage(_ code: Int32) -> String {
         switch code {
