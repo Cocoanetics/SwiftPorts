@@ -63,6 +63,10 @@ struct Push: AsyncParsableCommand {
           help: "Suppress progress output.")
     var quiet: Bool = false
 
+    @Flag(inversion: .prefixedNo,
+          help: "Show the transfer meter even with -q or without a terminal (--no-progress: never).")
+    var progress: Bool?
+
     @Flag(inversion: .prefixedNo, help: "Run the pre-push hook's work (git-lfs's only).")
     var verify: Bool = true
 
@@ -134,7 +138,7 @@ struct Push: AsyncParsableCommand {
         do {
             let pushed = try await client.push(
                 remote: plan.remote, refspecs: pushRefspecs, setUpstream: upstream,
-                leases: leases, beforeSending: prePush)
+                leases: leases, reportProgress: progress, beforeSending: prePush)
             reportUpstreams(of: pushed, remote: plan.remote, upstream: upstream)
         } catch let rejected as PushRejectedError {
             // The refs that went through still got their upstream.

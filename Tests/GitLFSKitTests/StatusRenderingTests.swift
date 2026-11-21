@@ -255,4 +255,84 @@ struct StatusRenderingTests {
                     + "\tadded.bin (LFS: aaaaaaa)\n\nObjects not staged for commit:\n\n")
         }
     }
+
+    @Test func transitionsDeletionsMissingSourceAndNoLocalPayload() async throws {
+        try await withRepo { _, dir, client in
+            let gitBytes = Data("ordinary content".utf8)
+            let gitHash = SHA256.hash(data: gitBytes).map { String(format: "%02x", $0) }.joined()
+            let lfsFirst = Pointer(oid: String(repeating: "c", count: 64), size: 12)
+            let lfsSecond = Pointer(oid: String(repeating: "d", count: 64), size: 14)
+            let lfsThird = Pointer(oid: String(repeating: "e", count: 64), size: 15)
+
+            _ = try await stage("ordinary content", "git-to-lfs.bin", in: dir, client: client)
+            _ = try await stage(lfsFirst.encoded, "lfs-to-git.bin", in: dir, client: client)
+            let missingSrcOID = try await stage(lfsThird.encoded, "missing-src.bin", in: dir, client: client)
+            _ = try await stage("plain file", "file-to-dir", in: dir, client: client)
+            _ = try await stage(lfsFirst.encoded, "deleted.bin", in: dir, client: client)
+            _ = try await client.commit(message: "base", author: nil, allowEmpty: false)
+
+            // No .git/lfs/objects payload exists anywhere; status relies only on Git blobs and worktree bytes.
+            #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent(".git/lfs/objects").path))
+
+            _ = try await stage(lfsSecond.encoded, "git-to-lfs.bin", in: dir, client: client)
+            _ = try await stage("ordinary content", "lfs-to-git.bin", in: dir, client: client)
+            try FileManager.default.removeItem(
+                at: dir.appendingPathComponent(".git/objects/\(missingSrcOID.prefix(2))/\(missingSrcOID.dropFirst(2))"))
+            _ = try await stage(lfsSecond.encoded, "missing-src.bin", in: dir, client: client)
+            try FileManager.default.removeItem(at: dir.appendingPathComponent("deleted.bin"))
+            try FileManager.default.removeItem(at: dir.appendingPathComponent("file-to-dir"))
+            try FileManager.default.createDirectory(
+                at: dir.appendingPathComponent("file-to-dir"), withIntermediateDirectories: true)
+            _ = try await stage(lfsSecond.encoded, "file-to-dir/nested.bin", in: dir, client: client)
+
+            var options = StatusOptions()
+            let human = try await options.status(client: client)
+            #expect(human.status == 0 && human.stderr.isEmpty)
+            #expect(human.stdout.contains("\tgit-to-lfs.bin (Git: \(gitHash.prefix(7)) -> LFS: ddddddd)\n"))
+            #expect(human.stdout.contains("\tlfs-to-git.bin (LFS: ccccccc -> Git: \(gitHash.prefix(7)))\n"))
+            #expect(human.stdout.contains("\tmissing-src.bin (?: <missing> -> LFS: ddddddd)\n"))
+            #expect(human.stdout.contains("\tfile-to-dir/nested.bin (LFS: ddddddd)\n"))
+            #expect(human.stdout.contains("\tdeleted.bin (LFS: ccccccc -> File: deleted)\n"))
+            #expect(human.stdout.contains("\tfile-to-dir (Git: "))
+            #expect(human.stdout.contains(" -> File: deleted)\n"))
+
+            options.json = true
+            let json = try await options.status(client: client)
+            #expect(json.status == 0 && json.stderr.isEmpty)
+            #expect(json.stdout == "{\"files\":{\"deleted.bin\":{\"status\":\"D\"},"
+                    + "\"file-to-dir/nested.bin\":{\"status\":\"A\"},"
+                    + "\"lfs-to-git.bin\":{\"status\":\"M\"}}}\n")
+        }
+    }
+
+    @Test func mergeConflictFailsLikeUpdateIndexRefresh() async throws {
+        try await withRepo { _, dir, client in
+            _ = try await stage(Self.pointer.encoded, "a.bin", in: dir, client: client)
+            _ = try await client.commit(message: "base", author: nil, allowEmpty: false)
+            try await client.checkoutNewBranch(name: "side")
+            let theirs = Pointer(oid: String(repeating: "b", count: 64), size: 124)
+            _ = try await stage(theirs.encoded, "a.bin", in: dir, client: client)
+            _ = try await client.commit(message: "theirs", author: nil, allowEmpty: false)
+            try await client.checkout(ref: "main")
+            let ours = Pointer(oid: String(repeating: "c", count: 64), size: 125)
+            _ = try await stage(ours.encoded, "a.bin", in: dir, client: client)
+            _ = try await client.commit(message: "ours", author: nil, allowEmpty: false)
+            _ = try? await client.merge(ref: "side")
+
+            var options = StatusOptions()
+            let human = try await options.status(client: client)
+            #expect(human.status == 2 && human.stdout == "On branch main\n")
+            #expect(human.stderr.contains("Failed to run `git update-index`"))
+            #expect(human.stderr.contains("a.bin: needs merge"))
+
+            options.porcelain = true
+            let porcelain = try await options.status(client: client)
+            #expect(porcelain.status == 2 && porcelain.stdout.isEmpty && porcelain.stderr == human.stderr)
+
+            options.porcelain = false
+            options.json = true
+            let json = try await options.status(client: client)
+            #expect(json.status == 2 && json.stdout.isEmpty && json.stderr == human.stderr)
+        }
+    }
 }

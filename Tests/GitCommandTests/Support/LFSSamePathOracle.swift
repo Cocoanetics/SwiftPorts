@@ -280,6 +280,7 @@ struct LFSSamePathOracle {
         var path: String
         var modified: Date
         var permissions: Int
+        var isSymbolicLink: Bool
     }
 
     private struct Snapshot {
@@ -318,7 +319,7 @@ struct LFSSamePathOracle {
                 try FileManager.default.removeItem(atPath: path)
             }
         }
-        for stamp in snapshot.stamps {
+        for stamp in snapshot.stamps where !stamp.isSymbolicLink {
             try FileManager.default.setAttributes(
                 [.modificationDate: stamp.modified, .posixPermissions: stamp.permissions],
                 ofItemAtPath: stamp.path)
@@ -330,7 +331,9 @@ struct LFSSamePathOracle {
             guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
                   let modified = attributes[.modificationDate] as? Date,
                   let permissions = attributes[.posixPermissions] as? NSNumber else { return nil }
-            return FileStamp(path: path, modified: modified, permissions: permissions.intValue)
+            let isSymbolicLink = attributes[.type] as? FileAttributeType == .typeSymbolicLink
+            return FileStamp(path: path, modified: modified, permissions: permissions.intValue,
+                             isSymbolicLink: isSymbolicLink)
         }
     }
 

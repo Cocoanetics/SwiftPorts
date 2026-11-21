@@ -6,13 +6,14 @@ extension StatusOptions {
     func renderHuman(_ index: StatusIndex, client: GitClient, root: URL, output: inout String) async throws {
         let scanner = PointerScanner(client: client)
         let cwd = LFSRepositoryPaths.canonical(Shell.currentDirectory.path)
-        let root = URL(fileURLWithPath: LFSRepositoryPaths.canonical(root.path))
+        let rootPath = LFSRepositoryPaths.canonical(root.path)
+        let root = URL(fileURLWithPath: rootPath)
         output += "\nObjects to be committed:\n\n"
         for entry in index.staged {
-            let source = Self.relativize(cwd, root.appendingPathComponent(entry.sourcePath).path)
+            let source = Self.relativize(cwd, Self.joinPath(rootPath, entry.sourcePath))
             let name: String
             if entry.status == "R" || entry.status == "C" {
-                let destination = Self.relativize(cwd, root.appendingPathComponent(entry.destinationPath).path)
+                let destination = Self.relativize(cwd, Self.joinPath(rootPath, entry.destinationPath))
                 name = source + " -> " + destination
             } else {
                 name = source
@@ -22,11 +23,18 @@ extension StatusOptions {
         }
         output += "\nObjects not staged for commit:\n\n"
         for entry in index.unstaged {
-            let source = Self.relativize(cwd, root.appendingPathComponent(entry.sourcePath).path)
+            let source = Self.relativize(cwd, Self.joinPath(rootPath, entry.sourcePath))
             let info = try await formatBlobInfo(entry, scanner: scanner, root: root)
             output += "\t\(source) (\(info))\n"
         }
         output += "\n"
+    }
+
+    /// Join without `URL.appendingPathComponent`, which can normalize Unicode on macOS.
+    private static func joinPath(_ base: String, _ component: String) -> String {
+        guard !component.isEmpty else { return base }
+        if base == "/" { return "/" + component }
+        return base.hasSuffix("/") || base.hasSuffix("\\") ? base + component : base + "/" + component
     }
 
     static func renderPorcelain(_ index: StatusIndex) -> String {
