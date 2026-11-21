@@ -418,10 +418,17 @@ and `StatusOptions` formats the leading seven hex digits (`from -> to`, or just
   `LFSSamePathOracle.isAvailable` (exact `git-lfs/3.7.1`). It compares complete
   stdout, stderr, and exit status at the same path and environment with no path,
   line-order, JSON, or whitespace normalization across human, porcelain, and
-  JSON forms: tracking refs (none, missing, renamed merge, fallback merge,
-  competing `pushRemote`/`remote.pushDefault`), detached/unborn HEAD, clean
-  smudged/pointer-only/permission-only states, ordinary tracked and untracked
-  files, same-size edits, partially staged changes and baseline reversions,
+  JSON forms, with one exception. On a merge conflict, upstream's
+  `error running <git> 'update-index' …` stderr names the absolute path of the
+  host git binary that its `subprocess` ran (for example
+  `/usr/bin/git`, or git's libexec `git` when it is launched through
+  `git lfs`). The in-process port does not run a git binary and prints `git`.
+  The oracle replaces only that executable token before comparing. This is an
+  accepted limitation: conflicted-index stderr is exact except for the
+  executable path. The forms cover tracking refs (none, missing, renamed merge,
+  fallback merge, competing `pushRemote`/`remote.pushDefault`),
+  detached/unborn HEAD, clean smudged/pointer-only/permission-only states,
+  ordinary tracked and untracked files, same-size edits, partially staged changes and baseline reversions,
   LFS↔Git transitions, deletions and file-to-directory replacements, renames,
   symlink type changes, merge conflicts, missing Git blobs versus missing local
   LFS payloads, partial tracking corruption, subdirectory invocation, C-quoted
@@ -622,4 +629,5 @@ the assertion through #187's batch client/server remains open for that work.
 - `GitCommandLFSStatusOracleTests` (macOS / Linux) — `status`, `--porcelain`,
   and `--json` same-path oracle matrix against pinned `git-lfs/3.7.1` via
   `Support/LFSSamePathOracle.swift`, with no normalization beyond version lines
-  where printed. Skipped unless `git lfs version` starts with `git-lfs/3.7.1`.
+  where printed and the host git path in the merge-conflict `update-index`
+  diagnostic (see Status test and oracle coverage). Skipped unless `git lfs version` starts with `git-lfs/3.7.1`.
