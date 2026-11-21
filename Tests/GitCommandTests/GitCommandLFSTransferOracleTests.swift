@@ -21,7 +21,7 @@ struct LFSMeterNormalizerTests {
 /// Same repository shape, one fresh `LFSTestServer` per side. The endpoint and a batch
 /// `expires_at` are the only fixture substitutions; `/locks/verify` text is compared raw.
 @Suite("git lfs fetch/push same-path oracle",
-       .enabled(if: LFSSamePathOracle.isAvailable, "git-lfs 3.7.1 is not on PATH"))
+       .enabled(if: LFSSamePathOracle.isAvailable, "git-lfs 3.7.1 is not on PATH"), .timeLimit(.minutes(2)))
 struct GitCommandLFSTransferOracleTests {
     private let prompt = ["GIT_TERMINAL_PROMPT": "0"]
 

@@ -3,7 +3,7 @@ import GitLFSTestSupport
 import Testing
 @testable import GitLFSKit
 
-@Suite("LFS fetch (git-lfs 3.7.1 command_fetch.go)")
+@Suite("LFS fetch (git-lfs 3.7.1 command_fetch.go)", .timeLimit(.minutes(2)))
 struct LFSFetchTests {
     let old = Data("old contents\n".utf8)
     let new = Data("new contents\n".utf8)

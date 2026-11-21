@@ -7,7 +7,7 @@ import Testing
 import FoundationNetworking
 #endif
 
-@Suite("LFS platform upload transport")
+@Suite("LFS platform upload transport", .timeLimit(.minutes(2)))
 struct LFSURLSessionUploadTests {
     #if os(Windows)
     @Test("upload diagnostics require an explicit test sink and retain the raw curl result")

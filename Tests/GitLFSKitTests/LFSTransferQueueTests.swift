@@ -9,7 +9,7 @@ import SwiftGit
 import Testing
 @testable import GitLFSKit
 
-@Suite("LFS basic transfer queue", .serialized)
+@Suite("LFS basic transfer queue", .serialized, .timeLimit(.minutes(2)))
 struct LFSTransferQueueTests {
     let data = Data("hello world\n".utf8)
     var oid: String { hash(data) }

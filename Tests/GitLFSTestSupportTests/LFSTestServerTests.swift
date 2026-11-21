@@ -3,7 +3,7 @@ import Foundation
 import GitLFSTestSupport
 import Testing
 
-@Suite("LFSTestServerTests")
+@Suite("LFSTestServerTests", .timeLimit(.minutes(2)))
 struct LFSTestServerTests {
     @Test("100 Continue precedes a drained 1 MB PUT and its final status",
           arguments: [200, 503, 401], [false, true])

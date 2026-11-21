@@ -170,7 +170,8 @@ final class LFSCurlUpload: @unchecked Sendable {
             case 42: code = .cancelled
             default: code = .networkConnectionLost
             }
-            throw URLError(code, userInfo: [NSLocalizedDescriptionKey: message])
+            // The raw CURLcode identifies this transport in a mapped failure.
+            throw URLError(code, userInfo: [NSLocalizedDescriptionKey: message, "CURLcode": result])
         }
         guard let response else { throw URLError(.badServerResponse) }
         return LFSTransferHTTPResult(response: response, body: responseBody, accepted: stream.accepts(response))

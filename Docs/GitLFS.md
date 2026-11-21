@@ -505,12 +505,6 @@ forward authorization to another origin.
 
 `Tests/GitLFSKitTests/`:
 
-- `LFSPlainUploadTests` (macOS/Linux/Windows) — independent Python 3
-  `http.server` receiver and the NIO fixture, using 1 MB platform file/Data
-  PUTs with and without `Expect: 100-continue`. Responses verify the headers,
-  byte count and SHA-256. Includes redirect/header coverage and an explicit
-  Windows HTTP-proxy regression.
-  Python 3 must be on `PATH`; the subprocess is test-only.
 - `LFSURLSessionUploadTests` — 1 MB file/Data/stream PUTs to the NIO fixture,
   including 200/503/401, cancellation, and an idle response timeout. Explicit
   framing assertions check the received headers and complete body. Windows
