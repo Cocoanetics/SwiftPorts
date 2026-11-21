@@ -4,6 +4,9 @@ import ShellKit
 import SwiftGit
 import Testing
 @testable import GitLFSKit
+#if os(Windows)
+import WinSDK
+#endif
 
 extension LFSFilterTests {
     @Suite("LFS checkout and pull SDK (git-lfs 3.7.1)")
@@ -148,7 +151,10 @@ extension LFSFilterTests {
                     let linkPointer = try Data(contentsOf: linkFile)
                     try linkPointer.write(to: external)
                     try FileManager.default.removeItem(at: linkFile)
-                    try FileManager.default.linkItem(at: external, to: linkFile)
+                    // `FileManager.linkItem` creates a symbolic link on Windows.
+                    // Checkout rejects that as "not a regular file". A hard link
+                    // is what git-lfs replaces without rewriting the other name.
+                    try linkHard(from: external, to: linkFile)
 
                     let emptyFile = repo.directory.appendingPathComponent("empty.dat")
                     let pastDate = Date(timeIntervalSince1970: 1_700_000_000)
@@ -172,6 +178,23 @@ extension LFSFilterTests {
                     #expect(afterMtime == beforeMtime)
                 }
             }
+        }
+
+        /// Another directory entry for `source`. On Windows this is
+        /// `CreateHardLinkW`; `FileManager.linkItem` is a symbolic link there.
+        private func linkHard(from source: URL, to link: URL) throws {
+            #if os(Windows)
+            let created = source.path.withCString(encodedAs: UTF16.self) { existing in
+                link.path.withCString(encodedAs: UTF16.self) { name in
+                    CreateHardLinkW(name, existing, nil)
+                }
+            }
+            guard created else {
+                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: link.path])
+            }
+            #else
+            try FileManager.default.linkItem(at: source, to: link)
+            #endif
         }
 
         @Test("checkout conflict stages and argument validation match git-lfs 3.7.1")

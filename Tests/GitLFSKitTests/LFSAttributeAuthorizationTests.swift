@@ -3,6 +3,9 @@ import Testing
 import ShellKit
 @testable import SwiftGit
 @testable import GitLFSKit
+#if os(Windows)
+import WinSDK
+#endif
 
 extension LFSFilterTests {
     @Suite("Attribute sources are authorized before libgit2 evaluation")
@@ -124,13 +127,54 @@ extension LFSFilterTests {
         private func expectDenied(
             _ file: URL, host: IsolatedLFSHost, client: SwiftGit.GitClient, path: String = "x.bin"
         ) async throws {
-            Shell.current.sandbox = host.sandbox(refusing: {
-                $0.standardizedFileURL.path == file.standardizedFileURL.path
-            })
+            Shell.current.sandbox = host.sandbox(refusing: { denies($0, file: file) })
             defer { Shell.current.sandbox = host.sandbox }
             await #expect(throws: Sandbox.Denial.self) {
                 _ = try await client.filterAttribute(for: [path])
             }
         }
+
+        /// libgit2 canonicalizes the worktree to the long path. The fixture's
+        /// directory URL can still be the 8.3 spelling, and `standardizedFileURL`
+        /// does not join those on Windows.
+        private func denies(_ candidate: URL, file: URL) -> Bool {
+            if candidate.standardizedFileURL.path == file.standardizedFileURL.path { return true }
+            #if os(Windows)
+            if let left = finalPath(candidate), let right = finalPath(file) {
+                return left.caseInsensitiveCompare(right) == .orderedSame
+            }
+            return spelling(candidate) == spelling(file)
+            #else
+            return false
+            #endif
+        }
+
+        #if os(Windows)
+        private func finalPath(_ url: URL) -> String? {
+            url.path.withCString(encodedAs: UTF16.self) { name in
+                let handle = CreateFileW(
+                    name, DWORD(FILE_READ_ATTRIBUTES),
+                    DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE),
+                    nil, DWORD(OPEN_EXISTING), DWORD(FILE_FLAG_BACKUP_SEMANTICS), nil)
+                guard let handle, handle != INVALID_HANDLE_VALUE else { return nil }
+                defer { CloseHandle(handle) }
+                return withUnsafeTemporaryAllocation(of: WCHAR.self, capacity: 32_768) { buffer in
+                    let length = GetFinalPathNameByHandleW(
+                        handle, buffer.baseAddress, DWORD(buffer.count), DWORD(FILE_NAME_NORMALIZED))
+                    guard length > 0, length < DWORD(buffer.count) else { return nil }
+                    return String(decoding: buffer.prefix(Int(length)), as: UTF16.self)
+                }
+            }
+        }
+
+        private func spelling(_ url: URL) -> String {
+            var path = url.standardizedFileURL.path.replacingOccurrences(of: "\\", with: "/")
+            if path.count > 3, path.hasPrefix("/"), path.dropFirst(2).first == ":" {
+                path.removeFirst()
+            }
+            while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+            return path.lowercased()
+        }
+        #endif
     }
 }

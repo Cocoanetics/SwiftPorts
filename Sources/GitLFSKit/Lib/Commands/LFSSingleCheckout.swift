@@ -106,6 +106,11 @@ struct LFSSingleCheckout {
     /// `SmudgeToFile` with `download == false`: writes local content to
     /// `destination`, or writes the canonical pointer and throws
     /// ``DownloadDeclinedError`` when the object is not in local storage.
+    ///
+    /// On Windows the bytes are written to a new file in the same directory
+    /// and that name replaces `destination`. Truncating the existing file
+    /// would rewrite every hard link that shares it. POSIX `unlink` followed
+    /// by `O_EXCL` already creates a new inode, which is what git-lfs does.
     func runToPath(_ wrapped: WrappedPointer, to destination: URL, displayPath: String) async throws {
         guard !skip else { return }
         try await Shell.authorize(destination)
@@ -114,20 +119,23 @@ struct LFSSingleCheckout {
             return
         }
         let mode: UInt32 = (existing?.isRegular == true) ? existing!.permissions : 0o666
-        try Self.removeIfPresent(destination.path, displayPath: displayPath)
-        let handle = try Self.createExclusive(destination.path, mode: mode, displayPath: displayPath)
-        defer { try? handle.close() }
-        if wrapped.pointer.size == 0 { return }
-
-        guard let mediaURL = try await locateLocalObject(oid: wrapped.pointer.oid, size: wrapped.pointer.size) else {
-            try handle.write(contentsOf: Data(wrapped.pointer.encoded.utf8))
-            throw DownloadDeclinedError()
+        let output = try await openCheckoutFile(replacing: destination, displayPath: displayPath, mode: mode)
+        defer { output.discard() }
+        if wrapped.pointer.size != 0 {
+            guard let mediaURL = try await locateLocalObject(
+                oid: wrapped.pointer.oid, size: wrapped.pointer.size
+            ) else {
+                try output.handle.write(contentsOf: Data(wrapped.pointer.encoded.utf8))
+                try output.commit(displayPath: displayPath)
+                throw DownloadDeclinedError()
+            }
+            do {
+                try Self.copyStream(from: mediaURL, to: output.handle)
+            } catch {
+                throw CheckoutIOError("could not write working directory file: \(error)")
+            }
         }
-        do {
-            try Self.copyStream(from: mediaURL, to: handle)
-        } catch {
-            throw CheckoutIOError("could not write working directory file: \(error)")
-        }
+        try output.commit(displayPath: displayPath)
     }
 
     /// `gitIndexer.Close`: refreshes stat cache for all checked-out paths once.
@@ -351,22 +359,58 @@ struct LFSSingleCheckout {
             size: Int64(st.st_size), permissions: UInt32(st.st_mode & 0o777)))
         #endif
     }
+}
 
-    private static func removeIfPresent(_ path: String, displayPath: String) throws {
+extension LFSSingleCheckout {
+    /// Opens the file checkout will write. POSIX removes `destination` first
+    /// and creates it with `O_EXCL`. Windows writes a sibling and
+    /// ``CheckoutOutput/commit(displayPath:)`` renames it into place, so a
+    /// hard link's other names keep the previous bytes.
+    private func openCheckoutFile(
+        replacing destination: URL, displayPath: String, mode: UInt32
+    ) async throws -> CheckoutOutput {
         #if os(Windows)
-        if let info = lstatInfo(path), info.permissions & 0o200 == 0 {
-            _ = path.withCString(encodedAs: UTF16.self) { SetFileAttributesW($0, DWORD(FILE_ATTRIBUTE_NORMAL)) }
-        }
-        do {
-            try FileManager.default.removeItem(atPath: path)
-        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
-            return
-        } catch {
-            throw CheckoutIOError(
-                "could not remove working directory file \(displayPath.goQuoted): "
-                    + lfsFileError(error, path: path, operation: "remove"))
-        }
+        let output = URL(fileURLWithPath: Self.temporarySibling(of: destination.path))
+        try await Shell.authorize(output)
+        let handle = try Self.createExclusive(output.path, mode: mode, displayPath: displayPath)
+        return CheckoutOutput(handle: handle, path: output.path, replaces: destination.path)
         #else
+        try Self.removeIfPresent(destination.path, displayPath: displayPath)
+        let handle = try Self.createExclusive(destination.path, mode: mode, displayPath: displayPath)
+        return CheckoutOutput(handle: handle, path: destination.path, replaces: nil)
+        #endif
+    }
+
+    #if os(Windows)
+    private static func temporarySibling(of path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        let name = ".\(url.lastPathComponent).lfs-checkout-\(UUID().uuidString)"
+        return url.deletingLastPathComponent().appendingPathComponent(name).path
+    }
+
+    /// `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`: the destination name
+    /// now refers to `source`, and any other hard link keeps the old file.
+    private static func commitReplacement(
+        _ source: String, _ destination: String, displayPath: String
+    ) throws {
+        if let info = lstatInfo(destination), info.permissions & 0o200 == 0 {
+            _ = destination.withCString(encodedAs: UTF16.self) {
+                SetFileAttributesW($0, DWORD(FILE_ATTRIBUTE_NORMAL))
+            }
+        }
+        let moved = source.withCString(encodedAs: UTF16.self) { from in
+            destination.withCString(encodedAs: UTF16.self) { to in
+                MoveFileExW(from, to, DWORD(MOVEFILE_REPLACE_EXISTING))
+            }
+        }
+        guard moved else {
+            throw CheckoutIOError(
+                "could not create working directory file \(displayPath.goQuoted): "
+                    + "open \(destination): \(openFailure(GetLastError()))")
+        }
+    }
+    #else
+    private static func removeIfPresent(_ path: String, displayPath: String) throws {
         let rc = path.withCString { unlink($0) }
         if rc != 0 {
             let code = errno
@@ -375,7 +419,53 @@ struct LFSSingleCheckout {
                 "could not remove working directory file \(displayPath.goQuoted): "
                     + "remove \(path): \(posixMessage(code))")
         }
+    }
+    #endif
+
+    /// The file `runToPath` writes. `commit` publishes it at the checkout
+    /// path; `discard` drops a Windows temporary file that was never published.
+    private final class CheckoutOutput {
+        let handle: FileHandle
+        #if os(Windows)
+        private let path: String
         #endif
+        private let replaces: String?
+        private var closed = false
+        private var committed = false
+
+        init(handle: FileHandle, path: String, replaces: String?) {
+            self.handle = handle
+            self.replaces = replaces
+            #if os(Windows)
+            self.path = path
+            #else
+            _ = path
+            #endif
+        }
+
+        func commit(displayPath: String) throws {
+            try closeHandle()
+            #if os(Windows)
+            if let replaces {
+                try LFSSingleCheckout.commitReplacement(path, replaces, displayPath: displayPath)
+            }
+            #endif
+            committed = true
+        }
+
+        func discard() {
+            try? closeHandle()
+            #if os(Windows)
+            guard !committed, replaces != nil else { return }
+            try? FileManager.default.removeItem(atPath: path)
+            #endif
+        }
+
+        private func closeHandle() throws {
+            guard !closed else { return }
+            closed = true
+            try handle.close()
+        }
     }
 
     private static func createExclusive(_ path: String, mode: UInt32, displayPath: String) throws -> FileHandle {
