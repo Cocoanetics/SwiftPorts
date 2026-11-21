@@ -2,6 +2,7 @@ import Foundation
 import GitLFSTestSupport
 import ShellKit
 import Testing
+@_spi(GitLFSKit) import SwiftGit
 @testable import GitLFSKit
 
 @Suite("LFS transfer command options")
@@ -13,6 +14,50 @@ struct TransferCommandOptionsTests {
         let shell = Shell(stdin: .data(Data(text.utf8)), environment: Shell.current.environment)
         shell.sandbox = Shell.current.sandbox
         return shell
+    }
+
+    @Test func remoteHeadAliasesAreAppliedOnce() async throws {
+        try await LFSTestServer.withServer { server in
+            try await LFSServerRepository.run(server) { repo in
+                try await repo.commit([("a.bin", first)])
+                try await repo.git.push(remote: "origin", refspec: "HEAD:refs/heads/main", setUpstream: false)
+                let location = try #require(try await repo.git.configGet("remote.origin.url"))
+                let missing = repo.directory.appendingPathComponent("missing.git").path
+                try await repo.git.configSet("url.\(location).insteadOf", "alias")
+                try await repo.git.configSet("url.\(missing).insteadOf", location)
+                try await repo.git.configSet("remote.origin.url", "alias")
+                #expect(try await repo.git.remoteHeads(remote: "origin") == ["refs/heads/main"])
+            }
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func staleRemoteBranchDoesNotHideObjects(_ prePush: Bool) async throws {
+        try await LFSTestServer.withServer { server in
+            try await LFSServerRepository.run(server) { repo in
+                let base = try await repo.commit([("base.bin", first)])
+                try await repo.git.push(remote: "origin", refspec: "HEAD:refs/heads/main", setUpstream: false)
+                let tip = try await repo.commit([("new.bin", second)])
+                try await repo.setReference("refs/remotes/origin/main", to: base)
+                try await repo.setReference("refs/remotes/origin/deleted", to: tip)
+                let result: LFSCommandResult
+                if prePush {
+                    var options = PrePushOptions()
+                    options.dryRun = true
+                    let line = "refs/heads/main \(tip) refs/heads/main \(base)\n"
+                    result = try await input(line).withCurrent {
+                        try await options.run(["origin", "url"], client: repo.client, git: repo.git)
+                    }
+                } else {
+                    var options = PushOptions()
+                    options.dryRun = true
+                    result = try await options.run(["origin", "main"], client: repo.client, git: repo.git)
+                }
+                #expect(result.status == 0)
+                #expect(result.stdout == "push \(LFSServerRepository.oid(second)) => new.bin\n")
+                #expect(server.requests().isEmpty)
+            }
+        }
     }
 
     @Test func fetchDefaultAndExplicitRefs() async throws {

@@ -60,8 +60,8 @@ public struct PushOptions: Sendable {
                     ?? String(repeating: "0", count: 40)
                 updates.append(LFSRefUpdate(localRef: ref, localOID: oid, remoteRef: "", remoteOID: remoteOID))
             }
-            return try await client.uploadObjects(for: updates, remote: remote, all: all,
-                                                 dryRun: dryRun, terminal: terminal, git: git)
+            return try await client.pushUpdates(updates, remote: remote, all: all,
+                                               dryRun: dryRun, terminal: terminal, git: git)
         } catch let failure as LFSFailure {
             return failure.result
         }

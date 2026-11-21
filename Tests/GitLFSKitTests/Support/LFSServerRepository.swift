@@ -25,8 +25,10 @@ struct LFSServerRepository {
         let host = IsolatedLFSHost()
         defer { try? FileManager.default.removeItem(at: host.root) }
         try await host.run {
+            let remote = host.root.appendingPathComponent("remote.git")
+            try await GitClient(workingDirectory: remote).initRepository(bare: true)
             let made = try await LFSFixture.make(
-                host, "server", remotes: [("origin", "https://example.com/repo.git")],
+                host, "server", remotes: [("origin", remote.path)],
                 config: [("lfs.url", server.endpoint.absoluteString)] + config)
             let client = await LFSClient(git: made.client, credentials: credentials, configuration: .ephemeral)
             try await body(LFSServerRepository(

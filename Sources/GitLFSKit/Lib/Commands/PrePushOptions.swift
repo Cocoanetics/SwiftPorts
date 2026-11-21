@@ -36,8 +36,8 @@ public struct PrePushOptions: Sendable {
                 updates.append(LFSRefUpdate(localRef: fields[0], localOID: fields[1],
                                             remoteRef: fields[2], remoteOID: fields[3]))
             }
-            return try await client.uploadObjects(for: updates, remote: remote,
-                                                 dryRun: dryRun, terminal: terminal, git: git)
+            return try await client.pushUpdates(updates, remote: remote,
+                                               dryRun: dryRun, terminal: terminal, git: git)
         } catch let failure as LFSFailure {
             return failure.result
         }
