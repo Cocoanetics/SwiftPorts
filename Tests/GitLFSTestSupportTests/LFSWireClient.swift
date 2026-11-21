@@ -147,7 +147,7 @@ final class LFSWireClient: @unchecked Sendable {
         let continued = expectContinue ? loop.makePromise(of: Void.self) : nil
         let channel: Channel
         do {
-            channel = try await ClientBootstrap(group: loop)
+            let bootstrap = ClientBootstrap(group: loop)
                 .connectTimeout(.seconds(10))
                 .channelInitializer { channel in
                     channel.eventLoop.makeCompletedFuture {
@@ -163,7 +163,12 @@ final class LFSWireClient: @unchecked Sendable {
                             LFSWireResponseHandler(response: response, continued: continued))
                     }
                 }
-                .connect(host: host, port: port).get()
+            #if os(Windows)
+            // Avoid swift-nio 2.105.0's Windows.recv WSAEWOULDBLOCK throw on a
+            // second speculative read in the same WSAPoll readiness turn.
+            _ = bootstrap.channelOption(ChannelOptions.maxMessagesPerRead, value: 1)
+            #endif
+            channel = try await bootstrap.connect(host: host, port: port).get()
         } catch {
             continued?.fail(error)
             response.fail(error)

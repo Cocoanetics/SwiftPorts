@@ -11,7 +11,6 @@ typedef int (*sp_lfs_progress)(void *, int64_t, int64_t);
 
 // Call once before uploads. Returns a CURLcode.
 int sp_lfs_curl_initialize(void);
-const char *sp_lfs_curl_error_string(int code);
 
 // Returns a CURLcode.
 // All callbacks run serially on the calling thread. No callback survives return.

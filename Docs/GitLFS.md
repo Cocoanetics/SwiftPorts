@@ -651,7 +651,11 @@ also use that native reader, before the upload starts. No Foundation file handle
 or stream is used for file bodies. Explicit stream bodies retain their bounded
 InputStream reader.
 The Windows curl regression uploads empty and 1 MB files concurrently from the
-same path and checks exact bodies, framing and bounded progress.
+same path and checks exact bodies, framing and bounded progress. On Windows,
+the in-process NIO fixture (`LFSTestServer` and `LFSWireClient`) also sets
+`maxMessagesPerRead = 1` because `swift-nio` 2.105.0's `Windows.recv` throws
+`IOError(winsock: WSAEWOULDBLOCK)` instead of returning `.wouldBlock(0)` when a
+second speculative read runs in the same `WSAPoll` readiness turn.
 
 `Tests/GitLFSKitTests/`:
 

@@ -57,6 +57,14 @@ public final class LFSTestServer: @unchecked Sendable {
                     try channel.pipeline.syncOperations.addHandler(LFSConnectionHandler(core: core))
                 }
             }
+        #if os(Windows)
+        // swift-nio 2.105.0's Windows.recv throws IOError(winsock: WSAEWOULDBLOCK)
+        // instead of returning .wouldBlock(0). With the default maxMessagesPerRead
+        // (4), a second read after filling a 64 KiB buffer closes the socket with
+        // RST when no more bytes are buffered yet. Reading once per WSAPoll
+        // readiness notification avoids that speculative non-blocking recv.
+        _ = bootstrap.childChannelOption(ChannelOptions.maxMessagesPerRead, value: 1)
+        #endif
         let channel: Channel
         do {
             channel = try await bootstrap.bind(host: "127.0.0.1", port: 0).get()
