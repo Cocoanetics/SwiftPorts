@@ -369,24 +369,54 @@ struct GitClientRefreshIndexTests {
         #expect(oracleModifiedStats == modifiedStats)
     }
 
-    private func setMtime(_ date: Date, for name: String, in dir: URL) throws {
+    @Test("required and failing clean filters propagate errors without writing the index")
+    func cleanFilterFailurePropagates() async throws {
+        let dir = try filteredRepo()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let driver = try driverName(in: dir)
+        try touch("a.txt", in: dir)
+        let client = GitClient(workingDirectory: dir)
+
+        // 1. Missing required filter driver fails while loading filters.
+        try support.runGit(["config", "filter.\(driver).required", "true"], in: dir)
+        try GitFilters.enforceRequiredDrivers()
+        let beforeMissing = try snapshot(in: dir)
+        await #expect(throws: Libgit2Error.self) {
+            try await client.refreshIndex(paths: ["a.txt", "f"])
+        }
+        try expectUnchanged(beforeMissing, in: dir)
+
+        // 2. A registered clean filter that throws fails while applying filters.
+        struct FilterFailure: Error {}
+        try GitFilters.register(name: driver, .buffered(clean: { _, _ in throw FilterFailure() }))
+        defer { try? GitFilters.unregister(name: driver) }
+        let beforeApply = try snapshot(in: dir)
+        await #expect(throws: Libgit2Error.self) {
+            try await client.refreshIndex(paths: ["a.txt", "f"])
+        }
+        try expectUnchanged(beforeApply, in: dir)
+    }
+}
+
+private extension GitClientRefreshIndexTests {
+    func setMtime(_ date: Date, for name: String, in dir: URL) throws {
         try FileManager.default.setAttributes(
             [.modificationDate: date], ofItemAtPath: dir.appendingPathComponent(name).path)
     }
 
-    private func statSummary(_ paths: [String], in dir: URL) throws -> [String] {
+    func statSummary(_ paths: [String], in dir: URL) throws -> [String] {
         try support.runGit(["ls-files", "--debug", "--"] + paths, in: dir)
             .split(separator: "\n")
             .map(String.init)
             .filter { !$0.hasPrefix("  ") || $0.hasPrefix("  mtime:") || $0.hasPrefix("  size:") }
     }
 
-    private func dirtyPaths(in dir: URL) throws -> [String] {
+    func dirtyPaths(in dir: URL) throws -> [String] {
         try support.runGit(["diff-index", "--name-only", "HEAD", "--"], in: dir)
             .split(separator: "\n").map(String.init)
     }
 
-    private func runGitCaptured(
+    func runGitCaptured(
         _ args: [String], in dir: URL
     ) throws -> (status: Int32, stdout: String, stderr: String) {
         let process = Process()
@@ -404,7 +434,7 @@ struct GitClientRefreshIndexTests {
         return (process.terminationStatus, stdout, stderr)
     }
 
-    private func filteredRepo() throws -> URL {
+    func filteredRepo() throws -> URL {
         let dir = try support.makeRepo()
         try Data("pointer(X)\n".utf8).write(to: dir.appendingPathComponent("f"))
         try support.runGit(["add", "f"], in: dir)
@@ -418,16 +448,16 @@ struct GitClientRefreshIndexTests {
         return dir
     }
 
-    private func driverName(in dir: URL) throws -> String {
+    func driverName(in dir: URL) throws -> String {
         try support.runGit(["config", "test.refresh-driver"], in: dir).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func touch(_ name: String, in dir: URL) throws {
+    func touch(_ name: String, in dir: URL) throws {
         try FileManager.default.setAttributes(
             [.modificationDate: past], ofItemAtPath: dir.appendingPathComponent(name).path)
     }
 
-    private func snapshot(in dir: URL) throws -> (Data, Date, UInt64) {
+    func snapshot(in dir: URL) throws -> (Data, Date, UInt64) {
         let index = dir.appendingPathComponent(".git/index")
         try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: index.path)
         let attributes = try FileManager.default.attributesOfItem(atPath: index.path)
@@ -435,7 +465,7 @@ struct GitClientRefreshIndexTests {
                 try #require(attributes[.systemFileNumber] as? UInt64))
     }
 
-    private func expectUnchanged(_ before: (Data, Date, UInt64), in dir: URL) throws {
+    func expectUnchanged(_ before: (Data, Date, UInt64), in dir: URL) throws {
         let index = dir.appendingPathComponent(".git/index")
         let attributes = try FileManager.default.attributesOfItem(atPath: index.path)
         #expect(try Data(contentsOf: index) == before.0)
@@ -443,7 +473,7 @@ struct GitClientRefreshIndexTests {
         #expect(attributes[.systemFileNumber] as? UInt64 == before.2)
     }
 
-    private func gitExit(_ args: [String], in dir: URL) throws -> Int32 {
+    func gitExit(_ args: [String], in dir: URL) throws -> Int32 {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + args
