@@ -15,6 +15,25 @@ final class LFSConnectionHandler: ChannelInboundHandler {
         self.core = core
     }
 
+    #if os(Windows)
+    // Temporary server-side counterpart to the test-opted-in curl trace.
+    // The remaining reset precedes `.end`, so it cannot appear in requests().
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        print("[LFS server probe] error=\(error) method=\(head?.method.rawValue ?? "unknown") "
+            + "bodyRead=\(body.count) contentLength=\(head?.headers.first(name: "content-length") ?? "none") "
+            + "transferEncoding=\(head?.headers.first(name: "transfer-encoding") ?? "none")")
+        context.fireErrorCaught(error)
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        if let head {
+            print("[LFS server probe] incomplete request method=\(head.method.rawValue) bodyRead=\(body.count) "
+                + "contentLength=\(head.headers.first(name: "content-length") ?? "none")")
+        }
+        context.fireChannelInactive()
+    }
+    #endif
+
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         switch unwrapInboundIn(data) {
         case .head(let request):
