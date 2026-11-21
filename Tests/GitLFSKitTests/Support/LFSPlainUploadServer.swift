@@ -1,6 +1,11 @@
 #if os(macOS) || os(Linux) || os(Windows)
 import Foundation
 import Testing
+#if os(macOS)
+import Darwin
+#elseif os(Linux)
+import Glibc
+#endif
 
 /// Test-only subprocess control: bypass NIO on Windows as well as macOS/Linux.
 /// stdout/stderr go to a file so a full diagnostic pipe cannot stall the server.
@@ -36,7 +41,10 @@ final class LFSPlainUploadServer {
         return (executable, windows ? ["-3"] : [])
     }
 
-    private static let command: (executable: URL, arguments: [String])? = {
+    /// The interpreter itself, resolved through `pythonCommand`. A launcher can
+    /// exist without Python 3, and `py.exe` runs python.exe as a child that
+    /// survives `terminate()`, so the server must not start through it.
+    private static let interpreter: URL? = {
         #if os(Windows)
         let windows = true
         #else
@@ -44,19 +52,32 @@ final class LFSPlainUploadServer {
         #endif
         guard let command = pythonCommand(environment: ProcessInfo.processInfo.environment, windows: windows)
         else { return nil }
-        // A launcher can exist without a Python 3 installation.
+        let result = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        guard FileManager.default.createFile(atPath: result.path, contents: nil),
+              let output = try? FileHandle(forWritingTo: result) else { return nil }
+        defer {
+            try? output.close()
+            try? FileManager.default.removeItem(at: result)
+        }
         let probe = Process()
         probe.executableURL = command.executable
-        probe.arguments = command.arguments + ["--version"]
+        probe.arguments = command.arguments + ["-c", "import sys; print(sys.executable)"]
         probe.standardInput = FileHandle.nullDevice
-        probe.standardOutput = FileHandle.nullDevice
+        probe.standardOutput = output
         probe.standardError = FileHandle.nullDevice
         do { try probe.run() } catch { return nil }
-        probe.waitUntilExit()
-        return probe.terminationStatus == 0 ? command : nil
+        guard waitForExit(probe, timeout: 30) else {
+            probe.terminate()
+            return nil
+        }
+        guard probe.terminationStatus == 0,
+              let path = (try? String(contentsOf: result, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty
+        else { return nil }
+        return URL(fileURLWithPath: path)
     }()
 
-    static var isAvailable: Bool { command != nil }
+    static var isAvailable: Bool { interpreter != nil }
     static let unavailableReason: Comment = "Python 3 is unavailable (Windows requires pythonLocation or py -3)"
 
     static func start() async throws -> LFSPlainUploadServer {
@@ -71,7 +92,7 @@ final class LFSPlainUploadServer {
     }
 
     private func launch() async throws {
-        let command = try #require(Self.command, Self.unavailableReason)
+        let interpreter = try #require(Self.interpreter, Self.unavailableReason)
         let script = try #require(Bundle.module.url(forResource: "LFSUploadServer", withExtension: "py",
                                                     subdirectory: "Fixtures"))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -79,8 +100,8 @@ final class LFSPlainUploadServer {
         let log = directory.appendingPathComponent("server.log")
         FileManager.default.createFile(atPath: log.path, contents: nil)
         output = try FileHandle(forWritingTo: log)
-        process.executableURL = command.executable
-        process.arguments = command.arguments + ["-u", script.path, ready.path]
+        process.executableURL = interpreter
+        process.arguments = ["-u", script.path, ready.path]
         process.standardOutput = output
         process.standardError = output
         try process.run()
@@ -103,10 +124,24 @@ final class LFSPlainUploadServer {
     func stop() {
         if process.isRunning {
             process.terminate()
-            process.waitUntilExit()
+            if !Self.waitForExit(process, timeout: 5) {
+                #if !os(Windows)
+                // terminate() is a no-op if the child still blocks SIGTERM.
+                kill(process.processIdentifier, SIGKILL)
+                #endif
+                _ = Self.waitForExit(process, timeout: 5)
+            }
         }
         try? output?.close()
         try? FileManager.default.removeItem(at: directory)
+    }
+
+    /// Polls `isRunning`: Foundation's `waitUntilExit()` has no deadline and,
+    /// on Linux, can miss its run-loop wakeup when called from a test task.
+    private static func waitForExit(_ process: Process, timeout: TimeInterval) -> Bool {
+        let deadline = ContinuousClock.now + .seconds(timeout)
+        while process.isRunning, ContinuousClock.now < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        return !process.isRunning
     }
 }
 #endif

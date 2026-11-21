@@ -8,8 +8,14 @@ import hashlib
 import http.server
 import json
 import pathlib
+import signal
 import socket
 import sys
+
+# Linux Foundation's Process spawns from a dispatch worker whose blocked signal
+# mask the child inherits; unblock SIGTERM so Process.terminate() stops us.
+if hasattr(signal, "pthread_sigmask"):
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
 
 
 class PutHandler(http.server.BaseHTTPRequestHandler):
@@ -82,6 +88,10 @@ class PutHandler(http.server.BaseHTTPRequestHandler):
 with http.server.ThreadingHTTPServer(("127.0.0.1", 0), PutHandler) as server:
     endpoint = "http://127.0.0.1:" + str(server.server_port)
     if len(sys.argv) > 1:
-        pathlib.Path(sys.argv[1]).write_text(endpoint, encoding="utf-8")
+        # Rename into place so the polling test never reads a partial port.
+        ready = pathlib.Path(sys.argv[1])
+        partial = ready.with_suffix(".partial")
+        partial.write_text(endpoint, encoding="utf-8")
+        partial.replace(ready)
     print(endpoint, flush=True)
     server.serve_forever()
