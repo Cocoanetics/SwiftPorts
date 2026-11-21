@@ -1,6 +1,18 @@
 import Foundation
 import CGitKit
 import GitKit
+import ShellKit
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#elseif canImport(Android)
+import Android
+#elseif os(Windows)
+import WinSDK
+#endif
 
 // Sandbox-aware delegation onto the pure `Repository` diff operations
 // (`GitKit/Repository+Diff.swift`). Each call authorizes the
@@ -44,32 +56,111 @@ extension GitClient {
     /// A change between a regular file, a symlink, and a gitlink is one
     /// `T` record. Without `--cached`, an unmerged path is that work-tree
     /// comparison (`M`, `A`, `D`, or `T`); `U` is only the cached form.
-    public func diffIndex(ref: String = "HEAD", cached: Bool) async throws -> [DiffIndexEntry] {
-        try await withRepository { repository in
-            guard let repo = Self.handle(of: repository) else {
-                throw Libgit2Error(
-                    code: -1, klass: Int32(GIT_ERROR_REPOSITORY.rawValue),
-                    message: "cannot reach GitKit's repository handle to diff the index")
-            }
-            let tree = try Self.diffIndexTree(ref, repo: repo)
-            defer { git_tree_free(tree) }
-            var opts = git_diff_options()
-            try Self.check(git_diff_options_init(&opts, UInt32(GIT_DIFF_OPTIONS_VERSION)))
-            // libgit2 splits a file/symlink/gitlink change into D + A
-            // unless this is set. `git diff-index` prints one T.
-            opts.flags |= UInt32(GIT_DIFF_INCLUDE_TYPECHANGE.rawValue)
-            var diff: OpaquePointer?
-            if cached {
-                try Self.check(git_diff_tree_to_index(&diff, repo, tree, nil, &opts))
-                try Self.normalizeCachedDiffIndex(diff, tree: tree)
-            } else {
-                try Self.check(git_diff_tree_to_workdir_with_index(&diff, repo, tree, &opts))
-                try Self.normalizeUncachedDiffIndex(diff, tree: tree)
-            }
-            defer { git_diff_free(diff) }
-            try Self.detectDiffIndexRenames(diff)
-            return Self.diffIndexEntries(diff)
+    ///
+    /// `refresh` applies only to an uncached diff. It is `git update-index
+    /// --refresh` for files whose raw work-tree bytes match the stage-zero
+    /// index blob: stat metadata is rewritten and a stat-only touch
+    /// disappears. Content is never staged, and no clean or smudge filter
+    /// runs. The default leaves the index untouched, so that stat-only
+    /// touch is still reported, including when the new size matches.
+    public func diffIndex(
+        ref: String = "HEAD", cached: Bool, refresh: Bool = false
+    ) async throws -> [DiffIndexEntry] {
+        if refresh && !cached {
+            try await authorizeIndexRefresh()
         }
+        return try await withRepository { repository in
+            try Self.performDiffIndex(
+                ref: ref, cached: cached, refresh: refresh && !cached, repository: repository)
+        }
+    }
+
+    /// Stage-zero work-tree paths and the index file, authorized before
+    /// a refresh reads or rewrites them. A denial fails the call.
+    private func authorizeIndexRefresh() async throws {
+        let urls = try await withRepository { repository in
+            try Self.refreshInputURLs(repository)
+        }
+        for url in urls {
+            try await Shell.authorize(url)
+        }
+    }
+
+    private static func refreshInputURLs(_ repository: Repository) throws -> [URL] {
+        let repo = try repositoryHandle(repository)
+        var index: OpaquePointer?
+        try check(git_repository_index(&index, repo))
+        defer { git_index_free(index) }
+        return DiffIndexStat.inputURLs(repo, index: index)
+    }
+
+    private static func performDiffIndex(
+        ref: String, cached: Bool, refresh: Bool, repository: Repository
+    ) throws -> [DiffIndexEntry] {
+        let repo = try repositoryHandle(repository)
+        let tree = try diffIndexTree(ref, repo: repo)
+        defer { git_tree_free(tree) }
+        var opts = git_diff_options()
+        try check(git_diff_options_init(&opts, UInt32(GIT_DIFF_OPTIONS_VERSION)))
+        // libgit2 splits a file/symlink/gitlink change into D + A
+        // unless this is set. `git diff-index` prints one T.
+        opts.flags |= UInt32(GIT_DIFF_INCLUDE_TYPECHANGE.rawValue)
+        // Held across the diff: an in-memory size poke must not be
+        // reloaded away, and a refresh is written only after that.
+        let hold = cached ? nil : try DiffIndexStat.prepare(repo, refresh: refresh)
+        defer { hold?.discard() }
+        var diff: OpaquePointer?
+        defer { git_diff_free(diff) }
+        try fillDiffIndex(&diff, repo: repo, tree: tree, cached: cached, refresh: refresh, opts: &opts)
+        try detectDiffIndexRenames(diff)
+        // Detection can hash a candidate libgit2 still considers dirty.
+        // When that correction changes the add/delete/type set, rebuild
+        // once so detection runs on the corrected records.
+        if refresh && !cached {
+            let changed = try DiffIndexStat.correct(diff, repo: repo, tree: tree)
+            if changed {
+                try fillDiffIndex(
+                    &diff, repo: repo, tree: tree, cached: cached, refresh: refresh, opts: &opts)
+                try detectDiffIndexRenames(diff)
+            }
+        }
+        // A size poke leaves a rename destination with a zero id. `git
+        // diff-index -M` still prints the blob once the paths pair.
+        DiffIndexStat.realizeRenames(diff, repo: repo)
+        let entries = diffIndexEntries(diff)
+        try hold?.persist(refresh: refresh)
+        return entries
+    }
+
+    private static func fillDiffIndex(
+        _ diff: inout OpaquePointer?,
+        repo: OpaquePointer?,
+        tree: OpaquePointer?,
+        cached: Bool,
+        refresh: Bool,
+        opts: inout git_diff_options
+    ) throws {
+        git_diff_free(diff)
+        diff = nil
+        if cached {
+            try check(git_diff_tree_to_index(&diff, repo, tree, nil, &opts))
+            try normalizeCachedDiffIndex(diff, tree: tree)
+            return
+        }
+        try check(git_diff_tree_to_workdir_with_index(&diff, repo, tree, &opts))
+        try normalizeUncachedDiffIndex(diff, tree: tree)
+        if refresh {
+            _ = try DiffIndexStat.correct(diff, repo: repo, tree: tree)
+        }
+    }
+
+    private static func repositoryHandle(_ repository: Repository) throws -> OpaquePointer {
+        guard let repo = handle(of: repository) else {
+            throw Libgit2Error(
+                code: -1, klass: Int32(GIT_ERROR_REPOSITORY.rawValue),
+                message: "cannot reach GitKit's repository handle to diff the index")
+        }
+        return repo
     }
 
     /// The tree `spec` names, or nil when `HEAD` is unborn (the empty tree).
@@ -99,7 +190,7 @@ extension GitClient {
     }
 
     /// A file recorded in the tree `diffIndex` compares against.
-    private struct DiffIndexTreeFile {
+    struct DiffIndexTreeFile {
         var mode: UInt16
         var id: git_oid
     }
@@ -222,7 +313,7 @@ extension GitClient {
 
     /// `git diff-index` uses `T` only when this changes. 100644 and
     /// 100755 are the same type.
-    private static func diffModeType(_ mode: UInt16) -> UInt16 {
+    static func diffModeType(_ mode: UInt16) -> UInt16 {
         mode & 0o170000
     }
 
@@ -230,7 +321,7 @@ extension GitClient {
         file.mode != 0 && file.flags & UInt32(GIT_DIFF_FLAG_EXISTS.rawValue) != 0
     }
 
-    private static func treeFile(_ tree: OpaquePointer?, path: UnsafePointer<CChar>) throws -> DiffIndexTreeFile? {
+    static func treeFile(_ tree: OpaquePointer?, path: UnsafePointer<CChar>) throws -> DiffIndexTreeFile? {
         guard let tree else { return nil }
         var entry: OpaquePointer?
         let rc = git_tree_entry_bypath(&entry, tree, path)
@@ -243,7 +334,7 @@ extension GitClient {
         return DiffIndexTreeFile(mode: mode, id: id.pointee)
     }
 
-    private static func treeSide(_ side: git_diff_file, file: DiffIndexTreeFile) -> git_diff_file {
+    static func treeSide(_ side: git_diff_file, file: DiffIndexTreeFile) -> git_diff_file {
         var side = side
         side.mode = file.mode
         side.id = file.id
@@ -252,7 +343,7 @@ extension GitClient {
         return side
     }
 
-    private static func absentSide(_ side: git_diff_file) -> git_diff_file {
+    static func absentSide(_ side: git_diff_file) -> git_diff_file {
         var side = side
         side.mode = 0
         side.id = git_oid()
@@ -275,7 +366,7 @@ extension GitClient {
     }
 }
 
-/// One path from ``GitClient/diffIndex(ref:cached:)``.
+/// One path from ``GitClient/diffIndex(ref:cached:refresh:)``.
 ///
 /// Modes are the same bits `git diff-index` prints in octal (`0o100644`
 /// for a regular file, `0` when that side does not exist). Ids are 40

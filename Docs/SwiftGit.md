@@ -61,7 +61,7 @@ See [GitLFS.md](GitLFS.md#filter-registration-230-part-1-of-192) for scope.
 | `log(_:)` → `[LogEntry]` | `git log` with start / exclude / pathspec / count |
 | `revList(starts:excludes:)` → `[String]` | `git rev-list <commit>...` full commit ids in the default walk order. An empty start list is an error (`log()` keeps its own order) |
 | `diff(_:format:paths:contextLines:)` | `git diff` (patch / stat / shortstat / numstat / raw / name-only / name-status), supports `<a>..<b>` ranges |
-| `diffIndex(ref:cached:)` → `[DiffIndexEntry]` | `git diff-index [-M] [--cached] <ref>`: full ids, modes, source and destination paths, status. Renames at 50%, copies off. Unborn `HEAD` is the empty tree |
+| `diffIndex(ref:cached:refresh:)` → `[DiffIndexEntry]` | `git diff-index [-M] [--cached] <ref>`. `refresh` (default false) is `git update-index --refresh` before an uncached diff: stat metadata is rewritten only when the raw work-tree bytes match the stage-zero index entry, so a stat-only touch disappears and a same-size edit stays. Full ids, modes, source and destination paths, status. Renames at 50%, copies off. Unborn `HEAD` is the empty tree |
 | `mergeBase(_:_:)` | `git merge-base <a> <b>` |
 | `canResolveRef(_:)` | safe-probe form of `resolveOID` |
 | `blame(path:)` → `[BlameHunk]` | `git blame <path>` |
