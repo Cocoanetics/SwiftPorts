@@ -95,8 +95,7 @@ extension GitClient {
                 guard let targetOID = DiffIndexStat.rawOID(file, at: location) else { continue }
                 oid = targetOID
             } else {
-                var filtered = git_oid()
-                try check(git_repository_hashfile(&filtered, repo, location, GIT_OBJECT_BLOB, path))
+                guard let filtered = Self.filteredOID(repo: repo, path: path, location: location) else { continue }
                 oid = filtered
             }
             guard DiffIndexStat.oidEqual(oid, entry.id) else { continue }
@@ -104,5 +103,48 @@ extension GitClient {
             changed = true
         }
         if changed { try check(git_index_write(index)) }
+    }
+
+    /// Hash a work-tree file through its clean filters without writing an object.
+    /// `GIT_FILTER_ALLOW_UNSAFE` matches git's refresh hash (no `HASH_WRITE_OBJECT`),
+    /// so `core.safecrlf=true` does not reject mixed line endings; any per-path
+    /// failure skips that path instead of aborting the rest of the refresh.
+    private static func filteredOID(repo: OpaquePointer, path: String, location: String) -> git_oid? {
+        var filters: OpaquePointer?
+        let loaded = git_filter_list_load(
+            &filters, repo, nil, path, GIT_FILTER_TO_ODB, UInt32(GIT_FILTER_ALLOW_UNSAFE.rawValue))
+        guard loaded >= 0 else {
+            git_error_clear()
+            return nil
+        }
+        defer { git_filter_list_free(filters) }
+        var oid = git_oid()
+        guard let filters else {
+            let rc = location.withCString { git_odb_hashfile(&oid, $0, GIT_OBJECT_BLOB) }
+            if rc != 0 {
+                git_error_clear()
+                return nil
+            }
+            return oid
+        }
+        var buffer = git_buf()
+        let applied = git_filter_list_apply_to_file(&buffer, filters, repo, path)
+        defer { git_buf_dispose(&buffer) }
+        guard applied == 0 else {
+            git_error_clear()
+            return nil
+        }
+        let hashed: Int32
+        if let ptr = buffer.ptr, buffer.size > 0 {
+            hashed = git_odb_hash(&oid, ptr, buffer.size, GIT_OBJECT_BLOB)
+        } else {
+            var byte: UInt8 = 0
+            hashed = git_odb_hash(&oid, &byte, 0, GIT_OBJECT_BLOB)
+        }
+        if hashed != 0 {
+            git_error_clear()
+            return nil
+        }
+        return oid
     }
 }

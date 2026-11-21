@@ -298,6 +298,112 @@ struct GitClientRefreshIndexTests {
         #expect(try support.runGit(["ls-files", "-s"], in: dir) == staged)
     }
 
+    @Test("mixed LF/CRLF endings with autocrlf and safecrlf match git refresh without aborting")
+    func unsafeLineEndingsDoNotAbortRefresh() async throws {
+        let dir = try support.makeRepo()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try support.runGit(["config", "core.autocrlf", "true"], in: dir)
+        try support.runGit(["config", "core.safecrlf", "false"], in: dir)
+        try Data("line1\r\nline2\n".utf8).write(to: dir.appendingPathComponent("mixed.txt"))
+        try Data("hello\r\n".utf8).write(to: dir.appendingPathComponent("plain.txt"))
+        try support.runGit(["add", "mixed.txt", "plain.txt"], in: dir)
+        try support.runGit(["commit", "-m", "mixed line endings"], in: dir)
+        try support.runGit(["config", "core.safecrlf", "true"], in: dir)
+
+        let client = GitClient(workingDirectory: dir)
+        let indexFile = dir.appendingPathComponent(".git/index")
+        let staged = try support.runGit(["ls-files", "-s"], in: dir)
+        let objects = try support.runGit(["count-objects", "-v"], in: dir)
+
+        // 1. Both files only have stale stats; mixed.txt has mixed LF/CRLF that cleans to HEAD.
+        // Keep mtimes strictly older than snapshot()'s index mtime so neither git nor libgit2
+        // smudges the untouched entry as racy when writing the index.
+        let firstMtime = past.addingTimeInterval(-60)
+        try setMtime(firstMtime, for: "mixed.txt", in: dir)
+        try setMtime(firstMtime, for: "plain.txt", in: dir)
+        let beforeTouched = try snapshot(in: dir)
+        #expect(try dirtyPaths(in: dir) == ["mixed.txt", "plain.txt"])
+
+        try await client.refreshIndex(paths: ["mixed.txt", "plain.txt"])
+        let refreshedTouched = try dirtyPaths(in: dir)
+        let touchedStats = try statSummary(["mixed.txt", "plain.txt"], in: dir)
+        #expect(refreshedTouched.isEmpty)
+        #expect(try Data(contentsOf: indexFile) != beforeTouched.0)
+        #expect(try support.runGit(["ls-files", "-s"], in: dir) == staged)
+        #expect(try support.runGit(["count-objects", "-v"], in: dir) == objects)
+
+        try beforeTouched.0.write(to: indexFile)
+        let oracleTouched = try runGitCaptured(["update-index", "-q", "--refresh"], in: dir)
+        #expect(oracleTouched.status == 0)
+        #expect(oracleTouched.stdout.isEmpty)
+        #expect(oracleTouched.stderr.isEmpty)
+        let oracleTouchedDirty = try dirtyPaths(in: dir)
+        let oracleTouchedStats = try statSummary(["mixed.txt", "plain.txt"], in: dir)
+        #expect(oracleTouchedDirty == refreshedTouched)
+        #expect(oracleTouchedStats == touchedStats)
+
+        // 2. mixed.txt now also differs in content while plain.txt is merely touched.
+        try Data("line1\r\nchanged\n".utf8).write(to: dir.appendingPathComponent("mixed.txt"))
+        let secondMtime = past.addingTimeInterval(-120)
+        try setMtime(secondMtime, for: "mixed.txt", in: dir)
+        try setMtime(secondMtime, for: "plain.txt", in: dir)
+        let beforeModified = try snapshot(in: dir)
+        #expect(try dirtyPaths(in: dir) == ["mixed.txt", "plain.txt"])
+
+        try await client.refreshIndex(paths: ["mixed.txt", "plain.txt"])
+        let refreshedModified = try dirtyPaths(in: dir)
+        let modifiedStats = try statSummary(["mixed.txt", "plain.txt"], in: dir)
+        #expect(refreshedModified == ["mixed.txt"])
+        #expect(try Data(contentsOf: indexFile) != beforeModified.0)
+        #expect(try support.runGit(["ls-files", "-s"], in: dir) == staged)
+        #expect(try support.runGit(["count-objects", "-v"], in: dir) == objects)
+
+        try beforeModified.0.write(to: indexFile)
+        let oracleModified = try runGitCaptured(["update-index", "-q", "--refresh"], in: dir)
+        #expect(oracleModified.status == 0)
+        #expect(oracleModified.stdout.isEmpty)
+        #expect(oracleModified.stderr.isEmpty)
+        let oracleModifiedDirty = try dirtyPaths(in: dir)
+        let oracleModifiedStats = try statSummary(["mixed.txt", "plain.txt"], in: dir)
+        #expect(oracleModifiedDirty == refreshedModified)
+        #expect(oracleModifiedStats == modifiedStats)
+    }
+
+    private func setMtime(_ date: Date, for name: String, in dir: URL) throws {
+        try FileManager.default.setAttributes(
+            [.modificationDate: date], ofItemAtPath: dir.appendingPathComponent(name).path)
+    }
+
+    private func statSummary(_ paths: [String], in dir: URL) throws -> [String] {
+        try support.runGit(["ls-files", "--debug", "--"] + paths, in: dir)
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { !$0.hasPrefix("  ") || $0.hasPrefix("  mtime:") || $0.hasPrefix("  size:") }
+    }
+
+    private func dirtyPaths(in dir: URL) throws -> [String] {
+        try support.runGit(["diff-index", "--name-only", "HEAD", "--"], in: dir)
+            .split(separator: "\n").map(String.init)
+    }
+
+    private func runGitCaptured(
+        _ args: [String], in dir: URL
+    ) throws -> (status: Int32, stdout: String, stderr: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + args
+        process.currentDirectoryURL = dir
+        let out = Pipe()
+        let err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+        try process.run()
+        process.waitUntilExit()
+        let stdout = String(decoding: (try? out.fileHandleForReading.readToEnd()) ?? Data(), as: UTF8.self)
+        let stderr = String(decoding: (try? err.fileHandleForReading.readToEnd()) ?? Data(), as: UTF8.self)
+        return (process.terminationStatus, stdout, stderr)
+    }
+
     private func filteredRepo() throws -> URL {
         let dir = try support.makeRepo()
         try Data("pointer(X)\n".utf8).write(to: dir.appendingPathComponent("f"))
