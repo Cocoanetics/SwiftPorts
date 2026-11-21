@@ -266,7 +266,6 @@ public final class LFSTransferQueue: Sendable {
         switch direction {
         case .download: try await download(object, action: action, success: success)
         case .upload: try await upload(object, action: action, success: success)
-        case .checkout: break
         }
     }
 

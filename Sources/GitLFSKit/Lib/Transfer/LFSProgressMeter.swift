@@ -21,11 +21,16 @@ import Android
 /// opened for appending, that receives one line per chunk of transferred bytes.
 /// Counters wrap rather than trap, as Go's atomic adds do.
 final class LFSProgressMeter: @unchecked Sendable {
+    /// Progress also covers local checkout, which is not a batch API operation.
+    enum Direction: String {
+        case download, upload, checkout
+    }
+
     static let throttle: TimeInterval = 0.2
     /// Go's zero `time.Time`, where `lastAvg` starts.
     private static let zeroTime = Date(timeIntervalSince1970: -62_135_596_800)
 
-    let direction: LFSTransferDirection
+    let direction: Direction
     private let display: Bool
     private let logsProgress: Bool
     private let width: Int
@@ -48,7 +53,7 @@ final class LFSProgressMeter: @unchecked Sendable {
     private var lastUpdate: String?
 
     init(
-        direction: LFSTransferDirection, display: Bool, logsProgress: Bool, width: Int = 80,
+        direction: Direction, display: Bool, logsProgress: Bool, width: Int = 80,
         log: FileHandle? = nil, now: @escaping @Sendable () -> Date = { Date() },
         write: @escaping @Sendable (String) -> Void
     ) {
@@ -63,7 +68,7 @@ final class LFSProgressMeter: @unchecked Sendable {
 
     /// `buildProgressMeter` plus the logger's `ForceProgress` option.
     static func make(
-        direction: LFSTransferDirection, display: Bool, terminal: Bool,
+        direction: Direction, display: Bool, terminal: Bool,
         configuration: LFSConfiguration, environment: LFSTransferEnvironment
     ) async -> LFSProgressMeter {
         let forced = LFSConfiguration.bool(Shell.env("GIT_LFS_FORCE_PROGRESS"), fallback: false)

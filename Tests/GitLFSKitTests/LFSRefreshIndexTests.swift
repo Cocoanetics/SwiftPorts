@@ -41,10 +41,13 @@ extension LFSFilterTests {
                 #expect(try await made.client.status().isClean)
 
                 #if os(macOS) || os(Linux)
-                let oracle = LFSOracle()
-                defer { try? FileManager.default.removeItem(at: oracle.root) }
-                let diffQuiet = try oracle.run(["diff-index", "--quiet", "HEAD", "--"], in: made.directory)
-                #expect(diffQuiet.status == 0, "git diff-index --quiet HEAD failed: \(diffQuiet.err)")
+                // Keep the SDK assertions above active without the optional reference binary.
+                if LFSOracle.isVersion371Available {
+                    let oracle = LFSOracle()
+                    defer { try? FileManager.default.removeItem(at: oracle.root) }
+                    let diffQuiet = try oracle.run(["diff-index", "--quiet", "HEAD", "--"], in: made.directory)
+                    #expect(diffQuiet.status == 0, "git diff-index --quiet HEAD failed: \(diffQuiet.err)")
+                }
                 #endif
             }
         }

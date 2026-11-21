@@ -41,27 +41,6 @@ extension GitClient {
         }
     }
 
-    /// Evaluate the `filter` git attribute for each repository-relative path,
-    /// returning those entries whose `filter` attribute has a string value
-    /// (for example `"lfs"`).
-    public func filterAttribute(for paths: [String]) async throws -> [String: String] {
-        var seen = Set<String>()
-        let unique = paths.filter {
-            RefreshIndexWorktree.isValidRelativePath($0) && seen.insert($0).inserted
-        }
-        guard !unique.isEmpty else { return [:] }
-        let attrURLs = try await withFilterMetadataRepository { repository in
-            try Self.attributeAuthorizationURLs(repository, paths: unique)
-        }
-        for url in attrURLs {
-            try await Shell.authorize(url)
-        }
-        let noSystem = Shell.env("GIT_ATTR_NOSYSTEM") == "1"
-        return try await withFilterMetadataRepository { repository in
-            try Self.readFilterAttributes(repository, paths: unique, noSystem: noSystem)
-        }
-    }
-
     private static func refreshRepositoryHandle(_ repository: Repository) throws -> OpaquePointer {
         guard let repo = handle(of: repository) else {
             throw Libgit2Error(
@@ -142,60 +121,6 @@ extension GitClient {
         RefreshIndexWorktree.apply(file, to: &mutable.pointee)
         mutable.pointee.flags_extended |= UInt16(GIT_INDEX_ENTRY_UPTODATE.rawValue)
         return true
-    }
-
-    private static func attributeAuthorizationURLs(
-        _ repository: Repository, paths: [String]
-    ) throws -> [URL] {
-        let repo = try refreshRepositoryHandle(repository)
-        var urls: [URL] = []
-        var seen = Set<URL>()
-        func addIfPresent(_ url: URL) {
-            let clean = url.standardizedFileURL
-            guard seen.insert(clean).inserted,
-                  FileManager.default.fileExists(atPath: clean.path) else { return }
-            urls.append(clean)
-        }
-        if let gitDir = git_repository_path(repo) {
-            let info = URL(fileURLWithPath: String(cString: gitDir))
-                .appendingPathComponent("info/attributes")
-            addIfPresent(info)
-        }
-        if let workdir = git_repository_workdir(repo) {
-            let root = URL(fileURLWithPath: String(cString: workdir))
-            addIfPresent(root.appendingPathComponent(".gitattributes"))
-            for path in paths {
-                var current = (path as NSString).deletingLastPathComponent
-                while !current.isEmpty && current != "." {
-                    addIfPresent(root.appendingPathComponent(current).appendingPathComponent(".gitattributes"))
-                    let parent = (current as NSString).deletingLastPathComponent
-                    if parent == current { break }
-                    current = parent
-                }
-            }
-        }
-        return urls
-    }
-
-    private static func readFilterAttributes(
-        _ repository: Repository, paths: [String], noSystem: Bool
-    ) throws -> [String: String] {
-        let repo = try refreshRepositoryHandle(repository)
-        var flags = UInt32(GIT_ATTR_CHECK_FILE_THEN_INDEX)
-        if noSystem { flags |= UInt32(GIT_ATTR_CHECK_NO_SYSTEM) }
-        var result: [String: String] = [:]
-        for path in paths {
-            var value: UnsafePointer<CChar>?
-            let rc = path.withCString { git_attr_get(&value, repo, flags, $0, "filter") }
-            guard rc == 0 else {
-                git_error_clear()
-                continue
-            }
-            if let value, git_attr_value(value) == GIT_ATTR_VALUE_STRING {
-                result[path] = String(cString: value)
-            }
-        }
-        return result
     }
 }
 
