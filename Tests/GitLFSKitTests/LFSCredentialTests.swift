@@ -72,7 +72,7 @@ private final class CredentialCalls: @unchecked Sendable {
     func record() { lock.lock(); count += 1; lock.unlock() }
 }
 
-@Suite("LFS credentials", .serialized)
+@Suite("LFS credentials", .serialized, .timeLimit(.minutes(2)))
 struct LFSCredentialTests {
     let host = IsolatedLFSHost()
     private let batch = URL(string: "https://example.com/repo.git/info/lfs/objects/batch")!

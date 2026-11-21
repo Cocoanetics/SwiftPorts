@@ -7,7 +7,7 @@ import GitLFSTestSupport
 @testable import GitLFSKit
 
 extension LFSFilterTests {
-    @Suite("LFS checkout, clone and status integration")
+    @Suite("LFS checkout, clone and status integration", .timeLimit(.minutes(2)))
     struct LFSFilterIntegrationTests {
         @Test("failed stash restoration retains the unstaged edit and can be retried",
                arguments: ["pop", "branch"])

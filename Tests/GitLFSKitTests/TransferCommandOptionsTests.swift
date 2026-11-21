@@ -5,7 +5,7 @@ import Testing
 @_spi(GitLFSKit) import SwiftGit
 @testable import GitLFSKit
 
-@Suite("LFS transfer command options")
+@Suite("LFS transfer command options", .timeLimit(.minutes(2)))
 struct TransferCommandOptionsTests {
     let first = Data("first object\n".utf8)
     let second = Data("second object\n".utf8)

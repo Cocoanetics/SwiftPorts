@@ -28,6 +28,8 @@ public enum LFSTestFault: Sendable, Equatable {
     case wrongSHA256(oid: String)
     /// The next `PUT` of `oid` is answered with this status, without storing it.
     case putStatus(oid: String, code: Int)
+    /// The next `PUT` of `oid` is answered with this redirect status and `Location`, without storing it.
+    case putRedirect(oid: String, code: Int, location: String)
 
     /// Token written on the ``LFSRecordedRequest`` this fault shapes.
     public var logToken: String {
@@ -50,7 +52,7 @@ public enum LFSTestFault: Sendable, Equatable {
             return "size"
         case .wrongSHA256:
             return "sha256"
-        case .putStatus(_, let code):
+        case .putStatus(_, let code), .putRedirect(_, let code, _):
             return String(code)
         }
     }
@@ -60,7 +62,7 @@ public enum LFSTestFault: Sendable, Equatable {
         case .unauthorized, .tooManyRequests, .serverError, .repeatingServerError:
             return nil
         case .objectStatus(let oid, _), .noAction(let oid), .expired(let oid),
-             .wrongSize(let oid), .wrongSHA256(let oid), .putStatus(let oid, _):
+             .wrongSize(let oid), .wrongSHA256(let oid), .putStatus(let oid, _), .putRedirect(let oid, _, _):
             return oid
         }
     }
@@ -69,7 +71,7 @@ public enum LFSTestFault: Sendable, Equatable {
         switch self {
         case .unauthorized, .tooManyRequests, .serverError, .repeatingServerError:
             return true
-        case .objectStatus, .noAction, .expired, .wrongSize, .wrongSHA256, .putStatus:
+        case .objectStatus, .noAction, .expired, .wrongSize, .wrongSHA256, .putStatus, .putRedirect:
             return false
         }
     }

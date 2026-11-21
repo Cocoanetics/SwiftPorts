@@ -26,4 +26,23 @@ struct HTTPContentTypeTests {
     func sniff(sample: (Data, String)) {
         #expect(HTTPContentType.detect(sample.0) == sample.1)
     }
+
+    @Test("upload preflight preserves the 512-byte sniff and disabled detection", arguments: samples)
+    func uploadPreflight(sample: (Data, String)) throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try sample.0.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let object = LFSBatchObject(oid: String(repeating: "a", count: 64), size: Int64(sample.0.count))
+        #expect(try LFSTransferQueue.uploadContentType(file, object: object, detect: true) == sample.1)
+        #expect(try LFSTransferQueue.uploadContentType(file, object: object, detect: false)
+            == "application/octet-stream")
+        let corrupt = LFSBatchObject(oid: object.oid, size: object.size + 1, name: "a.dat")
+        do {
+            _ = try LFSTransferQueue.uploadContentType(file, object: corrupt, detect: false)
+            Issue.record("Disabling Content-Type detection must not bypass size validation")
+        } catch let error as LFSTransferError {
+            #expect(!error.retry)
+            #expect(error.message == "corrupt object: a.dat (\(object.oid))")
+        }
+    }
 }

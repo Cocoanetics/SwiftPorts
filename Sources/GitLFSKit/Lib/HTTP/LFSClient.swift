@@ -250,6 +250,16 @@ public final class LFSClient: @unchecked Sendable {
         guard var urlRequest = URLRequest(httpRequest: request) else {
             throw LFSClientError("invalid URL: \(request.url?.absoluteString ?? "")")
         }
+        #if os(Windows)
+        // swiftlint:disable:next todo
+        // TODO: Remove alongside the transfer switch when the toolchain fixes
+        // https://github.com/swiftlang/swift-corelibs-foundation/issues/5532
+        if request.method == .put, let body, LFSCurlUpload.usesDefaultProtocols(session.configuration) {
+            let result = try await LFSCurlUpload(stream: LFSTransferStream()).execute(
+                urlRequest, body: body, configuration: session.configuration)
+            return (result.body, result.response)
+        }
+        #endif
         let data: Data
         let response: URLResponse
         switch body {
