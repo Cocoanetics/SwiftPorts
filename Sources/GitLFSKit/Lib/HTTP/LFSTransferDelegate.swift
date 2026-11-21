@@ -18,6 +18,11 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
     private var failure: Error?
     private var accepted = false
     private var uploadFile: URL?
+    #if os(Windows)
+    // Temporary diagnostics for #243; removed after the Windows CI reproduction.
+    private var tracesUpload = false
+    private var uploadTraceID = ""
+    #endif
 
     init(stream: LFSTransferStream) { self.stream = stream }
 
@@ -29,6 +34,22 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
                 self.continuation = continuation
                 let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
                 var request = request
+                #if os(Windows)
+                tracesUpload = request.httpMethod == "PUT"
+                    && (Int64(request.value(forHTTPHeaderField: "Content-Length") ?? "") ?? 0) >= 1_000_000
+                if tracesUpload {
+                    uploadTraceID = String(request.url?.lastPathComponent.suffix(12) ?? "")
+                    let kind: String
+                    switch body {
+                    case .file: kind = "file"
+                    case .stream: kind = "stream"
+                    case .data: kind = "data"
+                    case nil: kind = "none"
+                    }
+                    let length = request.value(forHTTPHeaderField: "Content-Length") ?? "unset"
+                    print("[LFS #243 client \(uploadTraceID)] starting PUT body=\(kind) length=\(length)")
+                }
+                #endif
                 let task: URLSessionTask
                 switch body {
                 case .file(let url):
@@ -84,6 +105,9 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
             return
         }
         self.response = http
+        #if os(Windows)
+        if tracesUpload { print("[LFS #243 client \(uploadTraceID)] response status=\(http.statusCode)") }
+        #endif
         accepted = stream.accepts(http)
         do {
             if accepted, let destination = stream.destination {
@@ -124,6 +148,12 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
         _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
         totalBytesSent: Int64, totalBytesExpectedToSend: Int64
     ) {
+        #if os(Windows)
+        if tracesUpload {
+            print("[LFS #243 client \(uploadTraceID)] sent=\(totalBytesSent) delta=\(bytesSent)"
+                + " expected=\(totalBytesExpectedToSend)")
+        }
+        #endif
         stream.progress?(totalBytesSent, bytesSent)
     }
 
@@ -131,10 +161,19 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
         _ session: URLSession, task: URLSessionTask,
         needNewBodyStream completionHandler: @escaping (InputStream?) -> Void
     ) {
+        #if os(Windows)
+        if tracesUpload { print("[LFS #243 client \(uploadTraceID)] needNewBodyStream file=\(uploadFile != nil)") }
+        #endif
         completionHandler(uploadFile.flatMap { InputStream(url: $0) })
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        #if os(Windows)
+        if tracesUpload {
+            let code = (error as NSError?)?.code ?? 0
+            print("[LFS #243 client \(uploadTraceID)] completed sent=\(task.countOfBytesSent) errorCode=\(code)")
+        }
+        #endif
         do { try file?.close() } catch { failure = failure ?? error }
         file = nil
         if let error = failure ?? error {

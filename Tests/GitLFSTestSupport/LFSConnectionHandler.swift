@@ -10,6 +10,10 @@ final class LFSConnectionHandler: ChannelInboundHandler {
     private let core: LFSServerCore
     private var head: HTTPRequestHead?
     private var body = Data()
+    #if os(Windows)
+    private var tracesUpload = false
+    private var uploadTraceID = ""
+    #endif
 
     init(core: LFSServerCore) {
         self.core = core
@@ -20,14 +24,31 @@ final class LFSConnectionHandler: ChannelInboundHandler {
         case .head(let request):
             head = request
             body.removeAll(keepingCapacity: true)
+            #if os(Windows)
+            tracesUpload = request.method == .PUT
+                && (Int64(request.headers.first(name: "content-length") ?? "") ?? 0) >= 1_000_000
+            if tracesUpload {
+                uploadTraceID = String(request.uri.suffix(12))
+                let expect = request.headers.first(name: "expect") ?? "unset"
+                print("[LFS #243 server \(uploadTraceID)] PUT head expect=\(expect)")
+            }
+            #endif
             if expectsContinue(request) {
                 writeContinue(context: context, version: request.version)
             }
         case .body(let buffer):
             body.append(contentsOf: buffer.readableBytesView)
+            #if os(Windows)
+            if tracesUpload {
+                print("[LFS #243 server \(uploadTraceID)] read=\(body.count) chunk=\(buffer.readableBytes)")
+            }
+            #endif
         case .end:
             guard let request = head else { return }
             head = nil
+            #if os(Windows)
+            if tracesUpload { print("[LFS #243 server \(uploadTraceID)] PUT end read=\(body.count)") }
+            #endif
             let payload = body
             body.removeAll(keepingCapacity: true)
             respond(request, body: payload, context: context)

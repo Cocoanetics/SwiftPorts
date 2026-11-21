@@ -84,11 +84,32 @@ struct LFSUploadObjectsTests {
         }
     }
 
-    // Both tests send a 1 MB body to the in-process server so URLSession
-    // reports its sent bytes. On Windows that upload never reaches the server
-    // (CI job 136696274915: no PUT recorded after 576 s); smaller uploads work.
-    // SwiftPorts #243 tracks reproducing and fixing it, then lifting this skip.
-    #if !os(Windows)
+    @Test("a plain 1 MB PUT completes without a retry or authentication challenge",
+          .timeLimit(.minutes(1)), arguments: ["file", "stream", "data"])
+    func largeUploadBody(kind: String) async throws {
+        let large = Data(repeating: try #require(kind.utf8.first), count: 1_000_000)
+        try await LFSTestServer.withServer { server in
+            try await LFSServerRepository.run(server) { repo in
+                let file = repo.directory.appendingPathComponent("large.bin")
+                try large.write(to: file)
+                let body: LFSRequestBody
+                switch kind {
+                case "file": body = .file(file)
+                case "stream": body = .stream(try #require(InputStream(url: file)))
+                default: body = .data(large)
+                }
+                let url = try #require(URL(string: server.endpoint.absoluteString + "/objects/" + oid(large)))
+                var request = HTTPRequest(method: .put, url: url)
+                request.headerFields[.contentLength] = String(large.count)
+                let result = try await repo.client.transfer(
+                    request, body: body, operation: "upload", remote: nil, authenticated: true)
+                #expect(result.status == 200)
+                #expect(server.requests().filter { $0.method == "PUT" }.map(\.status) == [200])
+                #expect(server.bytes(for: oid(large)) == large)
+            }
+        }
+    }
+
     @Test("a failed PUT takes back its bytes, so the retry is counted once", .timeLimit(.minutes(1)))
     func retriedUploadProgress() async throws {
         let large = Data(repeating: 0x61, count: 1_000_000)
@@ -100,7 +121,9 @@ struct LFSUploadObjectsTests {
                 let result = try await repo.uploadObjects(for: [update(tip)], git: repo.git)
                 #expect(result.status == 0)
                 #expect(result.stdout.hasPrefix("Uploading LFS objects: 100% (1/1), 1.0 MB | "))
-                #expect(server.requests().filter { $0.method == "PUT" }.map(\.status) == [503, 200])
+                let puts = server.requests().filter { $0.method == "PUT" }
+                #expect(puts.map(\.status) == [503, 200])
+                #expect(puts.allSatisfy { $0.requestBody == large })
                 #expect(server.bytes(for: oid(large)) == large)
             }
         }
@@ -125,14 +148,15 @@ struct LFSUploadObjectsTests {
                     request, body: .file(file), operation: "upload", remote: nil, authenticated: false,
                     stream: LFSTransferStream(progress: { _, delta in counted.withLock { $0 += delta } }))
                 #expect(result.status == 200)
-                #expect(server.requests().filter { $0.method == "PUT" }.map(\.status) == [401, 200])
+                let puts = server.requests().filter { $0.method == "PUT" }
+                #expect(puts.map(\.status) == [401, 200])
+                #expect(puts.allSatisfy { $0.requestBody == large })
+                #expect(server.bytes(for: oid(large)) == large)
                 // Only the first attempt reports bytes, as git-lfs's resend has no callback.
                 #expect(counted.withLock { $0 } <= Int64(large.count))
             }
         }
     }
-    #endif
-
     #if !os(Windows)
     @Test("an object that can't be statted is an error, even with lfs.allowincompletepush")
     func unreadableObject() async throws {
