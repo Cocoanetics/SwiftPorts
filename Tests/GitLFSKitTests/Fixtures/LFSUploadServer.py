@@ -1,7 +1,7 @@
 """Independent URLSession PUT receiver: python LFSUploadServer.py [ready-file].
 
 Uses only Python's standard library; no NIO or Swift HTTP implementation.
-Logs framing and every body read, including partial uploads that time out.
+Returns the wire headers, body count and digest for transport assertions.
 """
 
 import hashlib
@@ -16,12 +16,14 @@ class PutHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def handle_expect_100(self):
-        print("sending 100 Continue", flush=True)
         return super().handle_expect_100()
+
+    def do_GET(self):
+        self.respond(dict((key.lower(), value) for key, value in self.headers.items()),
+                     0, hashlib.sha256(), 200)
 
     def do_PUT(self):
         headers = dict((key.lower(), value) for key, value in self.headers.items())
-        print("headers=" + json.dumps(headers, sort_keys=True), flush=True)
         self.connection.settimeout(5)
         received = 0
         digest = hashlib.sha256()
@@ -35,7 +37,6 @@ class PutHandler(http.server.BaseHTTPRequestHandler):
                 count -= len(chunk)
                 received += len(chunk)
                 digest.update(chunk)
-                print("received=" + str(received), flush=True)
 
         status = 200
         try:
@@ -58,12 +59,18 @@ class PutHandler(http.server.BaseHTTPRequestHandler):
                         raise ValueError("invalid chunk terminator")
             else:
                 read_body(int(headers["content-length"]))
-        except (socket.timeout, EOFError, ValueError, KeyError) as error:
-            print("body error: " + str(error), flush=True)
+        except (socket.timeout, EOFError, ValueError, KeyError):
             status = 408
-        response = json.dumps({"headers": headers, "received": received, "sha256": digest.hexdigest()}).encode()
-        print("completed status=" + str(status) + " received=" + str(received), flush=True)
+        self.respond(headers, received, digest, status)
+
+    def respond(self, headers, received, digest, status):
+        response = json.dumps({"headers": headers, "received": received, "sha256": digest.hexdigest(),
+                               "method": self.command}).encode()
+        if self.path in ("/redirect307", "/redirect303"):
+            status = int(self.path[-3:])
         self.send_response(status)
+        if status in (303, 307):
+            self.send_header("Location", "/target")
         self.send_header("Content-Length", str(len(response)))
         self.send_header("Content-Type", "application/json")
         self.send_header("Connection", "close")

@@ -45,7 +45,7 @@ public final class LFSTestServer: @unchecked Sendable {
     }
 
     /// Bind `127.0.0.1` on an ephemeral port and serve until ``shutdown()``.
-    public static func start(trace: (@Sendable (String) -> Void)? = nil) async throws -> LFSTestServer {
+    public static func start() async throws -> LFSTestServer {
         let core = LFSServerCore()
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let bootstrap = ServerBootstrap(group: group)
@@ -54,7 +54,7 @@ public final class LFSTestServer: @unchecked Sendable {
             .childChannelInitializer { channel in
                 channel.eventLoop.makeCompletedFuture {
                     try channel.pipeline.syncOperations.configureHTTPServerPipeline()
-                    try channel.pipeline.syncOperations.addHandler(LFSConnectionHandler(core: core, trace: trace))
+                    try channel.pipeline.syncOperations.addHandler(LFSConnectionHandler(core: core))
                 }
             }
         let channel: Channel
@@ -76,10 +76,9 @@ public final class LFSTestServer: @unchecked Sendable {
 
     /// Start a server, run `body`, then shut the server down.
     public static func withServer<T: Sendable>(
-        trace: (@Sendable (String) -> Void)? = nil,
         _ body: (LFSTestServer) async throws -> T
     ) async throws -> T {
-        let server = try await start(trace: trace)
+        let server = try await start()
         do {
             let value = try await body(server)
             await server.shutdown()

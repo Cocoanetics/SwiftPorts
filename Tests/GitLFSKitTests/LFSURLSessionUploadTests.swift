@@ -7,7 +7,7 @@ import Testing
 import FoundationNetworking
 #endif
 
-@Suite("LFS URLSession upload transport")
+@Suite("LFS platform upload transport")
 struct LFSURLSessionUploadTests {
     @Test("1 MB uploads preserve framing, progress and HTTP errors",
           .timeLimit(.minutes(1)), arguments: ["file", "data", "stream"], [200, 503, 401])
@@ -17,7 +17,7 @@ struct LFSURLSessionUploadTests {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try bytes.write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
-        try await LFSTestServer.withServer(trace: { print("NIO \(kind)/\(status): \($0)") }, { server in
+        try await LFSTestServer.withServer { server in
             if status != 200 { server.inject(.putStatus(oid: oid, code: status)) }
             let url = try #require(URL(string: server.endpoint.absoluteString + "/objects/" + oid))
             var request = URLRequest(url: url)
@@ -56,7 +56,7 @@ struct LFSURLSessionUploadTests {
                 #expect(put.requestHeaders["content-length"] == String(bytes.count))
                 #expect(put.requestHeaders["transfer-encoding"] == nil)
             }
-        })
+        }
     }
 
     @Test("cancellation interrupts an upload waiting for its response", .timeLimit(.minutes(1)))

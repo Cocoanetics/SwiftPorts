@@ -8,13 +8,11 @@ final class LFSConnectionHandler: ChannelInboundHandler {
     typealias OutboundOut = HTTPServerResponsePart
 
     private let core: LFSServerCore
-    private let trace: (@Sendable (String) -> Void)?
     private var head: HTTPRequestHead?
     private var body = Data()
 
-    init(core: LFSServerCore, trace: (@Sendable (String) -> Void)?) {
+    init(core: LFSServerCore) {
         self.core = core
-        self.trace = trace
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -22,31 +20,18 @@ final class LFSConnectionHandler: ChannelInboundHandler {
         case .head(let request):
             head = request
             body.removeAll(keepingCapacity: true)
-            trace?("head \(request.method) \(request.uri) headers=\(request.headers)")
             if expectsContinue(request) {
                 writeContinue(context: context, version: request.version)
             }
         case .body(let buffer):
             body.append(contentsOf: buffer.readableBytesView)
-            trace?("body chunk=\(buffer.readableBytes) received=\(body.count)")
         case .end:
             guard let request = head else { return }
             head = nil
             let payload = body
-            trace?("end received=\(payload.count)")
             body.removeAll(keepingCapacity: true)
             respond(request, body: payload, context: context)
         }
-    }
-
-    func channelReadComplete(context: ChannelHandlerContext) {
-        trace?("read complete received=\(body.count)")
-        context.fireChannelReadComplete()
-    }
-
-    func errorCaught(context: ChannelHandlerContext, error: Error) {
-        trace?("error \(error)")
-        context.fireErrorCaught(error)
     }
 
     /// Later object transfers under an overlap hold stay unanswered until enough
@@ -85,10 +70,7 @@ final class LFSConnectionHandler: ChannelInboundHandler {
     /// would then be rejected by `HTTPServerPipelineHandler`.
     private func writeContinue(context: ChannelHandlerContext, version: HTTPVersion) {
         let response = HTTPResponseHead(version: version, status: .continue)
-        let trace = trace
-        context.writeAndFlush(wrapOutboundOut(.head(response))).whenComplete { result in
-            trace?("100 Continue flush: \(result)")
-        }
+        context.writeAndFlush(wrapOutboundOut(.head(response)), promise: nil)
     }
 
     private func lowercase(_ headers: HTTPHeaders) -> [String: String] {

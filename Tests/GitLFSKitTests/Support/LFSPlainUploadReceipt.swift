@@ -3,4 +3,5 @@ struct LFSPlainUploadReceipt: Decodable {
     var headers: [String: String]
     var received: Int
     var sha256: String
+    var method: String
 }
