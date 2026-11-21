@@ -405,4 +405,28 @@ struct GitScannerTests {
             #expect(pointers.first?.pointer == Self.first)
         }
     }
+
+    @Test("scanRefs walks tree and blob roots, and excludes what excluded roots reach")
+    func refsNonCommitRoots() async throws {
+        try await withRepo { dir, client in
+            var directBlob = try await standaloneBlob(client, pointer: Self.first)
+            var nestedBlob = try await standaloneBlob(client, pointer: Self.second)
+            var directTree = try await standaloneTree(client, blob: &nestedBlob)
+            try await addReference(client, name: "refs/tags/blob", target: &directBlob)
+            try await addReference(client, name: "refs/tags/data", target: &directTree)
+            let scanner = GitScanner(client: client)
+
+            let tree = try await scanner.scanRefs(include: ["refs/tags/data"])
+            #expect(tree.map(\.name) == ["nested.dat"])
+            #expect(tree.map(\.pointer) == [Self.second])
+            let blob = try await scanner.scanRefs(include: ["refs/tags/blob"])
+            #expect(blob.map(\.pointer) == [Self.first])
+
+            // A commit whose tree holds the same blob is excluded by the tree root.
+            try write(Self.second.encoded, "nested.dat", in: dir)
+            let head = try await commit(client)
+            #expect(try await scanner.scanRefs(include: [head], exclude: ["refs/tags/data"]).isEmpty)
+            #expect(try await scanner.scanRefs(include: ["refs/tags/data"], exclude: [head]).isEmpty)
+        }
+    }
 }

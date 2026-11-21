@@ -49,9 +49,19 @@ public struct GitScanner: Sendable {
     }
 
     /// Unique Git blobs in rev-list order, subtracting all objects reachable
-    /// from excluded commits. A filtered path still consumes its blob OID.
+    /// from the excluded refs. A filtered path still consumes its blob OID.
+    /// As with `rev-list --objects`, a ref may name (or tag) a tree or blob
+    /// as well as a commit; those roots are walked before commit history.
     public func scanRefs(include: [String], exclude: [String] = []) async throws -> [WrappedPointer] {
-        try await scanRefs(include: include, exclude: exclude, seen: []).pointers
+        let included = try await classify(include)
+        let excluded = try await classify(exclude)
+        var seen = try await reachable(from: excluded)
+        var result: [WrappedPointer] = []
+        try await scan(included, seen: &seen, into: &result)
+        if !included.commits.isEmpty {
+            result += try await scanHistory(include: included.commits, exclude: excluded.commits, seen: &seen)
+        }
+        return result
     }
 
     /// One history walk from all refs/ tips and HEAD (including detached HEAD).
@@ -69,14 +79,27 @@ public struct GitScanner: Sendable {
             _ = try await client.revList(starts: ["HEAD"])
         }
 
-        enum Root {
-            case tree(String)
-            case blob(String)
+        let roots = try await classify(targets)
+        var seen = Set<String>()
+        var result: [WrappedPointer] = []
+        try await scan(roots, seen: &seen, into: &result)
+        if !roots.commits.isEmpty {
+            result += try await scanHistory(include: roots.commits, exclude: [], seen: &seen)
         }
-        var roots: [Root] = []
-        var history: [String] = []
+        return result
+    }
+
+    /// Peels each target (`^{}` through every tag) and sorts it by kind.
+    private func classify(_ targets: [String]) async throws -> GitScanRoots {
+        var roots = GitScanRoots()
         var seenTargets = Set<String>()
         for target in targets {
+            // revList treats an unborn HEAD as empty and still throws for a
+            // missing or corrupt one; there is no object to classify.
+            if target == "HEAD", try await !client.canResolveRef(target) {
+                roots.commits.append(target)
+                continue
+            }
             var metadata = try await client.objectMetadata(of: target)
             if metadata.kind == .tag {
                 metadata = try await client.objectMetadata(of: target + "^{}")
@@ -84,19 +107,23 @@ public struct GitScanner: Sendable {
             guard seenTargets.insert(metadata.sha).inserted else { continue }
             switch metadata.kind {
             case .commit:
-                history.append(metadata.sha)
+                roots.commits.append(metadata.sha)
             case .tree:
-                roots.append(.tree(metadata.sha))
+                roots.roots.append(.tree(metadata.sha))
             case .blob:
-                roots.append(.blob(metadata.sha))
+                roots.roots.append(.blob(metadata.sha))
             case .tag:
                 break // `^{}` above peels through every tag.
             }
         }
+        return roots
+    }
 
-        var seen = Set<String>()
-        var result: [WrappedPointer] = []
-        for root in roots {
+    /// The pointers under tree and blob roots not yet `seen`.
+    private func scan(
+        _ roots: GitScanRoots, seen: inout Set<String>, into result: inout [WrappedPointer]
+    ) async throws {
+        for root in roots.roots {
             switch root {
             case .tree(let oid):
                 try await walkTree(oid) { oid, name in
@@ -108,22 +135,30 @@ public struct GitScanner: Sendable {
                 if let pointer = try await readPointer(oid, name: "") { result.append(pointer) }
             }
         }
-        if !history.isEmpty {
-            let scan = try await scanRefs(include: history, exclude: [], seen: seen)
-            result += scan.pointers
-        }
-        return result
     }
 
-    private func scanRefs(
-        include: [String], exclude: [String], seen initialSeen: Set<String>
-    ) async throws -> (pointers: [WrappedPointer], seen: Set<String>) {
-        var seen = initialSeen
-        if !exclude.isEmpty {
-            for commit in try await client.revList(starts: exclude) {
+    /// Every object reachable from excluded roots, trees and blobs included.
+    private func reachable(from roots: GitScanRoots) async throws -> Set<String> {
+        var seen = Set<String>()
+        for root in roots.roots {
+            switch root {
+            case .tree(let oid): try await walkTree(oid) { oid, _ in seen.insert(oid) }
+            case .blob(let oid): seen.insert(oid)
+            }
+        }
+        if !roots.commits.isEmpty {
+            for commit in try await client.revList(starts: roots.commits) {
                 try await walkTree(commit) { oid, _ in seen.insert(oid) }
             }
         }
+        return seen
+    }
+
+    /// `rev-list --objects` over commits: the trees of `include`'s history
+    /// not reached from `exclude`, skipping objects already `seen`.
+    private func scanHistory(
+        include: [String], exclude: [String], seen: inout Set<String>
+    ) async throws -> [WrappedPointer] {
         var result: [WrappedPointer] = []
         for commit in try await client.revList(starts: include, excludes: exclude) {
             try await walkTree(commit) { oid, name in
@@ -131,7 +166,7 @@ public struct GitScanner: Sendable {
                 if let pointer = try await readPointer(oid, name: name) { result.append(pointer) }
             }
         }
-        return (result, seen)
+        return result
     }
 
     private func walkTree(
