@@ -101,11 +101,23 @@ struct LFSUploadObjectsTests {
                 let url = try #require(URL(string: server.endpoint.absoluteString + "/objects/" + oid(large)))
                 var request = HTTPRequest(method: .put, url: url)
                 request.headerFields[.contentLength] = String(large.count)
-                let result = try await repo.client.transfer(
-                    request, body: body, operation: "upload", remote: nil, authenticated: true)
+                let messages = TransferTestLock<[String]>([])
+                let result = try await LFSTransferDelegate.$uploadDiagnostic.withValue({ message in
+                    messages.withLock { $0.append(message) }
+                    #if os(Windows)
+                    print(message)
+                    #endif
+                }, operation: {
+                    try await repo.client.transfer(
+                        request, body: body, operation: "upload", remote: nil, authenticated: true)
+                })
                 #expect(result.status == 200)
                 #expect(server.requests().filter { $0.method == "PUT" }.map(\.status) == [200])
                 #expect(server.bytes(for: oid(large)) == large)
+                let trace = messages.withLock { $0 }
+                #expect(trace.contains { $0.contains("starting PUT body=\(kind)") })
+                #expect(trace.contains { $0.contains("response status=200") })
+                #expect(trace.contains { $0.contains("completed sent=") && $0.hasSuffix("errorCode=0") })
             }
         }
     }
