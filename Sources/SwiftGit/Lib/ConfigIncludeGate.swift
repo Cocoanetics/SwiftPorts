@@ -87,7 +87,10 @@ extension GitClient {
     /// thrown). Without a sandbox nothing is gated. The shell's
     /// `GIT_CONFIG_*` plan is applied for the run, as ``isolated`` did.
     func isolatedGated<T>(deferFilterFailures: Bool = false, _ body: () throws -> T) async throws -> T {
-        guard filterContext == nil else { throw GitFilterOperationContext.Failure.unsupportedOperation }
+        if let filterContext {
+            guard borrowsIsolation else { throw GitFilterOperationContext.Failure.unsupportedOperation }
+            return try await filterContext.isolated(body)
+        }
         let plan = try await environmentConfig()
         let gate = ConfigIncludeGate(enforcing: Shell.current.sandbox != nil)
         while true {
