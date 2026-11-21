@@ -114,7 +114,9 @@ are not inherited by clones.
 preserve pointers even when the content is already cached. Optional single-shot
 smudge failures replay the original input. An optional process driver that exits
 during delayed checkout still fails with status 1 and Git's external-filter
-diagnostics. Required download failures report git-lfs's diagnostic
+diagnostics; clone adds `fatal: unable to checkout working tree` and exits 128.
+Required process-driver failures report the external-filter error before the
+path-specific fatal. Required download failures report git-lfs's diagnostic
 and fail checkout/clone with Git's fatal text and status 128; this is distinct
 from standalone `git-lfs smudge`'s status 2. `lfs.skipdownloaderrors` suppresses
 the failure and emits the canonical pointer; `GIT_LFS_SKIP_DOWNLOAD_ERRORS`

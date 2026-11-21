@@ -5,14 +5,19 @@ extension CLIError {
     init(filter error: GitFilterError, clone: Bool = false) {
         // convert.c quotes the clean driver's name, but not the smudge driver's.
         let driver = error.direction == .clean ? "'\(error.driver)'" : error.driver
-        var lines = ["fatal: \(error.path): \(error.direction) filter \(driver) failed"]
+        let fatal = "fatal: \(error.path): \(error.direction) filter \(driver) failed"
+        var lines = [fatal]
         var status: Int32 = 128
-        if let failure = error.underlying as? LFSFilterFailure, let command = failure.optionalProcessCommand {
-            lines = [
-                "error: external filter '\(command)' failed",
-                "error: external filter '\(command)' is not available anymore although not all paths have been filtered"
-            ]
-            status = 1
+        if let failure = error.underlying as? LFSFilterFailure, let command = failure.processCommand {
+            lines = ["error: external filter '\(command)' failed"]
+            if failure.required {
+                lines.append(fatal)
+            } else {
+                lines.append("error: external filter '\(command)' is not available anymore "
+                    + "although not all paths have been filtered")
+                if clone { lines.append("fatal: unable to checkout working tree") }
+                else { status = 1 }
+            }
         }
         if clone {
             lines += [

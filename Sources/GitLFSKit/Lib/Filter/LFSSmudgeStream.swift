@@ -63,7 +63,7 @@ final class LFSSmudgeStream: GitFilterStream {
             reader = opened
         } catch {
             let failure = LFSFilterFailure(path: path, pointer: pointer, underlying: error,
-                optionalProcessCommand: context.required ? nil : context.processCommand)
+                processCommand: context.processCommand, required: context.required)
             // Diagnostics use the captured Shell, including when suppressed.
             context.shell.stderr.write(Data((failure.localizedDescription + "\n").utf8))
             // Git's delayed checkout fails if filter-process exits, even for an optional driver.

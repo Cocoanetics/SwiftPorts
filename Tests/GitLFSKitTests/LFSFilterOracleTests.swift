@@ -220,10 +220,10 @@ struct LFSFilterOracleTests {
             #expect(actualDiagnostic != nil)
             #expect(actualDiagnostic == referenceDiagnostic)
             let actualFatal = actual.stderr.split(separator: "\n").filter {
-                $0.hasPrefix("fatal:") || (mode == "process-optional" && $0.hasPrefix("error: external filter"))
+                $0.hasPrefix("fatal:") || (mode.hasPrefix("process") && $0.hasPrefix("error: external filter"))
             }
             let referenceFatal = reference.stderr.split(separator: "\n").filter {
-                $0.hasPrefix("fatal:") || (mode == "process-optional" && $0.hasPrefix("error: external filter"))
+                $0.hasPrefix("fatal:") || (mode.hasPrefix("process") && $0.hasPrefix("error: external filter"))
             }
             #expect(actualFatal == referenceFatal)
             if actual.status == 0 { #expect(actual.bytes == reference.bytes) }
@@ -270,17 +270,21 @@ struct LFSFilterOracleTests {
     }
 
     @Test("clone reports the checkout fatal and status, with optional and suppressed fallbacks",
-           arguments: ["required", "optional", "suppressed"])
+           arguments: ["required", "optional", "suppressed", "process", "process-optional", "process-suppressed"])
     func cloneFailure(mode: String) async throws {
         try await LFSTestServer.withServer { server in
             let fixture = try LFSFilterOracleFixture()
             defer { fixture.cleanup() }
             let bytes = Data("missing in clone\n".utf8)
             try fixture.seed(bytes)
+            let process = mode.hasPrefix("process")
+            let required = !mode.contains("optional")
+            let suppressed = mode.hasSuffix("suppressed")
             let config = "[filter \"lfs\"]\nsmudge = git-lfs smudge -- %f\nclean = git-lfs clean -- %f\n"
-                + "required = \(mode == "optional" ? "false" : "true")\n[lfs]\n"
+                + (process ? "process = git-lfs filter-process\n" : "")
+                + "required = \(required ? "true" : "false")\n[lfs]\n"
                 + "url = \(server.endpoint.absoluteString)\n"
-                + "skipdownloaderrors = \(mode == "suppressed" ? "true" : "false")\n"
+                + "skipdownloaderrors = \(suppressed ? "true" : "false")\n"
                 + "[lfs \"transfer\"]\nmaxretries = 1\n"
             try Data(config.utf8).write(to: fixture.host.globalConfig)
             var diagnostics: [String] = []
@@ -292,16 +296,18 @@ struct LFSFilterOracleTests {
                 statuses.append(result.status)
                 let lines = result.stderr.split(separator: "\n").filter {
                     $0.hasPrefix("Error downloading object:") || $0.hasPrefix("fatal:")
+                        || (process && $0.hasPrefix("error: external filter"))
                         || $0.hasPrefix("warning:") || $0.hasPrefix("You can inspect") || $0.hasPrefix("and retry")
                 }
                 diagnostics.append(lines.joined(separator: "\n"))
-                if mode != "required" {
+                if result.status == 0 {
                     let expected = Pointer(oid: LFSFilterFixture.hash(bytes), size: Int64(bytes.count))
                     #expect(try Data(contentsOf: destination.appendingPathComponent("a.lfs"))
                         == Data(expected.encoded.utf8))
                 }
             }
-            #expect(statuses == (mode == "required" ? [128, 128] : [0, 0]))
+            let expected: Int32 = suppressed || (!required && !process) ? 0 : 128
+            #expect(statuses == [expected, expected])
             #expect(diagnostics[0] == diagnostics[1])
         }
     }
