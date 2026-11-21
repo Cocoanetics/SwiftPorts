@@ -123,16 +123,25 @@ struct LFSSamePathOracle {
 
     /// System `git lfs` and `GitCommand` at `directory`, after restoring config, the index,
     /// and worktree metadata so the second read sees the same repository as the first.
+    /// That snapshot does not include `lfs/objects` or any LFS server. A transfer uses
+    /// ``run(_:in:input:environment:)`` and ``ours(_:in:input:environment:)`` on a fresh pair.
     @discardableResult
-    func compare(_ arguments: [String], in directory: URL) async throws -> Output {
+    func compare(
+        _ arguments: [String], in directory: URL, input: Data = Data(),
+        normalize extra: ((String) -> String)? = nil
+    ) async throws -> Output {
         let snapshot = try capture(from: directory)
-        let expected = try run(["lfs"] + arguments, in: directory)
+        let expected = try run(["lfs"] + arguments, in: directory, input: input)
         try restore(snapshot)
-        let actual = try await command(arguments, in: directory)
+        let actual = try await command(arguments, in: directory, input: input)
         try restore(snapshot)
         let label = arguments.joined(separator: " ")
-        #expect(Self.normalize(actual.stdout) == Self.normalize(expected.stdout), "stdout \(label)")
-        #expect(Self.normalize(actual.stderr) == Self.normalize(expected.stderr), "stderr \(label)")
+        let normalize: (String) -> String = { text in
+            let versions = Self.normalize(text)
+            return extra?(versions) ?? versions
+        }
+        #expect(normalize(actual.stdout) == normalize(expected.stdout), "stdout \(label)")
+        #expect(normalize(actual.stderr) == normalize(expected.stderr), "stderr \(label)")
         #expect(actual.status == expected.status, "status \(label)")
         return actual
     }
@@ -150,19 +159,51 @@ struct LFSSamePathOracle {
         }.joined(separator: "\n")
     }
 
+    /// Replaces only the speed field of a progress-meter line (`| 1.2 MB/s`), including the
+    /// spaces that pad that field out to the terminal width. Size, counts, and `, done.` stay.
+    /// `\r` and `\n` are scalars here: a carriage return plus a line feed is one Swift
+    /// `Character`, and splitting on that character would drop the separator.
+    static func normalizeMeterSpeed(_ text: String) -> String {
+        var result = ""
+        var fragment = ""
+        for scalar in text.unicodeScalars {
+            if scalar == "\n" || scalar == "\r" {
+                result += normalizeMeterLine(fragment)
+                result.unicodeScalars.append(scalar)
+                fragment = ""
+            } else {
+                fragment.unicodeScalars.append(scalar)
+            }
+        }
+        result += normalizeMeterLine(fragment)
+        return result
+    }
+
+    private static func normalizeMeterLine(_ line: String) -> String {
+        guard line.contains("LFS objects:"), let bar = line.range(of: " | ") else { return line }
+        let prefix = line[..<bar.upperBound]
+        let tail = line[bar.upperBound...]
+        guard let comma = tail.firstIndex(of: ",") else { return prefix + "<speed>" }
+        return prefix + "<speed>" + tail[comma...]
+    }
+
     @discardableResult
-    func git(_ arguments: [String], in directory: URL, input: Data = Data()) throws -> Output {
-        let result = try run(arguments, in: directory, input: input)
+    func git(
+        _ arguments: [String], in directory: URL, input: Data = Data(), environment: [String: String] = [:]
+    ) throws -> Output {
+        let result = try run(arguments, in: directory, input: input, environment: environment)
         #expect(result.status == 0, "git \(arguments.joined(separator: " ")): \(result.stderr)")
         return result
     }
 
-    private func commandEnvironment() -> [String: String] {
+    private func commandEnvironment(_ extra: [String: String] = [:]) -> [String: String] {
         let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
         let temporary = ProcessInfo.processInfo.environment["TMPDIR"] ?? "/tmp"
-        return ["PATH": path, "TMPDIR": temporary, "LC_ALL": "C",
-                "HOME": home.path, "XDG_CONFIG_HOME": xdgConfigHome.path,
-                "GIT_CONFIG_GLOBAL": globalConfig.path, "GIT_CONFIG_SYSTEM": systemConfig.path]
+        var environment = ["PATH": path, "TMPDIR": temporary, "LC_ALL": "C",
+                           "HOME": home.path, "XDG_CONFIG_HOME": xdgConfigHome.path,
+                           "GIT_CONFIG_GLOBAL": globalConfig.path, "GIT_CONFIG_SYSTEM": systemConfig.path]
+        for (key, value) in extra { environment[key] = value }
+        return environment
     }
 
     private var sandbox: Sandbox {
@@ -175,13 +216,16 @@ struct LFSSamePathOracle {
             authorize: { _ in })
     }
 
-    /// System `git`, whatever its exit status.
-    func run(_ arguments: [String], in directory: URL, input: Data = Data()) throws -> Output {
+    /// System `git`, including `git lfs`. Does not restore the repository or an LFS server.
+    @discardableResult
+    func run(
+        _ arguments: [String], in directory: URL, input: Data = Data(), environment: [String: String] = [:]
+    ) throws -> Output {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + arguments
         process.currentDirectoryURL = directory
-        process.environment = commandEnvironment()
+        process.environment = commandEnvironment(environment)
         let stdin = Pipe(), out = Pipe(), err = Pipe()
         process.standardInput = stdin
         process.standardOutput = out
@@ -196,15 +240,27 @@ struct LFSSamePathOracle {
                       stderr: String(decoding: stderr, as: UTF8.self), status: process.terminationStatus)
     }
 
-    private func command(_ arguments: [String], in directory: URL) async throws -> Output {
-        try await port(["lfs"] + arguments, in: directory)
+    /// `GitCommand` `git lfs`. Does not restore the repository or an LFS server.
+    @discardableResult
+    func ours(
+        _ arguments: [String], in directory: URL, input: Data = Data(), environment: [String: String] = [:]
+    ) async throws -> Output {
+        try await command(arguments, in: directory, input: input, environment: environment)
+    }
+
+    private func command(
+        _ arguments: [String], in directory: URL, input: Data = Data(), environment: [String: String] = [:]
+    ) async throws -> Output {
+        try await port(["lfs"] + arguments, in: directory, input: input, environment: environment)
     }
 
     /// `GitCommand` for `git <arguments>`, in the same environment as system git.
-    func port(_ arguments: [String], in directory: URL) async throws -> Output {
+    func port(
+        _ arguments: [String], in directory: URL, input: Data = Data(), environment: [String: String] = [:]
+    ) async throws -> Output {
         let out = OutputSink(), err = OutputSink()
-        let shell = Shell(stdin: InputSource.data(Data()), stdout: out, stderr: err,
-                          environment: Environment(variables: commandEnvironment(),
+        let shell = Shell(stdin: InputSource.data(input), stdout: out, stderr: err,
+                          environment: Environment(variables: commandEnvironment(environment),
                                                    workingDirectory: directory.path))
         shell.sandbox = sandbox
         let status = try await shell.withCurrent {
