@@ -14,7 +14,7 @@ extension LFSEndpointFinder {
             + "invalid remote name: \(rewritten.goQuoted)")
     }
 
-    private static func validRemoteURL(_ remote: String) -> Bool {
+    static func validRemoteURL(_ remote: String) -> Bool {
         guard let scheme = LFSURL.scheme(of: remote) else { return remote.contains(":") }
         return ["ssh", "http", "https", "git", "file"].contains(scheme)
     }

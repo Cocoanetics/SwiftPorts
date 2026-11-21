@@ -113,14 +113,15 @@ public final class LFSEndpointFinder: @unchecked Sendable {
     }
 
     /// `GitRemoteURL`. An empty `pushurl` that is set hides `url`. A remote
-    /// git knows but that has no URL is named by itself.
+    /// git knows but that has no URL is named by itself. Valid URL operands are
+    /// returned verbatim, matching `git.ValidateRemoteFromList`.
     func gitRemoteURL(_ remote: String, upload: Bool) -> String {
         if upload {
             let push = configuration.getAll("remote.\(remote).pushurl")
             if !push.isEmpty { return push.last ?? "" }
         }
         if let url = configuration.get("remote.\(remote).url") { return url }
-        if remoteNames.contains(remote) { return remote }
+        if remoteNames.contains(remote) || Self.validRemoteURL(remote) { return remote }
         return ""
     }
 
