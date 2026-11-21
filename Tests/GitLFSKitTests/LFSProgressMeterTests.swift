@@ -200,6 +200,24 @@ struct LFSProgressMeterTests {
         #expect(ByteFormat.formatByteRate(UInt64.max) == "18447 PB/s")
     }
 
+    @Test("the default stdout sink is the shell that made the environment, even off its task")
+    func boundStdout() async throws {
+        let captured = TransferTestLock("")
+        let shell = Shell(environment: Environment(variables: [:], workingDirectory: "/"))
+        shell.stdout = OutputSink(onWrite: { data in
+            captured.withLock { $0 += String(decoding: data, as: UTF8.self) }
+        })
+        let environment = await shell.withCurrent { LFSTransferEnvironment() }
+        // URLSession delegate callbacks run outside the task, without its task-locals.
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async {
+                environment.stdout("progress\r")
+                done.resume()
+            }
+        }
+        #expect(captured.withLock { $0 } == "progress\r")
+    }
+
     private func run<T: Sendable>(
         _ host: IsolatedLFSHost, _ variables: [String: String], _ sink: Sink,
         _ body: (LFSTransferEnvironment) async throws -> T
