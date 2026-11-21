@@ -35,15 +35,15 @@ struct LFSFilterTests {
         let observations = LFSFilterObservation()
         let callbackScope = UUID().uuidString
         let probe = "lfs-callback-" + UUID().uuidString
-        let factory: GitFilter.StreamFactory = { source, output in
+        let factory: GitFilter.StreamFactory = { source, _ in
             guard Shell.env("FILTER_TEST_SCOPE") == callbackScope else { return nil }
-            let stream = try GitLFSKit.stream(source, output)
-            let enabled = stream != nil
             let context = try GitFilterOperationContext.capture()
             try BlockingBridge.runBlocking {
                 try await context.withSource(source) { git in
                     guard try await git.canResolveRef("HEAD") else { return }
-                    observations.record(source.direction, enabled: enabled, client: git)
+                    observations.record(source.direction,
+                                        enabled: try await GitLFSKit.isEnabled(git, direction: source.direction),
+                                        client: git)
                     #expect(try await git.gitDir().map { URL(fileURLWithPath: $0).standardizedFileURL }
                         == source.gitDirectory.standardizedFileURL)
                     #expect(try await git.toplevel().map { URL(fileURLWithPath: $0).standardizedFileURL }
@@ -64,7 +64,7 @@ struct LFSFilterTests {
                     _ = try await git.configUnset("lfs.\(endpoint).access")
                 }
             }
-            return stream
+            return nil
         }
         // Observe independently of the production driver's registration.
         // The shell marker scopes this process-wide probe without comparing
