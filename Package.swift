@@ -1177,7 +1177,7 @@ let package = Package(
             dependencies: [
                 .target(name: "GitCommand", condition: .when(platforms: commandTestPlatforms)),
                 "SwiftGit", "ForgeKit", "SwiftPortsCommands", "SSHKit",
-                // The in-process LFS server `git push`'s LFS upload goes to.
+                // The in-process LFS server for `git push` and LFS transfer oracles.
                 "GitLFSTestSupport",
                 // `Shell.parsableCommand`, to run git the way a host shell does.
                 .product(name: "ShellCommandKit", package: "ShellKit"),
@@ -1210,8 +1210,8 @@ let package = Package(
         ),
         // In-process Git LFS server for tests (issue #199). Not a library product.
         // NIOHTTP1, NIOCore, NIOPosix, and Crypto are linked here. GitLFSKit is unchanged.
-        // GitLFSKitTests imports the server, and GitCommandTests does for
-        // `git push`'s LFS upload (issue #234).
+        // GitLFSKitTests and GitCommandTests import the server for LFS transfers
+        // (issue #238) and `git push`'s LFS upload (issue #234).
         .target(
             name: "GitLFSTestSupport",
             dependencies: [
