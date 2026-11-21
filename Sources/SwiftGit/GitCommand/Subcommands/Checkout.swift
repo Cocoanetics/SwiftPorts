@@ -36,6 +36,11 @@ struct Checkout: AsyncParsableCommand {
     }
 
     func run() async throws {
+        do { try await checkout() }
+        catch let error as GitFilterError { throw CLIError(filter: error) }
+    }
+
+    private func checkout() async throws {
         let (refs, paths) = Self.split(rest)
         let client = CommandContext.gitClient()
 

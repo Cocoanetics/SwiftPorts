@@ -25,8 +25,12 @@ struct LFSFilterContext: Sendable {
     static func load(
         _ git: SwiftGit.GitClient, direction: GitFilterDirection, remotes: LFSFilterRemotes
     ) async throws -> LFSFilterContext? {
-        guard let command = try await command(git, direction: direction) else { return nil }
         let required = try await git.configBool("filter.lfs.required") == true
+        guard let command = try await command(git, direction: direction) else {
+            // convert.c fails a required driver even when this direction has no command.
+            if required { throw LFSClientError("") }
+            return nil
+        }
         do {
             return try await LFSFilterContext(
                 client: LFSClient(git: git, credentials: git.credentials), store: LocalStore.open(git),

@@ -76,6 +76,8 @@ struct Clone: AsyncParsableCommand {
                 branch: branch)
         } catch let error as UnsupportedTransportError {
             throw CLIError(error)
+        } catch let error as GitFilterError {
+            throw CLIError(filter: error, clone: true)
         }
 
         // A local clone has no transfer progress (libgit2's local
