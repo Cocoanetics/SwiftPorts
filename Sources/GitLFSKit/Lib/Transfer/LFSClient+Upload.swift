@@ -25,19 +25,21 @@ extension LFSClient {
     /// `Git LFS upload missing objects:` and the present objects are uploaded.
     /// `dryRun` prints `push <oid> => <path>` lines and contacts no server.
     /// `terminal` says whether stdout is a terminal, for the progress meter.
+    /// `all` scans each update's full history without remote exclusions (`git lfs push --all`).
     /// The meter's text is written to the shell's stdout as it is logged;
     /// the result holds everything else.
     /// Lock verification is not performed.
     public func uploadObjects(
         for updates: [LFSRefUpdate], remote: String = "", remoteBranches: [String]? = nil,
-        dryRun: Bool = false, terminal: Bool = false, git: GitClient
+        all: Bool = false, dryRun: Bool = false, terminal: Bool = false, git: GitClient
     ) async throws -> LFSCommandResult {
-        try await uploadObjects(for: updates, remote: remote, remoteBranches: remoteBranches, dryRun: dryRun,
+        try await uploadObjects(for: updates, remote: remote, remoteBranches: remoteBranches, all: all, dryRun: dryRun,
                                 terminal: terminal, git: git, environment: LFSTransferEnvironment())
     }
 
     func uploadObjects(
-        for updates: [LFSRefUpdate], remote: String, remoteBranches: [String]?, dryRun: Bool, terminal: Bool,
+        for updates: [LFSRefUpdate], remote: String, remoteBranches: [String]?, all: Bool = false,
+        dryRun: Bool, terminal: Bool,
         git: GitClient, environment: LFSTransferEnvironment
     ) async throws -> LFSCommandResult {
         let remote = remote.isEmpty ? finder.uploadRemote() : remote
@@ -56,13 +58,16 @@ extension LFSClient {
                 exclude.append(update.remoteOID)
             }
         }
-        exclude += try await Self.cachedRemoteExclusions(remote: remote, advertised: remoteBranches, git: git)
+        if !all {
+            exclude += try await Self.cachedRemoteExclusions(remote: remote, advertised: remoteBranches, git: git)
+        }
 
         var scanError: String?
         for update in updates {
             let pointers: [WrappedPointer]
             do {
-                pointers = try await GitScanner(client: git).scanRefs(include: [update.localOID], exclude: exclude)
+                pointers = try await GitScanner(client: git).scanRefs(include: [update.localOID],
+                                                                    exclude: all ? [] : exclude)
             } catch {
                 scanError = "ref \(Self.refName(update.localRef).goQuoted):: \(error)"
                 break
