@@ -6,7 +6,7 @@ import SwiftGit
 struct Show: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "show",
-        abstract: "Show various types of objects (commits and tags today)."
+        abstract: "Show various types of objects (commits, tags and blobs)."
     )
 
     @Flag(name: .customLong("show-signature"), inversion: .prefixedNo,
@@ -21,19 +21,36 @@ struct Show: AsyncParsableCommand {
         let target = spec ?? "HEAD"
         let showSignatures = try await Log.pullShowSignature([], flag: showSignature, client: client).show
 
-        // Resolve the object first. We support commits + annotated
-        // tags (real git also supports trees, blobs — those need
-        // separate formatters; defer to a future patch).
+        // Resolve the object first; blobs are emitted without formatting.
         let sha: String
         do {
             sha = try await client.resolveOID(target)
         } catch {
+            if let colon = target.firstIndex(of: ":"), colon != target.startIndex {
+                let revision = String(target[..<colon])
+                let path = String(target[target.index(after: colon)...])
+                guard (try? await client.resolveOID(revision + "^{tree}")) != nil else {
+                    throw CLIError.stderr("fatal: invalid object name '\(revision)'.", exitCode: 128)
+                }
+                let url = Shell.resolve(path)
+                try await Shell.authorize(url)
+                let reason = FileManager.default.fileExists(atPath: url.path)
+                    ? "exists on disk, but not in" : "does not exist in"
+                throw CLIError.stderr("fatal: path '\(path)' \(reason) '\(revision)'", exitCode: 128)
+            }
             throw CLIError.stderr(
-                "fatal: ambiguous argument '\(target)': unknown revision or path not in the working tree.",
+                "fatal: ambiguous argument '\(target)': unknown revision or path not in the working tree.\n"
+                    + "Use '--' to separate paths from revisions, like this:\n"
+                    + "'git <command> [<revision>...] -- [<file>...]'",
                 exitCode: 128)
         }
 
         let stdout = Shell.current.stdout
+
+        if try await client.objectMetadata(of: sha).kind == .blob {
+            stdout.write(try await client.catFileBlob(sha))
+            return
+        }
 
         // If the spec resolves directly to an annotated tag, emit the
         // tag block then fall through to its target commit.
