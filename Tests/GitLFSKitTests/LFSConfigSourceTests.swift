@@ -189,8 +189,9 @@ struct LFSConfigSourceTests {
                 .appendingPathComponent("server.git", isDirectory: true)
             try await GitClient(workingDirectory: server).initRepository(initialBranch: "main")
             // git-lfs RewriteLocalPathAsURL inserts a slash before a Windows
-            // drive letter, uses forward slashes, and joins onto the physical
-            // working directory (`/private/var` on Darwin).
+            // drive letter and uses forward slashes. It joins onto os.Getwd.
+            // This process's PWD is not the fixture, so that is the kernel
+            // path (`/private/var` on Darwin).
             let gitPath = LFSRepositoryPaths.canonical(server.appendingPathComponent(".git").path)
                 .replacingOccurrences(of: "\\", with: "/")
             let wanted = "file://\(gitPath.hasPrefix("/") ? "" : "/")\(gitPath)"

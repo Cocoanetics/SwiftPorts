@@ -139,33 +139,60 @@ enum LFSEndpointDerivation {
 
     /// `filepath.Abs`, then `filepath.Clean`. A relative path joins `base`,
     /// the repository directory git-lfs would have been run in, rather than
-    /// the process's current directory. That join uses the physical
-    /// directory (`os.Getwd`): on Darwin, `/var` is `/private/var`.
+    /// the process's current directory. That join uses `os.Getwd`.
     /// Symlinks inside the relative path itself are left alone.
     static func absolutePath(_ path: String, base: String) -> String {
-        clean(located(path, base: base))
+        absolutePath(path, base: base, pwd: ProcessInfo.processInfo.environment["PWD"])
+    }
+
+    static func absolutePath(_ path: String, base: String, pwd: String?) -> String {
+        clean(located(path, base: base, pwd: pwd))
     }
 
     /// An absolute path stays put. A relative one is joined onto `base`
     /// the way `filepath.Abs` joins onto the process directory.
     static func located(_ path: String, base: String) -> String {
+        located(path, base: base, pwd: ProcessInfo.processInfo.environment["PWD"])
+    }
+
+    static func located(_ path: String, base: String, pwd: String?) -> String {
         if (path as NSString).isAbsolutePath || base.isEmpty { return path }
-        let root = physical(base) ?? base
+        let root = getwd(base, pwd: pwd) ?? base
         return (root as NSString).appendingPathComponent(path)
     }
 
-    /// `os.Getwd` for a directory that exists. Foundation shortens
-    /// `/private/var` to `/var`; the kernel and Go do not.
-    private static func physical(_ path: String) -> String? {
+    /// `os.Getwd` after the process directory is `base`. An absolute `PWD`
+    /// that names that directory is returned unchanged, so a symlink the
+    /// caller entered through stays in the path. Otherwise the kernel path:
+    /// on Darwin, `/var` is `/private/var`.
+    static func getwd(_ base: String, pwd: String?) -> String? {
         #if os(Windows)
-        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        _ = pwd
+        let resolved = URL(fileURLWithPath: base).resolvingSymlinksInPath().path
         return resolved.isEmpty ? nil : resolved
         #else
-        guard let resolved = realpath(path, nil) else { return nil }
+        if let pwd, (pwd as NSString).isAbsolutePath, sameFile(pwd, base) {
+            return pwd
+        }
+        guard let resolved = realpath(base, nil) else { return nil }
         defer { free(resolved) }
         return String(cString: resolved)
         #endif
     }
+
+    #if !os(Windows)
+    /// `os.SameFile`: same device and inode. `stat` follows the last symlink.
+    private static func sameFile(_ lhs: String, _ rhs: String) -> Bool {
+        guard let left = identity(lhs), let right = identity(rhs) else { return false }
+        return left.dev == right.dev && left.ino == right.ino
+    }
+
+    private static func identity(_ path: String) -> (dev: UInt64, ino: UInt64)? {
+        var info = stat()
+        guard path.withCString({ stat($0, &info) }) == 0 else { return nil }
+        return (UInt64(truncatingIfNeeded: info.st_dev), UInt64(truncatingIfNeeded: info.st_ino))
+    }
+    #endif
 
     /// `filepath.Clean`. A Windows drive or UNC share is a volume, so `..`
     /// that walks off `C:\` stays on that drive (`C:\server.git`).

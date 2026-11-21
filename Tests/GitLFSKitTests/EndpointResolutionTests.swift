@@ -243,4 +243,33 @@ struct EndpointResolutionTests {
             #expect(finder.endpoint(operation: "upload", remote: fileURL).url == fileURL)
         }
     }
+
+    #if !os(Windows)
+    @Test("os.Getwd keeps a PWD that names the directory and otherwise uses the kernel path")
+    func getwdPrefersMatchingPWD() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LFSGetwd-\(UUID().uuidString)", isDirectory: true)
+        let target = root.appendingPathComponent("target", isDirectory: true)
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let logical = link.path
+        #expect(LFSEndpointDerivation.getwd(target.path, pwd: logical) == logical)
+        #expect(LFSEndpointDerivation.getwd(logical, pwd: logical) == logical)
+        let joined = LFSEndpointDerivation.absolutePath("not-a-remote", base: target.path, pwd: logical)
+        #expect(joined == (logical as NSString).appendingPathComponent("not-a-remote"))
+
+        let kernel = LFSRepositoryPaths.canonical(target.path)
+        #expect(LFSEndpointDerivation.getwd(target.path, pwd: nil) == kernel)
+        #expect(LFSEndpointDerivation.getwd(target.path, pwd: "link") == kernel)
+        #expect(LFSEndpointDerivation.getwd(target.path, pwd: "/nowhere") == kernel)
+        #if os(macOS)
+        if target.path.hasPrefix("/var/") {
+            #expect(kernel.hasPrefix("/private/var/"))
+        }
+        #endif
+    }
+    #endif
 }
