@@ -169,10 +169,12 @@ struct StatusOptionsTests {
         }
     }
 
-    /// Pointers sharing extension lines stay above 50% similar across targets.
-    private func extendedPointer(_ file: (bytes: Data, pointer: Data)) throws -> Data {
+    /// Pointers sharing extension lines stay above 50% similar across targets;
+    /// each of the first `changed` lines given another id lowers the score.
+    private func extendedPointer(_ file: (bytes: Data, pointer: Data), changed: Int = 0) throws -> Data {
         let extensions = (0..<6).map {
-            PointerExtension(name: "ext\($0)", priority: $0, oid: String(repeating: "\($0)", count: 64))
+            PointerExtension(name: "ext\($0)", priority: $0,
+                             oid: String(repeating: $0 < changed ? "f" : "\($0)", count: 64))
         }
         let plain = try Pointer.decode(file.pointer)
         return Data(Pointer(oid: plain.oid, size: plain.size, extensions: extensions).encoded.utf8)
@@ -217,6 +219,92 @@ struct StatusOptionsTests {
             // The same score git gives the pair once old.bin's deletion is staged.
             try await client.remove(paths: ["old.bin"], keepWorktree: true)
             #expect(try await client.diffIndex(cached: true).first?.similarity == rename.similarity)
+        }
+    }
+
+    /// Commits `sources`, stages their deletion and `targets`, and writes each
+    /// target's media, so only pointer correction can pair the uncached side.
+    private func stageRenameCandidates(
+        sources: [(name: String, pointer: Data)],
+        targets: [(name: String, file: (bytes: Data, pointer: Data), pointer: Data)],
+        in dir: URL, client: GitClient
+    ) async throws -> [DiffIndexEntry] {
+        for source in sources { _ = try await stage(source.pointer, source.name, in: dir, client: client) }
+        try await commit(client)
+        try await client.remove(paths: sources.map(\.name))
+        for target in targets {
+            _ = try await stage(target.pointer, target.name, in: dir, client: client)
+            try write(target.file.bytes, target.name, in: dir)
+        }
+        return try await client.diffIndex(cached: true)
+    }
+
+    @Test("a later exact rename candidate displaces an earlier similar match")
+    func laterExactRenameCandidateWins() async throws {
+        try await withRepo { _, dir, client in
+            let first = media(24)
+            let second = media(25)
+            let pointerA = try extendedPointer(first)
+            let cached = try await stageRenameCandidates(
+                sources: [("old.bin", pointerA)],
+                targets: [("a.bin", second, try extendedPointer(second)), ("z.bin", first, pointerA)],
+                in: dir, client: client)
+            let oids = try await client.indexedEntries().map(\.oid)
+            #expect(cached == [entry("A", Self.zero, oids[0], "a.bin", oldMode: 0),
+                               entry("R", oids[1], oids[1], "z.bin", from: "old.bin", similarity: 100)])
+            #expect(try await scan(client, dir) == StatusIndex(staged: cached, unstaged: []))
+        }
+    }
+
+    @Test("a later, more similar candidate displaces an earlier weaker match")
+    func laterStrongerRenameCandidateWins() async throws {
+        try await withRepo { _, dir, client in
+            let weaker = media(27)
+            let stronger = media(28)
+            let cached = try await stageRenameCandidates(
+                sources: [("old.bin", try extendedPointer(media(26)))],
+                targets: [("a.bin", weaker, try extendedPointer(weaker, changed: 2)),
+                          ("z.bin", stronger, try extendedPointer(stronger))],
+                in: dir, client: client)
+            #expect(cached.map(\.status) == ["A", "R"])
+            #expect(cached.last?.destinationPath == "z.bin")
+            #expect((50..<100).contains(cached.last?.similarity ?? 0))
+            #expect(try await scan(client, dir) == StatusIndex(staged: cached, unstaged: []))
+        }
+    }
+
+    @Test("a displaced candidate pairs with another source on the next pass")
+    func displacedCandidateRematches() async throws {
+        try await withRepo { _, dir, client in
+            let first = media(29)
+            let second = media(31)
+            let pointerA = try extendedPointer(first)
+            // a.bin is closer to old1.bin, which z.bin matches exactly.
+            let cached = try await stageRenameCandidates(
+                sources: [("old1.bin", pointerA), ("old2.bin", try extendedPointer(media(30), changed: 2))],
+                targets: [("a.bin", second, try extendedPointer(second)), ("z.bin", first, pointerA)],
+                in: dir, client: client)
+            #expect(cached.map(\.status) == ["R", "R"])
+            #expect(cached.map(\.sourcePath) == ["old2.bin", "old1.bin"])
+            #expect(cached.map(\.destinationPath) == ["a.bin", "z.bin"])
+            #expect(try await scan(client, dir) == StatusIndex(staged: cached, unstaged: []))
+        }
+    }
+
+    @Test("equal scores keep the first target and the first source")
+    func equalScoresKeepFirstCandidate() async throws {
+        try await withRepo { _, dir, client in
+            let file = media(32)
+            let pointer = try extendedPointer(file)
+            // Every source matches every target exactly.
+            let cached = try await stageRenameCandidates(
+                sources: [("old1.bin", pointer), ("old2.bin", pointer)],
+                targets: [("a.bin", file, pointer), ("b.bin", file, pointer)],
+                in: dir, client: client)
+            #expect(cached.map(\.status) == ["R", "R"])
+            #expect(cached.map(\.sourcePath) == ["old1.bin", "old2.bin"])
+            #expect(cached.map(\.destinationPath) == ["a.bin", "b.bin"])
+            #expect(try await scan(client, dir) == StatusIndex(staged: cached, unstaged: []))
         }
     }
 

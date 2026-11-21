@@ -46,29 +46,60 @@ extension StatusOptions {
 
     /// Rename detection ran before the correction, and libgit2 cannot
     /// score a work-tree side it would have to clean. Each corrected addition
-    /// now has its index blob, so it is scored against the unpaired deletions
-    /// as `git_diff_find_similar` does at its 50% default: the first identical
-    /// blob, else the best signature match. The rename is listed at the addition.
+    /// now has its index blob, so it is scored against the deletions as
+    /// `git_diff_find_similar` does: a pair maps only when it beats both
+    /// sides' current scores, ejecting their old partners, and the pass
+    /// repeats until nothing is ejected. Equal scores keep the earlier pair.
+    /// Mappings at the 50% default become renames, listed at the addition.
     private static func pairRenames(
         _ compared: [(entry: DiffIndexEntry, corrected: Bool)], client: GitClient
     ) async throws -> [DiffIndexEntry] {
+        let targets = compared.indices.filter { compared[$0].corrected && compared[$0].entry.status == "A" }
+        let sources = compared.indices.filter { compared[$0].entry.status == "D" }
+        var scores: [[Int]: Int] = [:]
+        var targetMatch: [Int: (source: Int, score: Int)] = [:]
+        var sourceMatch: [Int: (target: Int, score: Int)] = [:]
+        var bumped = !targets.isEmpty && !sources.isEmpty
+        while bumped {
+            bumped = false
+            for target in targets {
+                for source in sources {
+                    // Nothing beats 100, so a side holding an identical match skips scoring.
+                    guard targetMatch[target]?.score ?? 0 < 100,
+                          sourceMatch[source]?.score ?? 0 < 100 else { continue }
+                    let score: Int
+                    if let known = scores[[source, target]] {
+                        score = known
+                    } else {
+                        score = try await similarity(compared[source].entry, compared[target].entry, client: client)
+                        scores[[source, target]] = score
+                    }
+                    guard score > targetMatch[target]?.score ?? 0,
+                          score > sourceMatch[source]?.score ?? 0 else { continue }
+                    if let old = sourceMatch[source] {
+                        targetMatch[old.target] = nil
+                        bumped = true
+                    }
+                    if let old = targetMatch[target] {
+                        sourceMatch[old.source] = nil
+                        bumped = true
+                    }
+                    targetMatch[target] = (source, score)
+                    sourceMatch[source] = (target, score)
+                }
+            }
+        }
         var paired = Set<Int>()
         var renamed: [Int: DiffIndexEntry] = [:]
-        for (position, item) in compared.enumerated() where item.corrected && item.entry.status == "A" {
-            let added = item.entry
-            var best: (source: Int, score: Int)?
-            for source in compared.indices where !paired.contains(source) && compared[source].entry.status == "D" {
-                let score = try await similarity(compared[source].entry, added, client: client)
-                if score >= 50 && score > (best?.score ?? -1) { best = (source, score) }
-                if score == 100 { break }
-            }
-            guard let best else { continue }
-            paired.insert(best.source)
-            let deleted = compared[best.source].entry
-            renamed[position] = DiffIndexEntry(
+        for target in targets {
+            guard let match = targetMatch[target], match.score >= 50 else { continue }
+            paired.insert(match.source)
+            let deleted = compared[match.source].entry
+            let added = compared[target].entry
+            renamed[target] = DiffIndexEntry(
                 oldMode: deleted.oldMode, newMode: added.newMode,
                 oldOID: deleted.oldOID, newOID: added.newOID,
-                status: "R", similarity: best.score,
+                status: "R", similarity: match.score,
                 sourcePath: deleted.sourcePath, destinationPath: added.destinationPath)
         }
         return compared.indices.compactMap { position in

@@ -49,17 +49,32 @@ struct LFSProgressRateOracleTests {
 
         let oracle = LFSOracle()
         defer { try? FileManager.default.removeItem(at: oracle.root) }
-        let theirs = try await LFSTestServer.withServer { server -> (out: String, err: String, status: Int32) in
-            var captured: (out: String, err: String, status: Int32)?
-            try await LFSServerRepository.run(server) { repo in
-                try await repo.storeLocally(payload)
-                _ = try await repo.commit([("small.dat", payload)])
-                let run = try oracle.run(["lfs", "push", "origin", "main"], in: repo.directory)
-                captured = (String(decoding: run.out, as: UTF8.self), run.err, run.status)
-                #expect(server.requests().filter { $0.method == "PUT" }.map(\.path) == ["/objects/\(oid)"])
-                #expect(server.bytes(for: oid) == payload)
+        func referencePush() async throws -> (out: String, err: String, status: Int32) {
+            try await LFSTestServer.withServer { server -> (out: String, err: String, status: Int32) in
+                var captured: (out: String, err: String, status: Int32)?
+                try await LFSServerRepository.run(server) { repo in
+                    try await repo.storeLocally(payload)
+                    _ = try await repo.commit([("small.dat", payload)])
+                    let run = try oracle.run(["lfs", "push", "origin", "main"], in: repo.directory)
+                    captured = (String(decoding: run.out, as: UTF8.self), run.err, run.status)
+                    #expect(server.requests().filter { $0.method == "PUT" }.map(\.path) == ["/objects/\(oid)"])
+                    #expect(server.bytes(for: oid) == payload)
+                }
+                return try #require(captured)
             }
-            return try #require(captured)
+        }
+        // git-lfs logs the final meter line on a goroutine and returns without
+        // waiting. A quiet run usually still flushes it. A busy one often exits
+        // first, leaving stdout empty and status 0. Repeat until that line arrives.
+        var theirs = try await referencePush()
+        if droppedMeter(theirs, against: ours.stdout) {
+            for _ in 0..<8 {
+                let again = try await referencePush()
+                if !again.out.split(separator: "\n").isEmpty {
+                    theirs = again
+                    break
+                }
+            }
         }
 
         #expect(ours.status == 0)
@@ -72,6 +87,15 @@ struct LFSProgressRateOracleTests {
         #expect(ourLine.contains("| 0 B/s, done."))
         #expect(theirLine.contains("| 0 B/s, done."))
         #expect(ourLine == theirLine)
+    }
+
+    /// The reference printed nothing while our side printed one finished meter line.
+    private func droppedMeter(
+        _ reference: (out: String, err: String, status: Int32), against actual: String
+    ) -> Bool {
+        guard reference.status == 0, reference.out.split(separator: "\n").isEmpty,
+              !actual.isEmpty else { return false }
+        return actual.contains("LFS objects:") && actual.hasSuffix(", done.\n")
     }
     #endif
 
