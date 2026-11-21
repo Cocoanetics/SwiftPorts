@@ -26,6 +26,14 @@ struct Push: AsyncParsableCommand {
             (absent, if empty). An update whose lease no longer holds is
             refused as `stale info`; `--force` overrides the lease.
 
+            `-d`/`--delete` deletes the named refs. `--no-delete` takes
+            it back. The option may come before or after the repository.
+            A plain name is pushed as
+            `:<name>`, and `tag <name>` as `:refs/tags/<name>`. An empty
+            name, or one containing `:`, is refused. With no names it
+            refuses, rather than pushing what `remote.<name>.push` or
+            `push.default` would.
+
             When git's pre-push hook is git-lfs's, its work is done here,
             without running the script: the Git LFS objects the refs about
             to be sent need are uploaded first, and the push fails if they
@@ -36,6 +44,10 @@ struct Push: AsyncParsableCommand {
     @Flag(name: [.customShort("f"), .long], inversion: .prefixedNo,
           help: "Force updates, even ones that aren't fast-forwards.")
     var force: Bool = false
+
+    @Flag(name: [.customShort("d"), .long], inversion: .prefixedNo,
+          help: "Delete the listed refs from the remote.")
+    var delete: Bool = false
 
     @Option(name: .customLong("force-with-lease"),
             help: ArgumentHelp(
@@ -64,8 +76,17 @@ struct Push: AsyncParsableCommand {
     func run() async throws {
         let client = CommandContext.gitClient(quiet: quiet)
         let settings = try await DefaultPush.Settings(client: client)
-        let (remoteName, refspecs) = RemoteArguments.split(arguments, remote: remote)
+        let (remoteName, given) = RemoteArguments.split(arguments, remote: remote)
+        // git resolves `--force-with-lease=<ref>:<expect>` while parsing
+        // options, before `--delete` with no refs is refused. A lease that
+        // names no object therefore fails first. The refusal itself still
+        // comes before a remote is read, so `remote.<name>.push` and
+        // `push.default` are never pushed in its place.
         let leases = try await Self.leases(from: leaseOptions, client: client)
+        if delete, given.isEmpty {
+            throw CLIError.stderr(
+                "fatal: --delete doesn't make sense without any refs", exitCode: 128)
+        }
         // git reads every remote's config before it looks for the remote
         // to push to, and refuses a push refspec written without a value
         // or malformed, whether or not it's pushed.
@@ -79,10 +100,15 @@ struct Push: AsyncParsableCommand {
             .first(where: { !SwiftGit.GitClient.isValidPushRefspec(SwiftGit.GitClient.pushRefspecReadingAtAsHead($0)) }) {
             throw CLIError.stderr("fatal: invalid refspec '\(bad)'", exitCode: 128)
         }
-        // An empty repository is never read as a path.
+        // An empty repository is never read as a path. git checks that
+        // before `set_refspecs`, so `git push --delete '' :name` is a bad
+        // repository, not a malformed deletion target.
         if remoteName == "" {
             throw CLIError.stderr("fatal: bad repository ''", exitCode: 128)
         }
+        // Plain `--delete` targets become deletion refspecs before the
+        // default-push plan and the refspec check below.
+        let refspecs = delete ? try Self.deletionRefspecs(from: given) : given
         let plan = refspecs.isEmpty
             ? try await DefaultPush.plan(client: client, remote: remoteName, settings: settings)
             : DefaultPush.Plan(remote: remoteName ?? "origin", refspecs: refspecs, setUpstream: false)
@@ -189,6 +215,32 @@ struct Push: AsyncParsableCommand {
             }
         }
         return leases.leases.isEmpty && !leases.trackingForRest ? nil : leases
+    }
+
+    /// git's `set_refspecs` when `--delete` is set. `tag <name>` deletes
+    /// `refs/tags/<name>` (the following argument is the name, even when
+    /// it is empty or contains `:`). Any other name must be a plain
+    /// target and is deleted as `:<name>`.
+    static func deletionRefspecs(from names: [String]) throws -> [String] {
+        var refspecs: [String] = []
+        var index = 0
+        while index < names.count {
+            let name = names[index]
+            if name == "tag" {
+                index += 1
+                guard index < names.count else {
+                    throw CLIError.stderr("fatal: tag shorthand without <tag>", exitCode: 128)
+                }
+                refspecs.append(":refs/tags/\(names[index])")
+            } else if name.isEmpty || name.contains(":") {
+                throw CLIError.stderr(
+                    "fatal: --delete only accepts plain target ref names", exitCode: 128)
+            } else {
+                refspecs.append(":\(name)")
+            }
+            index += 1
+        }
+        return refspecs
     }
 
     /// `refspec` forced, as `--force` forces it: a negative refspec has
