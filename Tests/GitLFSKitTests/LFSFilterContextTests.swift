@@ -7,7 +7,7 @@ import SwiftGit
 extension LFSFilterTests {
     @Suite("LFS filter configuration")
     struct LFSFilterContextTests {
-        @Test("required alone never activates a direction; process presence takes precedence")
+        @Test("process presence takes precedence, including an empty required command")
         func commands() async throws {
             try await LFSStreamFixture.run { _, git, _ in
                 try await git.configSet("filter.lfs.required", "true")
@@ -18,8 +18,9 @@ extension LFSFilterTests {
                     #expect(try await LFSFilterContext.command(git, direction: direction) == "git-lfs \(key) --skip")
                     try await git.configSet("filter.lfs.process", "")
                     #expect(try await LFSFilterContext.command(git, direction: direction) == nil)
-                    #expect(try await LFSFilterContext.load(
-                        git, direction: direction, remotes: LFSFilterRemotes()) == nil)
+                    await #expect(throws: LFSClientError.self) {
+                        try await LFSFilterContext.load(git, direction: direction, remotes: LFSFilterRemotes())
+                    }
                     try await git.configSet("filter.lfs.process", "git-lfs filter-process")
                     let context = try #require(try await LFSFilterContext.load(
                         git, direction: direction, remotes: LFSFilterRemotes()))
@@ -32,7 +33,7 @@ extension LFSFilterTests {
             }
         }
 
-        @Test("empty process bypasses configured clean and smudge without accessing the store",
+        @Test("empty process bypasses optional commands and fails required commands without accessing the store",
                arguments: [false, true])
         func emptyProcess(required: Bool) async throws {
             try await LFSStreamFixture.run(config: [
@@ -47,6 +48,11 @@ extension LFSFilterTests {
                 try Data("*.lfs filter=lfs -text\n".utf8)
                     .write(to: directory.appendingPathComponent(".gitattributes"))
                 try content.write(to: file)
+                if required {
+                    await #expect(throws: GitFilterError.self) { try await git.add(paths: ["a.lfs"]) }
+                    #expect(!FileManager.default.fileExists(atPath: context.store.storageDirectory.path))
+                    return
+                }
                 try await git.add(paths: [".gitattributes", "a.lfs"])
                 let entry = try #require(try await git.indexedEntries().first { $0.path == "a.lfs" })
                 #expect(try await git.catFileBlob(entry.oid) == content)

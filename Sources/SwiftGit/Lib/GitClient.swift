@@ -100,7 +100,7 @@ public struct GitClient: ForgeKit.GitClient {
         let progress = shellProgressSink()
         // Tier-2 (#18): apply env→option bridge before clone so the
         // freshly-init'd repo's config is loaded against the sandbox.
-        try await isolatedGated {
+        try await isolatedGated(deferFilterFailures: true) {
             _ = try Repository.clone(
                 from: url, to: destURL,
                 depth: depth,
@@ -183,7 +183,7 @@ public struct GitClient: ForgeKit.GitClient {
     }
 
     public func checkout(ref: String) async throws {
-        try await withRepository { try $0.checkout(ref: ref) }
+        try await withRepository(deferFilterFailures: true) { try $0.checkout(ref: ref) }
     }
 
     public func push(remote: String, refspec: String, setUpstream: Bool) async throws {
@@ -293,7 +293,9 @@ public struct GitClient: ForgeKit.GitClient {
     /// `body` on it. Every `GitClient` operation funnels through here, so
     /// the per-op sandbox check and config isolation happen in exactly one
     /// place — and the `GitKit` SDK below stays shell-free.
-    internal func withRepository<T>(_ body: (Repository) throws -> T) async throws -> T {
+    internal func withRepository<T>(
+        deferFilterFailures: Bool = false, _ body: (Repository) throws -> T
+    ) async throws -> T {
         try await Shell.authorize(workingDirectory)
         // Tier-2 (#18): bridge sandbox env to libgit2's process-global
         // option block before opening the repo. The repo's frozen
@@ -301,7 +303,7 @@ public struct GitClient: ForgeKit.GitClient {
         // host process env.
         // The environment's config (GIT_CONFIG_GLOBAL / _SYSTEM / _COUNT)
         // goes onto the repository's live config before anything reads it.
-        return try await isolatedGated {
+        return try await isolatedGated(deferFilterFailures: deferFilterFailures) {
             let repo = try Repository.open(at: workingDirectory)
             // Whatever the operation signs, it signs through the shell.
             repo.setSigner(ShellSigner(client: self, shell: Shell.current))

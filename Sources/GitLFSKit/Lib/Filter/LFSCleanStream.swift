@@ -16,6 +16,9 @@ final class LFSCleanStream: GitFilterStream {
     private var count: Int64 = 0
     private var passthrough = false
 
+    /// Internal regression probe: content lives on disk after the pointer probe.
+    var bufferedByteCount: Int { probe.count }
+
     init(
         context: LFSFilterContext,
         fileWrite: @escaping (FileHandle, Data) throws -> Void = { try $0.write(contentsOf: $1) },

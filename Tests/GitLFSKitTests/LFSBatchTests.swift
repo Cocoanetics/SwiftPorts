@@ -265,7 +265,7 @@ struct LFSBatchTests {
                     _ = try await lfs.batch(operation: "download", objects: [LFSBatchObject(oid: oid, size: 1)])
                     Issue.record("expected HTTP \(status) to fail")
                 } catch let error as LFSClientError {
-                    #expect(error.description == "\(prefix): \(batchURL)")
+                    #expect(error.description == "batch response: \(prefix): \(batchURL)")
                 }
             }
             LFSBatchURLProtocol.install { _ in (422, Data(#"{"message":"nope"}"#.utf8)) }
@@ -274,7 +274,7 @@ struct LFSBatchTests {
                 _ = try await lfs.batch(operation: "download", objects: [LFSBatchObject(oid: oid, size: 1)])
                 Issue.record("expected the JSON message")
             } catch let error as LFSClientError {
-                #expect(error.description == "nope")
+                #expect(error.description == "batch response: nope")
             }
         }
     }

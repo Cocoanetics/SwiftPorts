@@ -2,6 +2,7 @@ import ArgumentParser
 import ShellKit
 import Foundation
 import SwiftGit
+import GitLFSKit
 
 struct Checkout: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -36,6 +37,12 @@ struct Checkout: AsyncParsableCommand {
     }
 
     func run() async throws {
+        do { try await checkout() }
+        catch let error as GitFilterError { throw CLIError(filter: error) }
+        catch let error as LFSFilterFailure { throw CLIError(filter: error) }
+    }
+
+    private func checkout() async throws {
         let (refs, paths) = Self.split(rest)
         let client = CommandContext.gitClient()
 

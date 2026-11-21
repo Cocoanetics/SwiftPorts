@@ -78,7 +78,7 @@ extension LFSTransferQueueTests {
         }
         try await run(config: [("lfs.transfer.maxretries", "1")]) { client, store, _ in
             let clock = LFSTransferClock()
-            await #expect(throws: LFSClientError("batch failed 2")) {
+            await #expect(throws: LFSClientError("batch response: Fatal error: batch failed 2")) {
                 try await queue(client, store, clock: clock).transfer([LFSBatchObject(oid: oid, size: 12)])
             }
             #expect(attempts.withLock { $0 } == 2)

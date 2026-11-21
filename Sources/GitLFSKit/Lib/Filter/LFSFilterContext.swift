@@ -11,6 +11,7 @@ struct LFSFilterContext: Sendable {
     let skipSmudge: Bool
     let shell: Shell
     let remotes: LFSFilterRemotes
+    var processCommand: String?
 
     static func command(_ git: SwiftGit.GitClient, direction: GitFilterDirection) async throws -> String? {
         // convert.c gives process presence precedence, including an empty value.
@@ -25,15 +26,26 @@ struct LFSFilterContext: Sendable {
     static func load(
         _ git: SwiftGit.GitClient, direction: GitFilterDirection, remotes: LFSFilterRemotes
     ) async throws -> LFSFilterContext? {
-        guard let command = try await command(git, direction: direction) else { return nil }
         let required = try await git.configBool("filter.lfs.required") == true
+        guard let command = try await command(git, direction: direction) else {
+            if required {
+                // Git's streamable checkout bypasses a driver only when all commands are absent.
+                // Any configured command, even empty or clean-only, selects in-core conversion.
+                let process = try await git.configGet("filter.lfs.process")
+                let smudge = try await git.configGet("filter.lfs.smudge")
+                let clean = try await git.configGet("filter.lfs.clean")
+                if direction == .clean || process != nil || smudge != nil || clean != nil { throw LFSClientError("") }
+            }
+            return nil
+        }
         do {
             return try await LFSFilterContext(
                 client: LFSClient(git: git, credentials: git.credentials), store: LocalStore.open(git),
                 required: required,
                 skipSmudge: command.split(whereSeparator: \.isWhitespace).contains("--skip")
                     || LFSConfiguration.bool(Shell.env("GIT_LFS_SKIP_SMUDGE"), fallback: false),
-                shell: Shell.current, remotes: remotes)
+                shell: Shell.current, remotes: remotes,
+                processCommand: try await git.configGet("filter.lfs.process"))
         } catch {
             guard !required else { throw error }
             return nil

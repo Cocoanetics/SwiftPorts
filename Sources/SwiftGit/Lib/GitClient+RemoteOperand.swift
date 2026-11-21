@@ -397,7 +397,7 @@ extension GitClient {
         }
         try await Shell.authorize(destination)
         let progress = shellProgressSink()
-        try await isolatedGated {
+        try await isolatedGated(deferFilterFailures: true) {
             _ = try Repository.clone(
                 fromRemote: source, to: destination,
                 depth: depth, singleBranch: singleBranch, branch: branch,
