@@ -5,9 +5,9 @@ import Testing
 extension LFSTestServerTests {
     @Test("an injected 401 is on the wire and in the request log")
     func injectedUnauthorized() async throws {
-        try await LFSTestServer.withServer { server in
+        try await LFSWireClient.withServer { server, client in
             server.inject(.unauthorized)
-            let response = try await LFSWireClient.postBatch(
+            let response = try await client.postBatch(
                 server, operation: "download", objects: [(oid: "abc", size: 1)]
             )
             try expectFault(server, response: response, method: "POST", status: 401, fault: "401")
@@ -23,9 +23,9 @@ extension LFSTestServerTests {
     )
     func injectedObjectError(code: Int) async throws {
         let oid = String(repeating: "ab", count: 32)
-        try await LFSTestServer.withServer { server in
+        try await LFSWireClient.withServer { server, client in
             server.inject(.objectStatus(oid: oid, code: code))
-            let response = try await LFSWireClient.postBatch(
+            let response = try await client.postBatch(
                 server, operation: "download", objects: [(oid: oid, size: 4)]
             )
             #expect(response.status == 200)
@@ -38,9 +38,9 @@ extension LFSTestServerTests {
 
     @Test("an injected 429 carries Retry-After on the wire and in the request log")
     func injectedRetryAfter() async throws {
-        try await LFSTestServer.withServer { server in
+        try await LFSWireClient.withServer { server, client in
             server.inject(.tooManyRequests(retryAfter: "12"))
-            let response = try await LFSWireClient.postBatch(
+            let response = try await client.postBatch(
                 server, operation: "upload", objects: [(oid: "abc", size: 1)]
             )
             try expectFault(server, response: response, method: "POST", status: 429, fault: "429")
@@ -51,10 +51,10 @@ extension LFSTestServerTests {
 
     @Test("a repeating server error answers later requests with the same JSON message")
     func injectedRepeatingServerError() async throws {
-        try await LFSTestServer.withServer { server in
+        try await LFSWireClient.withServer { server, client in
             server.inject(.repeatingServerError)
             for _ in 0..<2 {
-                let response = try await LFSWireClient.postBatch(
+                let response = try await client.postBatch(
                     server, operation: "download", objects: [(oid: "abc", size: 1)]
                 )
                 try expectFault(server, response: response, method: "POST", status: 500, fault: "500")
@@ -67,9 +67,9 @@ extension LFSTestServerTests {
 
     @Test("an injected 5xx is on the wire and in the request log")
     func injectedServerError() async throws {
-        try await LFSTestServer.withServer { server in
+        try await LFSWireClient.withServer { server, client in
             server.inject(.serverError(503))
-            let response = try await LFSWireClient.postBatch(
+            let response = try await client.postBatch(
                 server, operation: "download", objects: [(oid: "abc", size: 1)]
             )
             try expectFault(server, response: response, method: "POST", status: 503, fault: "503")
@@ -80,9 +80,9 @@ extension LFSTestServerTests {
     func injectedExpiredAction() async throws {
         let bytes = Data("expire\n".utf8)
         let oid = sha256Hex(bytes)
-        try await LFSTestServer.withServer { server in
+        try await LFSWireClient.withServer { server, client in
             server.inject(.expired(oid: oid))
-            let response = try await LFSWireClient.postBatch(
+            let response = try await client.postBatch(
                 server, operation: "upload", objects: [(oid: oid, size: bytes.count)]
             )
             #expect(response.status == 200)
@@ -99,14 +99,14 @@ extension LFSTestServerTests {
     func injectedWrongSize() async throws {
         let bytes = Data("hello\n".utf8)
         let oid = sha256Hex(bytes)
-        try await LFSTestServer.withServer { server in
+        try await LFSWireClient.withServer { server, client in
             server.store(bytes, oid: oid)
             server.inject(.wrongSize(oid: oid))
-            let batch = try await LFSWireClient.postBatch(
+            let batch = try await client.postBatch(
                 server, operation: "download", objects: [(oid: oid, size: bytes.count)]
             )
             let href = try #require(try LFSWireClient.document(batch).object(oid)?.actions?["download"]?.href)
-            let response = try await LFSWireClient.get(href)
+            let response = try await client.get(href)
             #expect(response.status == 200)
             #expect(response.body.count != bytes.count)
             try expectFault(server, response: response, method: "GET", status: 200, fault: "size")
@@ -117,14 +117,14 @@ extension LFSTestServerTests {
     func injectedWrongSHA256() async throws {
         let bytes = Data("hello\n".utf8)
         let oid = sha256Hex(bytes)
-        try await LFSTestServer.withServer { server in
+        try await LFSWireClient.withServer { server, client in
             server.store(bytes, oid: oid)
             server.inject(.wrongSHA256(oid: oid))
-            let batch = try await LFSWireClient.postBatch(
+            let batch = try await client.postBatch(
                 server, operation: "download", objects: [(oid: oid, size: bytes.count)]
             )
             let href = try #require(try LFSWireClient.document(batch).object(oid)?.actions?["download"]?.href)
-            let response = try await LFSWireClient.get(href)
+            let response = try await client.get(href)
             #expect(response.status == 200)
             #expect(response.body.count == bytes.count)
             #expect(sha256Hex(response.body) != oid)
