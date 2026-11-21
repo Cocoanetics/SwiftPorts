@@ -10,6 +10,20 @@ final class LFSPlainUploadServer {
     private var output: FileHandle?
     private(set) var endpoint: URL?
 
+    static func pythonExecutable(
+        environment: [String: String], windows: Bool,
+        isExecutable: (URL) -> Bool = { FileManager.default.isExecutableFile(atPath: $0.path) }
+    ) -> URL? {
+        let path = environment["PATH"] ?? (windows ? environment.first {
+            $0.key.caseInsensitiveCompare("PATH") == .orderedSame
+        }?.value : nil) ?? ""
+        let names = windows ? ["python.exe", "python3.exe"] : ["python3"]
+        let paths = path.split(separator: windows ? ";" : ":")
+        return names.lazy.flatMap { name in
+            paths.map { URL(fileURLWithPath: String($0)).appendingPathComponent(name) }
+        }.first(where: isExecutable)
+    }
+
     static func start() async throws -> LFSPlainUploadServer {
         let server = LFSPlainUploadServer()
         do {
@@ -23,17 +37,12 @@ final class LFSPlainUploadServer {
 
     private func launch() async throws {
         #if os(Windows)
-        let names = ["python.exe", "python3.exe"]
-        let separator: Character = ";"
+        let windows = true
         #else
-        let names = ["python3"]
-        let separator: Character = ":"
+        let windows = false
         #endif
-        let paths = ProcessInfo.processInfo.environment["PATH", default: ""].split(separator: separator)
-        let executables = names.flatMap { name in
-            paths.map { URL(fileURLWithPath: String($0)).appendingPathComponent(name) }
-        }
-        let executable = try #require(executables.first { FileManager.default.isExecutableFile(atPath: $0.path) },
+        let executable = try #require(Self.pythonExecutable(
+            environment: ProcessInfo.processInfo.environment, windows: windows),
                                       "Python 3 is required for the independent Windows upload probe")
         let script = try #require(Bundle.module.url(forResource: "LFSUploadServer", withExtension: "py",
                                                     subdirectory: "Fixtures"))
