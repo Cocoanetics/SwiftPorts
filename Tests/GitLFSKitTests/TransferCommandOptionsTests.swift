@@ -79,7 +79,8 @@ struct TransferCommandOptionsTests {
         }
     }
 
-    @Test func pushRangeAllAndStdin() async throws {
+    @Test(arguments: ["main\n", "main\r\n", "main\r\n\nmain\n", "\r\nmain\r\n\r\nmain\r", "main", "main\r"])
+    func pushRangeAllAndStdin(_ lines: String) async throws {
         try await LFSTestServer.withServer { server in
             try await LFSServerRepository.run(server) { repo in
                 let one = try await repo.commit([("a.bin", first)])
@@ -97,16 +98,18 @@ struct TransferCommandOptionsTests {
                 #expect(all.stdout.contains(LFSServerRepository.oid(second)))
                 options.all = false
                 options.stdin = true
-                let streamed = try await input("main\r\n\nmain\n").withCurrent {
+                let streamed = try await input(lines).withCurrent {
                     try await options.run(["origin"], client: repo.client, git: repo.git)
                 }
-                #expect(streamed.status == 0 && streamed.stdout == ranged.stdout)
+                #expect(streamed.status == 0, "\(streamed.stderr)")
+                #expect(streamed.stdout == ranged.stdout)
                 #expect(server.requests().isEmpty)
             }
         }
     }
 
-    @Test func pushStoredOIDsWithoutRefs() async throws {
+    @Test(arguments: ["\n", "\r\n", "\r", ""])
+    func pushStoredOIDsWithoutRefs(_ lineEnding: String) async throws {
         try await LFSTestServer.withServer { server in
             try await LFSServerRepository.run(server) { repo in
                 try await repo.storeLocally(first)
@@ -114,7 +117,7 @@ struct TransferCommandOptionsTests {
                 var options = PushOptions()
                 options.objectID = true
                 options.stdin = true
-                let uploaded = try await input("\(oid)\n\n").withCurrent {
+                let uploaded = try await input("\(oid)\(lineEnding)").withCurrent {
                     try await options.run(["origin"], client: repo.client, git: repo.git)
                 }
                 #expect(uploaded.status == 0 && server.bytes(for: oid) == first)

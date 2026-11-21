@@ -26,8 +26,12 @@ public struct PushOptions: Sendable {
             let names: [String]
             if stdin {
                 let data = await Shell.current.stdin.readAllData()
-                names = String(decoding: data, as: UTF8.self).components(separatedBy: "\n")
-                    .map { $0.hasSuffix("\r") ? String($0.dropLast()) : $0 }.filter { !$0.isEmpty }
+                // bufio.ScanLines splits at LF bytes and drops one trailing CR,
+                // including on the final unterminated line. CRLF is one Swift
+                // Character, so split bytes rather than platform-dependent strings.
+                names = data.split(separator: 0x0A).map { line in
+                    String(decoding: line.last == 0x0D ? line.dropLast() : line, as: UTF8.self)
+                }.filter { !$0.isEmpty }
             } else {
                 names = Array(arguments.dropFirst())
             }
