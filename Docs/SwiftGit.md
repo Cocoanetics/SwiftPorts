@@ -62,6 +62,7 @@ See [GitLFS.md](GitLFS.md#filter-registration-230-part-1-of-192) for scope.
 | `revList(starts:excludes:)` → `[String]` | `git rev-list <commit>...` full commit ids in the default walk order. An empty start list is an error (`log()` keeps its own order) |
 | `diff(_:format:paths:contextLines:)` | `git diff` (patch / stat / shortstat / numstat / raw / name-only / name-status), supports `<a>..<b>` ranges |
 | `diffIndex(ref:cached:refresh:)` → `[DiffIndexEntry]` | `git diff-index [-M] [--cached] <ref>`. `refresh` (default false) is `git update-index --refresh` before an uncached diff: stat metadata is rewritten only when the raw work-tree bytes match the stage-zero index entry, so a stat-only touch disappears and a same-size edit stays. Full ids, modes, source and destination paths, status. Renames at 50%, copies off. Unborn `HEAD` is the empty tree |
+| `refreshIndex(paths:)` | Stat-only `git update-index -q --refresh` for repository-relative paths. Hashes through clean filters without writing objects; refreshes metadata only when content and mode match the stage-zero entry. Skips missing, unmerged, skip-worktree and assume-unchanged entries. Smudged LFS files stay stale without the LFS clean filter registered |
 | `mergeBase(_:_:)` | `git merge-base <a> <b>` |
 | `canResolveRef(_:)` | safe-probe form of `resolveOID` |
 | `blame(path:)` → `[BlameHunk]` | `git blame <path>` |

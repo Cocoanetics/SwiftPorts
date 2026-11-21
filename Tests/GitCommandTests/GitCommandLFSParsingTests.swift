@@ -3,6 +3,13 @@ import Foundation
 import Testing
 import ArgumentParser
 import ShellKit
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 @testable import GitCommand
 
 @Suite("git lfs argv parsing")
@@ -91,6 +98,15 @@ struct GitCommandLFSParsingTests {
         #expect(range.refs == ["A", "B"])
     }
 
+    @Test(arguments: [["-p", "-j"], ["--porcelain", "--json"]])
+    func statusFlags(_ flags: [String]) throws {
+        let command = try #require(parse(["lfs", "status", "ignored"] + flags + ["arguments"]) as? LFSStatus)
+        #expect(command.porcelain && command.json)
+        #expect(command.arguments == ["ignored", "arguments"])
+        let plain = try #require(parse(["lfs", "status"]) as? LFSStatus)
+        #expect(!plain.porcelain && !plain.json && plain.arguments.isEmpty)
+    }
+
     @Test(arguments: [
         ["-a", "-I", "*.bin", "-X", "skip/**", "-d", "-j"],
         ["-a", "-I*.bin", "-Xskip/**", "-d", "-j"],
@@ -134,6 +150,13 @@ struct GitCommandLFSParsingTests {
     }
 
     #if os(macOS) || os(Linux)
+    /// `os.Getwd` for a directory that exists. Foundation shortens `/private/var` to `/var`.
+    private func physicalDirectory(_ path: String) -> String {
+        guard let resolved = realpath(path, nil) else { return path }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
     @Test func transferDispatchAndDiagnostics() async throws {
         let fixture = try LFSCommandFixture()
         defer { fixture.cleanup() }
@@ -156,7 +179,8 @@ struct GitCommandLFSParsingTests {
         #expect(hook.stdout == "This should be run through Git's pre-push hook.  Run `git lfs update` to install it.\n")
         let invalid = try await fixture.run(["fetch", "main"])
         #expect(invalid.status == 2 && invalid.stdout.isEmpty)
-        let cwd = fixture.ours.path
+        // filepath.Abs joins onto getcwd, which keeps `/private` on Darwin.
+        let cwd = physicalDirectory(fixture.ours.path)
         #expect(invalid.stderr == "Invalid remote name \"main\": invalid remote name: \"\(cwd)/main\"\n")
         let fetch = try await fixture.run(["fetch", "--all", "--json"])
         #expect(fetch.status == 0 && fetch.stdout == "{\n \"transfers\": []\n}\n")

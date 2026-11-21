@@ -246,9 +246,67 @@ Object requests use one auth attempt and one additional attempt for an
 unauthenticated 401; authenticated actions use their supplied authorization.
 Batch and general API authentication keep their existing retry behavior.
 
-SSH/file transfer adapters, tus, progress-line formatting, and
-`lfs.transfer.maxretrytime` remain outside this surface. `file://` retains
-the standalone-transfer hint and missing-protocol error.
+SSH/file transfer adapters, tus, and `lfs.transfer.maxretrytime` remain
+outside this surface. Progress lines are formatted by `LFSProgressMeter`;
+see Fetch and push below. `file://` retains the standalone-transfer hint
+and missing-protocol error.
+
+## Fetch and push (`Transfer/`, `Commands/`, #233)
+
+`LFSClient.fetch` downloads the pointers `GitScanner` finds. Without
+`--all`, each ref is that ref's tip tree (`scanTree`); an empty ref list is
+the current branch. `--all` with no refs is `scanAll`, and `--all` with refs
+is `scanRefs` of those refs and no excludes. `-I` / `-X` replace
+`lfs.fetchinclude` / `lfs.fetchexclude` when the flag is present; otherwise
+the config pair applies, each side on its own. `--all` refuses include and
+exclude, and says when it ignores a configured pair. Objects already in
+`LocalStore` are not requested. `--dry-run` still asks the batch API and
+prints `fetch <oid> => <path>` without transferring. `--json` prints
+`{"transfers": […]}` and suppresses the meter. There is no `--recent`,
+`--prune`, or `--refetch`.
+
+`uploadObjects(for:)` is what `git lfs push` and `pre-push` run. A zero
+local OID (a delete) is skipped. A non-zero remote OID, and the
+remote-tracking tips the remote still advertises, are excluded. An all-zero
+remote OID excludes every `refs/remotes/<remote>/*` tip. The upload scan
+does not apply a path filter. `--all` scans that history with no remote
+exclusions. A missing local object fails with `Git LFS upload failed:`
+unless `lfs.allowincompletepush` is set, which warns with
+`Git LFS upload missing objects:` and still uploads what is present.
+`--dry-run` prints `push <oid> => <path>` and does not contact the server
+for the batch. `--object-id` uploads those store objects and does not scan
+commits.
+
+`GitCommand` registers `fetch`, `push`, and `pre-push`. `fetch` takes an
+optional remote and then refs; with no arguments it fetches the current ref
+from the download remote. `push` requires a remote. `--stdin` reads one ref
+or OID per line and rejects any further argument. `pre-push` reads the
+hook's four-field lines and accepts the remote URL the hook passes. `git
+push` also uses this path when git-lfs's pre-push hook is installed (#234).
+
+Before an upload of refs, `LFSLockVerifier` POSTs `/locks/verify`, matching
+git-lfs 3.7.1. A 404 or 501 records `lfs.<url>.locksverify false` and
+continues, with no diagnostic. Any other failure prints the locking-API
+text; an enabled check also fails the command. When the server implements
+locking and the setting is unset, the command prints the "consider
+enabling" hint.
+
+`LFSProgressMeter` writes
+`Uploading LFS objects: 100% (n/n), X MB | Y MB/s, done.` and the download
+twin to stdout, as git-lfs's tasklog does. Intermediate lines are padded
+and end in `\r`, and only when stdout is a terminal or progress is forced
+(`GIT_LFS_FORCE_PROGRESS` or `lfs.forceprogress`). The final `, done.` line
+is written either way. Dry-run and `--json` do not print it. An object the
+server already has is still counted in `(n/n)`. `GIT_LFS_PROGRESS`, when it
+is an absolute path, receives one append-only line per transferred chunk.
+
+`GitCommandLFSTransferOracleTests` compares that stdout, stderr (including
+`/locks/verify` text), and status with system git-lfs 3.7.1. Each side gets
+the same repository shape and its own `LFSTestServer`, so both see an empty
+server. A push with one implementation followed by `fetch` in a fresh clone
+with the other checks that the bytes arrived. The comparison is raw except
+for the meter's speed field.
+
 ## Scanning (`GitScanner`, #205)
 
 `GitScanner` walks one repository through the in-process `GitClient`.
@@ -517,3 +575,9 @@ forward authorization to another origin.
   (`Support/LFSSamePathOracle.swift`). Only a `git-lfs/` version line and a
   `git version` line are normalized. Skipped unless `git lfs version` starts
   with `git-lfs/3.7.1`.
+- `GitCommandLFSTransferOracleTests` (macOS / Linux) — `fetch` / `push`
+  stdout, stderr, and status on one repository shape, each side against its
+  own `LFSTestServer`. Covers `--all`, `--object-id`, `--dry-run`, `--json`,
+  an invalid remote, and `--stdin` misuse, plus a push then a fetch from a
+  fresh clone in both directions. Only a meter line's speed field is
+  normalized. Same `git-lfs/3.7.1` gate.
