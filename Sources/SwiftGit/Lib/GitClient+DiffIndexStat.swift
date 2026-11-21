@@ -31,11 +31,11 @@ import WinSDK
 /// reload the index and discard the poke.
 enum DiffIndexStat {
     /// `GIT_INDEX_ENTRY_SKIP_WORKTREE` (`flags_extended` bit 14).
-    private static let skipWorktree: UInt16 = 1 << 14
+    static let skipWorktree: UInt16 = 1 << 14
     #if os(Windows)
-    private static let defaultFileMode = false
+    static let defaultFileMode = false
     #else
-    private static let defaultFileMode = true
+    static let defaultFileMode = true
     #endif
 
     final class Hold {
@@ -75,7 +75,7 @@ enum DiffIndexStat {
         var trustCtime: Bool
     }
 
-    fileprivate struct WorktreeStat {
+    struct WorktreeStat {
         var mode: UInt32
         var size: UInt64
         var mtimeSeconds: Int64
@@ -337,7 +337,7 @@ enum DiffIndexStat {
         return paths
     }
 
-    private static func worktreePath(_ repo: OpaquePointer?, _ path: String) -> String? {
+    static func worktreePath(_ repo: OpaquePointer?, _ path: String) -> String? {
         guard !path.isEmpty, !path.hasPrefix("/"), !path.hasPrefix("\\") else { return nil }
         guard !path.split(separator: "/").contains("..") else { return nil }
         guard let rootPointer = git_repository_workdir(repo) else { return nil }
@@ -352,7 +352,7 @@ enum DiffIndexStat {
         #endif
     }
 
-    private static func rewriteStat(_ index: OpaquePointer?, path: String, file: WorktreeStat) {
+    static func rewriteStat(_ index: OpaquePointer?, path: String, file: WorktreeStat) {
         guard let current = git_index_get_bypath(index, path, 0) else { return }
         // Only stat data changes; git_index_add would revalidate the existing
         // OID and reject a missing blob that git update-index --refresh accepts.
@@ -362,7 +362,7 @@ enum DiffIndexStat {
         entry.pointee.flags_extended |= UInt16(GIT_INDEX_ENTRY_UPTODATE.rawValue)
     }
 
-    private static func apply(_ file: WorktreeStat, to entry: inout git_index_entry) {
+    static func apply(_ file: WorktreeStat, to entry: inout git_index_entry) {
         entry.ctime.seconds = Int32(truncatingIfNeeded: file.ctimeSeconds)
         entry.ctime.nanoseconds = file.ctimeNanoseconds
         entry.mtime.seconds = Int32(truncatingIfNeeded: file.mtimeSeconds)
@@ -388,7 +388,7 @@ enum DiffIndexStat {
         poked[path] = original
     }
 
-    private static func modesMatch(index: UInt32, work: UInt32, trustFileMode: Bool) -> Bool {
+    static func modesMatch(index: UInt32, work: UInt32, trustFileMode: Bool) -> Bool {
         let indexType = index & 0o170000
         let workType = work & 0o170000
         if indexType != workType { return false }
@@ -396,7 +396,7 @@ enum DiffIndexStat {
         return index == work
     }
 
-    private static func statDiffers(_ entry: git_index_entry, _ file: WorktreeStat, trustCtime: Bool) -> Bool {
+    static func statDiffers(_ entry: git_index_entry, _ file: WorktreeStat, trustCtime: Bool) -> Bool {
         if entry.mtime.seconds != Int32(truncatingIfNeeded: file.mtimeSeconds) { return true }
         if entry.mtime.nanoseconds != file.mtimeNanoseconds { return true }
         if trustCtime {
@@ -407,7 +407,7 @@ enum DiffIndexStat {
         return false
     }
 
-    private static func rawOID(_ file: WorktreeStat, at path: String) -> git_oid? {
+    static func rawOID(_ file: WorktreeStat, at path: String) -> git_oid? {
         var oid = git_oid()
         if file.mode == 0o120000 {
             guard let data = DiffIndexWorktree.bytes(path) else { return nil }
@@ -424,7 +424,7 @@ enum DiffIndexStat {
         return rc == 0 ? oid : nil
     }
 
-    private static func oidEqual(_ lhs: git_oid, _ rhs: git_oid) -> Bool {
+    static func oidEqual(_ lhs: git_oid, _ rhs: git_oid) -> Bool {
         var lhs = lhs
         var rhs = rhs
         return git_oid_equal(&lhs, &rhs) != 0
@@ -435,7 +435,7 @@ enum DiffIndexStat {
         return git_oid_is_zero(&oid) != 0
     }
 
-    private static func flag(_ name: String, repo: OpaquePointer?, default defaultValue: Bool) -> Bool {
+    static func flag(_ name: String, repo: OpaquePointer?, default defaultValue: Bool) -> Bool {
         var config: OpaquePointer?
         guard git_repository_config(&config, repo) == 0 else { return defaultValue }
         defer { git_config_free(config) }
@@ -453,7 +453,7 @@ enum DiffIndexStat {
 /// `lstat` (and the Windows attribute read libgit2's iterator uses) plus
 /// the raw blob id of a work-tree file. Kept apart from ``DiffIndexStat``
 /// so each type stays within the lint size limit.
-private enum DiffIndexWorktree {
+enum DiffIndexWorktree {
     static func fileStat(_ path: String) -> DiffIndexStat.WorktreeStat? {
         #if os(Windows)
         return windowsStat(path)

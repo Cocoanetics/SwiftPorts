@@ -1,4 +1,5 @@
 import Foundation
+import ShellKit
 import Testing
 import SwiftGit
 @testable import GitLFSKit
@@ -243,4 +244,64 @@ struct EndpointResolutionTests {
             #expect(finder.endpoint(operation: "upload", remote: fileURL).url == fileURL)
         }
     }
+
+    #if !os(Windows)
+    @Test("os.Getwd keeps a PWD that names the directory and otherwise uses the kernel path")
+    func getwdPrefersMatchingPWD() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LFSGetwd-\(UUID().uuidString)", isDirectory: true)
+        let target = root.appendingPathComponent("target", isDirectory: true)
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let logical = link.path
+        #expect(LFSEndpointDerivation.getwd(target.path, pwd: logical) == logical)
+        #expect(LFSEndpointDerivation.getwd(logical, pwd: logical) == logical)
+        let joined = LFSEndpointDerivation.absolutePath("not-a-remote", base: target.path, pwd: logical)
+        #expect(joined == (logical as NSString).appendingPathComponent("not-a-remote"))
+
+        let kernel = LFSRepositoryPaths.canonical(target.path)
+        #expect(LFSEndpointDerivation.getwd(target.path, pwd: nil) == kernel)
+        #expect(LFSEndpointDerivation.getwd(target.path, pwd: "link") == kernel)
+        #expect(LFSEndpointDerivation.getwd(target.path, pwd: "/nowhere") == kernel)
+        #if os(macOS)
+        if target.path.hasPrefix("/var/") {
+            #expect(kernel.hasPrefix("/private/var/"))
+        }
+        #endif
+    }
+
+    @Test("the production overloads read PWD from the bound shell")
+    func productionOverloadsUseShellPWD() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LFSShellPWD-\(UUID().uuidString)", isDirectory: true)
+        let target = root.appendingPathComponent("target", isDirectory: true)
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let logical = link.path
+        let wanted = (logical as NSString).appendingPathComponent("not-a-remote")
+        let shell = Shell(environment: Environment(variables: ["PWD": logical], workingDirectory: logical))
+        let absolute = await shell.withCurrent {
+            LFSEndpointDerivation.absolutePath("not-a-remote", base: target.path)
+        }
+        let located = await shell.withCurrent {
+            LFSEndpointDerivation.located("not-a-remote", base: target.path)
+        }
+        #expect(absolute == wanted)
+        #expect(located == wanted)
+
+        let bare = Shell(environment: Environment(variables: [:], workingDirectory: target.path))
+        let kernel = (LFSRepositoryPaths.canonical(target.path) as NSString)
+            .appendingPathComponent("not-a-remote")
+        let without = await bare.withCurrent {
+            LFSEndpointDerivation.absolutePath("not-a-remote", base: target.path)
+        }
+        #expect(without == kernel)
+    }
+    #endif
 }
