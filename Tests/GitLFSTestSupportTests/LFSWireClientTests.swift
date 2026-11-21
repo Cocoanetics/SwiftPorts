@@ -4,7 +4,7 @@ import Testing
 import FoundationNetworking
 #endif
 
-@Suite("LFSWireClientTests")
+@Suite("LFSWireClientTests", .timeLimit(.minutes(2)))
 struct LFSWireClientTests {
     @Test("parallel wire fixture teardown hands off to held transfers repeatedly")
     func parallelTransfersHandoff() async throws {

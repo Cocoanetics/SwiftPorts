@@ -5,7 +5,7 @@ import SwiftGit
 import Testing
 @testable import GitLFSKit
 
-@Suite("LFS uploadObjects(for:) (git-lfs 3.7.1 uploader.go)")
+@Suite("LFS uploadObjects(for:) (git-lfs 3.7.1 uploader.go)", .timeLimit(.minutes(2)))
 struct LFSUploadObjectsTests {
     let first = Data("first object\n".utf8)
     let second = Data("second object!\n".utf8)

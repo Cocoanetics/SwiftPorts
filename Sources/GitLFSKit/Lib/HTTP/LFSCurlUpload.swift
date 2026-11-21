@@ -19,7 +19,7 @@ final class LFSCurlUpload: @unchecked Sendable {
     private let diagnostic = LFSUploadDiagnostics.sink
     private let lock = NSLock()
     private var cancelled = false
-    private var fileURL: URL?
+    private var file: LFSCurlFile?
     private var input: InputStream?
     private var data: Data?
     private var offset = 0
@@ -81,21 +81,15 @@ final class LFSCurlUpload: @unchecked Sendable {
         }
         lastActivity = .now
         idleTimeout = configuration.timeoutIntervalForRequest
-        defer { input?.close() }
+        defer { file = nil; input?.close() }
         var length: Int64
         let sourceKind: String
         switch body {
         case .file(let url):
             sourceKind = "file"
-            let handle = try FileHandle(forReadingFrom: url)
-            do {
-                length = Int64(clamping: try handle.seekToEnd())
-                try handle.close()
-            } catch { try? handle.close(); throw error }
-            // Use the same bounded stream reader as explicit stream bodies,
-            // retaining the known file length rather than switching to chunked.
-            fileURL = url
-            try openFileStream(url)
+            let source = try LFSCurlFile(url: url)
+            file = source
+            length = source.length
         case .data(let bytes):
             sourceKind = "data"
             data = bytes
@@ -170,7 +164,8 @@ final class LFSCurlUpload: @unchecked Sendable {
             case 42: code = .cancelled
             default: code = .networkConnectionLost
             }
-            throw URLError(code, userInfo: [NSLocalizedDescriptionKey: message])
+            // The raw CURLcode identifies this transport in a mapped failure.
+            throw URLError(code, userInfo: [NSLocalizedDescriptionKey: message, "CURLcode": result])
         }
         guard let response else { throw URLError(.badServerResponse) }
         return LFSTransferHTTPResult(response: response, body: responseBody, accepted: stream.accepts(response))
@@ -199,7 +194,9 @@ final class LFSCurlUpload: @unchecked Sendable {
         do {
             let count = min(count, 64 * 1024)
             let amount: Int
-            if let input {
+            if let file {
+                amount = try file.read(buffer, count: count)
+            } else if let input {
                 amount = input.read(buffer, maxLength: count)
                 if amount < 0 { throw input.streamError ?? URLError(.cannotOpenFile) }
             } else if let data {
@@ -219,24 +216,13 @@ final class LFSCurlUpload: @unchecked Sendable {
     private func seek(_ offset: Int64, origin: Int32) -> Int32 {
         guard origin == 0, offset >= 0 else { return 2 } // CURL_SEEKFUNC_CANTSEEK
         do {
-            if let fileURL { try openFileStream(fileURL, offset: offset) }
+            if let file { try file.seek(to: offset) }
             else if let data, offset <= Int64(data.count) { self.offset = Int(offset) }
             else { return 2 }
             if sent > 0 { stream.progress?(sent, -sent) }
             sent = 0
             return 0
         } catch { failure = error; return 1 }
-    }
-
-    private func openFileStream(_ url: URL, offset: Int64 = 0) throws {
-        input?.close()
-        guard let source = InputStream(url: url) else { throw URLError(.cannotOpenFile) }
-        input = source
-        source.open()
-        if offset != 0, !source.setProperty(NSNumber(value: offset), forKey: .fileCurrentOffsetKey) {
-            throw URLError(.cannotOpenFile)
-        }
-        if let error = source.streamError { throw error }
     }
 
     private func checkpoint(_ sent: Int64, _ received: Int64) -> Int32 {

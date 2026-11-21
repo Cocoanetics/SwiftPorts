@@ -1275,8 +1275,7 @@ let package = Package(
                 "GitLFSTestSupport",
                 "SwiftGit",
                 .product(name: "ShellKit", package: "ShellKit"),
-            ],
-            resources: [.copy("Fixtures")]
+            ]
         ),
         .testTarget(
             name: "GitLFSTestSupportTests",

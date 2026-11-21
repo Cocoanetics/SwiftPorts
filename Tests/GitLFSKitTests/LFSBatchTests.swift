@@ -95,7 +95,7 @@ private final class BatchCalls: @unchecked Sendable {
     func record() { lock.lock(); count += 1; lock.unlock() }
 }
 
-@Suite("LFSBatchTests", .serialized)
+@Suite("LFSBatchTests", .serialized, .timeLimit(.minutes(2)))
 struct LFSBatchTests {
     private let oid = "4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393"
     private let batchURL = "https://example.com/repo.git/info/lfs/objects/batch"
