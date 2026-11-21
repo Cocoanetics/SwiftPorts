@@ -37,12 +37,12 @@ extension GitClient {
 
     /// True iff `spec` resolves to an object via `git_revparse_single`.
     public func canResolveRef(_ spec: String) async throws -> Bool {
-        try await withRepository { try $0.canResolveRef(spec) }
+        try await withFilterMetadataRepository { try $0.canResolveRef(spec) }
     }
 
     /// Compute the merge-base of two commit-ishes.
     public func mergeBase(_ a: String, _ b: String) async throws -> String {
-        try await withRepository { try $0.mergeBase(a, b) }
+        try await withFilterMetadataRepository { try $0.mergeBase(a, b) }
     }
 
     /// `git diff-index` against `ref`, as typed records with full object ids.

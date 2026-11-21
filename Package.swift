@@ -460,8 +460,10 @@ let package = Package(
         // `log --show-signature`.
         // GitKit 2.10.1 honours merge/rebase signature environments and
         // writes mergetag headers when merging annotated tags.
+        // 2026-11-20: 2.12.0 adds the streaming GitFilters contract for
+        // opt-in, in-process LFS filters and callback repository metadata.
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.10.1",
+                 from: "2.12.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
