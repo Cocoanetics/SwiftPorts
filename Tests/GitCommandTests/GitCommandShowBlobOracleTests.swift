@@ -86,6 +86,27 @@ struct GitCommandShowBlobOracleTests {
         try await fixture.compare(spec, bytes: Data(), status: 128)
     }
 
+    @Test(arguments: ["HEAD^{/no match: x}", "HEAD^{/no match: x}:missing-path.txt",
+                      "missing@{2020-01-01 10:00}", "missing@{2020-01-01 10:00}:message.txt",
+                      "no-reflog@{2020-01-01 10:00}", "no-reflog@{2020-01-01 10:00}:message.txt"])
+    func bracedRevisionFailure(_ spec: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.git(["-c", "core.logAllRefUpdates=false", "update-ref", "refs/heads/no-reflog", "HEAD"])
+        try await fixture.compare(spec, bytes: Data(), status: 128)
+    }
+
+    @Test(arguments: ["HEAD:untracked.txt", ":untracked.txt", ":0:untracked.txt",
+                      "HEAD:only-in-sub.txt", ":only-in-sub.txt", ":0:only-in-sub.txt"])
+    func missingPathFromSubdirectory(_ spec: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let subdirectory = fixture.repo.appendingPathComponent("sub", isDirectory: true)
+        try FileManager.default.createDirectory(at: subdirectory, withIntermediateDirectories: true)
+        try Data("subdirectory only\n".utf8).write(to: subdirectory.appendingPathComponent("only-in-sub.txt"))
+        try await fixture.compare(spec, bytes: Data(), status: 128, in: subdirectory)
+    }
+
     private struct Output {
         let stdout: Data
         let stderr: Data
@@ -144,11 +165,11 @@ struct GitCommandShowBlobOracleTests {
             ]) { _, new in new }
         }
 
-        private func systemGit(_ args: [String]) throws -> Output {
+        private func systemGit(_ args: [String], in directory: URL? = nil) throws -> Output {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.arguments = ["git"] + args
-            process.currentDirectoryURL = repo
+            process.currentDirectoryURL = directory ?? repo
             process.environment = variables
             process.standardInput = FileHandle.nullDevice
             let out = Pipe(), err = Pipe()
@@ -169,14 +190,14 @@ struct GitCommandShowBlobOracleTests {
             return result
         }
 
-        func compare(_ spec: String, bytes: Data, status: Int32 = 0) async throws {
-            let expected = try systemGit(["show", spec])
+        func compare(_ spec: String, bytes: Data, status: Int32 = 0, in directory: URL? = nil) async throws {
+            let expected = try systemGit(["show", spec], in: directory)
             #expect(expected.stdout == bytes)
             #expect(expected.status == status)
             let out = OutputSink(), err = OutputSink()
             let shell = Shell(
                 stdin: .data(Data()), stdout: out, stderr: err,
-                environment: Environment(variables: variables, workingDirectory: repo.path))
+                environment: Environment(variables: variables, workingDirectory: (directory ?? repo).path))
             shell.sandbox = host.sandbox
             let actualStatus = try await shell.withCurrent {
                 try await Shell.parsableCommand(GitCommand.self).run(["git", "show", spec])

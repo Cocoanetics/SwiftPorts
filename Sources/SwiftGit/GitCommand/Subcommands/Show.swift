@@ -29,13 +29,15 @@ struct Show: AsyncParsableCommand {
             do {
                 sha = try await client.resolveOID(target)
             } catch {
-                if let colon = target.firstIndex(of: ":"), colon != target.startIndex {
+                if let colon = revisionPathSeparator(in: target), colon != target.startIndex {
                     let revision = String(target[..<colon])
                     let path = String(target[target.index(after: colon)...])
                     guard (try? await client.resolveOID(revision + "^{tree}")) != nil else {
                         throw CLIError.stderr("fatal: invalid object name '\(revision)'.", exitCode: 128)
                     }
-                    let url = Shell.resolve(path)
+                    let root = try await client.toplevel().map { URL(fileURLWithPath: $0, isDirectory: true) }
+                        ?? client.workingDirectory
+                    let url = URL(fileURLWithPath: path, relativeTo: root).standardizedFileURL
                     try await Shell.authorize(url)
                     let reason = FileManager.default.fileExists(atPath: url.path)
                         ? "exists on disk, but not in" : "does not exist in"
@@ -77,6 +79,24 @@ struct Show: AsyncParsableCommand {
         try await showCommit(sha: sha, client: client, stdout: stdout, signature: showSignatures)
     }
 
+    /// Match object-name.c: colons inside `@{...}` and `^{...}` belong to the revision.
+    private func revisionPathSeparator(in target: String) -> String.Index? {
+        var depth = 0
+        var previous: Character?
+        for index in target.indices {
+            let character = target[index]
+            if character == "{", previous == "@" || previous == "^" {
+                depth += 1
+            } else if character == "}", depth > 0 {
+                depth -= 1
+            } else if character == ":", depth == 0 {
+                return index
+            }
+            previous = character
+        }
+        return nil
+    }
+
     /// Index paths use stage zero unless an explicit `:0:` ... `:3:` is given.
     private func resolveIndexBlob(_ spec: String, client: SwiftGit.GitClient) async throws -> String {
         var path = String(spec.dropFirst())
@@ -93,7 +113,9 @@ struct Show: AsyncParsableCommand {
                 "fatal: path '\(path)' is in the index, but not at stage \(stage)\n"
                     + "hint: Did you mean ':\(entry.stage):\(path)'?", exitCode: 128)
         }
-        let url = Shell.resolve(path)
+        let root = try await client.toplevel().map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? client.workingDirectory
+        let url = URL(fileURLWithPath: path, relativeTo: root).standardizedFileURL
         try await Shell.authorize(url)
         let reason = FileManager.default.fileExists(atPath: url.path)
             ? "exists on disk, but not in the index" : "does not exist (neither on disk nor in the index)"
