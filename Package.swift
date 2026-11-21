@@ -1198,9 +1198,11 @@ let package = Package(
             path: "Sources/GitLFSKit/CGitLFSEnvironment",
             publicHeadersPath: "include"
         ),
-        // Drive the Windows toolchain's existing libcurl with its blocking
-        // easy interface, avoiding FoundationNetworking's Dispatch socket loop.
-        // macOS/Linux build this adapter too so its streaming path is tested.
+        // Windows-only production workaround for FoundationNetworking #5532:
+        // https://github.com/swiftlang/swift-corelibs-foundation/issues/5532
+        // macOS/Linux have valid reference implementations for direct transport
+        // tests, but their production requests still use URLSession. Android
+        // drops both this declaration and its dependency below during resolution.
         .target(
             name: "CLFSCurl",
             path: "Sources/GitLFSKit/CLFSCurl",

@@ -5,9 +5,14 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// Windows uploads use libcurl's own polling loop instead of Foundation's
-/// Dispatch socket sources (swift-corelibs-foundation#5532). Each attempt has
-/// one worker and bounded disk reads; authentication/retries stay in LFSClient.
+/// Windows-only production workaround for Foundation's socket-readiness stall:
+/// https://github.com/swiftlang/swift-corelibs-foundation/issues/5532
+/// Plain 1 MB file/Data PUTs stall with valid Content-Length and no Expect wait,
+/// before any response; the server drains every reported byte until request end.
+/// Fixing the stream probe's conflicting framing does not fix those uploads.
+/// Use libcurl's polling loop rather than Foundation's Dispatch socket sources;
+/// macOS/Linux build this implementation only for direct transport coverage.
+/// Each attempt has one worker and bounded reads; auth/retries stay in LFSClient.
 final class LFSCurlUpload: @unchecked Sendable {
     private let stream: LFSTransferStream
     private let lock = NSLock()
