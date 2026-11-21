@@ -54,7 +54,7 @@ final class LFSUploadContext {
     /// `ReportErrors`, without lock verification.
     func report() -> LFSCommandResult {
         meter.finish()
-        var result = LFSCommandResult(stdout: stdout + meter.drain())
+        var result = LFSCommandResult(stdout: stdout)
         for error in otherErrors { result.stderr += error + "\n" }
         if !missing.isEmpty || !corrupt.isEmpty {
             result.stdout += "Git LFS upload \(allowMissing ? "missing objects" : "failed"):\n"

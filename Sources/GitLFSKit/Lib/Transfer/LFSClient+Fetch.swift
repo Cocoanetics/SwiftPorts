@@ -18,6 +18,8 @@ extension LFSClient {
     /// prints the transferred objects as `{"transfers": […]}` on success
     /// and suppresses the progress meter. `terminal` says whether stdout is
     /// a terminal, for the meter and the scan's object count.
+    /// That progress text is written to the shell's stdout while the fetch
+    /// runs, as git-lfs's `tasklog` does; the result holds everything else.
     public func fetch(
         refs: [String] = [], remote: String = "", include: String? = nil, exclude: String? = nil,
         all: Bool = false, dryRun: Bool = false, json: Bool = false, terminal: Bool = false,

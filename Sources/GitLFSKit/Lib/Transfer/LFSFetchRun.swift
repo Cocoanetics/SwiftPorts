@@ -55,10 +55,10 @@ struct LFSFetchRun {
         if logsProgress {
             for count in 1...pointers.count {
                 let line = found(count)
-                result.stdout += line + String(repeating: " ", count: max(0, 80 - line.utf8.count)) + "\r"
+                environment.stdout(line + String(repeating: " ", count: max(0, 80 - line.utf8.count)) + "\r")
             }
         }
-        result.stdout += found(pointers.count) + ", done.\n"
+        environment.stdout(found(pointers.count) + ", done.\n")
         return pointers
     }
 
@@ -98,7 +98,6 @@ struct LFSFetchRun {
                 }
             })
         let failures = try await queue.process(objects)
-        result.stdout += meter.drain()
         result.stderr += watcher.drainProgress()
         for failure in failures { result.stderr += failure.description + "\n" }
         return failures.isEmpty

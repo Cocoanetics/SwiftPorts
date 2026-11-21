@@ -1,13 +1,24 @@
 import Foundation
 import ShellKit
+#if os(Windows)
+import ucrt
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#elseif canImport(Android)
+import Android
+#endif
 
 /// `tq.Meter` as drained by a `tasklog.Logger`. Progress lines are padded to
 /// the terminal width and end in `\r`; they are logged only when stdout is a
 /// terminal or progress is forced (`GIT_LFS_FORCE_PROGRESS` / `lfs.forceprogress`),
 /// at most every 200 ms unless flushed. ``finish()`` logs the last line with
 /// `, done.` whether or not stdout is a terminal. A meter whose `display` is
-/// false (git-lfs's `Meter.DryRun`) never logs. `GIT_LFS_PROGRESS` names a
-/// file that receives one line per chunk of transferred bytes.
+/// false (git-lfs's `Meter.DryRun`) never logs. Logged text goes to `write`
+/// (the shell's stdout) as it happens. `GIT_LFS_PROGRESS` names a file,
+/// opened for appending, that receives one line per chunk of transferred bytes.
+/// Counters wrap rather than trap, as Go's atomic adds do.
 final class LFSProgressMeter: @unchecked Sendable {
     static let throttle: TimeInterval = 0.2
     /// Go's zero `time.Time`, where `lastAvg` starts.
@@ -18,13 +29,13 @@ final class LFSProgressMeter: @unchecked Sendable {
     private let logsProgress: Bool
     private let width: Int
     private let now: @Sendable () -> Date
+    private let write: @Sendable (String) -> Void
     private let lock = NSLock()
     private var log: FileHandle?
 
     private var finishedFiles: Int64 = 0
     private var transferringFiles: Int64 = 0
     private var estimatedFiles: Int64 = 0
-    private var estimatedBytes: Int64 = 0
     private var currentBytes: Int64 = 0
     private var lastBytes: Int64 = 0
     private var sampleCount: Double = 0
@@ -34,11 +45,11 @@ final class LFSProgressMeter: @unchecked Sendable {
     private var fileIndex: [String: Int64] = [:]
     private var lastLogged = LFSProgressMeter.zeroTime
     private var lastUpdate: String?
-    private var output = ""
 
     init(
         direction: LFSTransferDirection, display: Bool, logsProgress: Bool, width: Int = 80,
-        log: FileHandle? = nil, now: @escaping @Sendable () -> Date = { Date() }
+        log: FileHandle? = nil, now: @escaping @Sendable () -> Date = { Date() },
+        write: @escaping @Sendable (String) -> Void
     ) {
         self.direction = direction
         self.display = display
@@ -46,6 +57,7 @@ final class LFSProgressMeter: @unchecked Sendable {
         self.width = width
         self.log = log
         self.now = now
+        self.write = write
     }
 
     /// `buildProgressMeter` plus the logger's `ForceProgress` option.
@@ -57,7 +69,7 @@ final class LFSProgressMeter: @unchecked Sendable {
             || configuration.boolean("lfs.forceprogress")
         return LFSProgressMeter(
             direction: direction, display: display, logsProgress: terminal || forced,
-            log: await progressLog(environment), now: environment.now)
+            log: await progressLog(environment), now: environment.now, write: environment.stdout)
     }
 
     /// `Meter.LoggerFromEnv`.
@@ -74,23 +86,22 @@ final class LFSProgressMeter: @unchecked Sendable {
         do {
             try await LocalStore.makeDirectory(file.deletingLastPathComponent())
             try await Shell.authorize(file)
-            if !FileManager.default.fileExists(atPath: file.path) {
-                FileManager.default.createFile(atPath: file.path, contents: nil)
-            }
-            let handle = try FileHandle(forWritingTo: file)
-            try handle.seekToEnd()
-            return handle
         } catch {
             return failed(String(describing: error))
         }
-    }
-
-    /// The text logged so far, which is then cleared.
-    func drain() -> String {
-        lock.withLock {
-            defer { output = "" }
-            return output
+        // `os.O_WRONLY|os.O_CREATE|os.O_APPEND`: every write lands at the end,
+        // even when another handle appends to the same file.
+        #if os(Windows)
+        let descriptor = file.path.withCString(encodedAs: UTF16.self) {
+            _wopen($0, _O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY, _S_IREAD | _S_IWRITE)
         }
+        #else
+        let descriptor = open(file.path, O_WRONLY | O_CREAT | O_APPEND, 0o666)
+        #endif
+        guard descriptor >= 0 else {
+            return failed(String(cString: strerror(errno)))
+        }
+        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     }
 
     func start() { lock.withLock { paused = false } }
@@ -99,23 +110,22 @@ final class LFSProgressMeter: @unchecked Sendable {
 
     func add(_ size: Int64) {
         lock.withLock {
-            estimatedFiles += 1
-            estimatedBytes += size
+            estimatedFiles &+= 1
             update(force: false)
         }
     }
 
     func skip(_ size: Int64) {
         lock.withLock {
-            finishedFiles += 1
-            currentBytes += size
+            finishedFiles &+= 1
+            currentBytes &+= size
             update(force: false)
         }
     }
 
     func startTransfer(_ name: String) {
         lock.withLock {
-            transferringFiles += 1
+            transferringFiles &+= 1
             fileIndex[name] = transferringFiles
             update(force: false)
         }
@@ -125,8 +135,8 @@ final class LFSProgressMeter: @unchecked Sendable {
         lock.withLock {
             let now = now()
             let since = now.timeIntervalSince(lastAverage)
-            currentBytes += current
-            lastBytes += current
+            currentBytes &+= current
+            lastBytes &+= current
             if since > 1 {
                 lastAverage = now
                 let rate = Double(lastBytes) / since
@@ -141,7 +151,7 @@ final class LFSProgressMeter: @unchecked Sendable {
 
     func finishTransfer(_ name: String) {
         lock.withLock {
-            finishedFiles += 1
+            finishedFiles &+= 1
             fileIndex[name] = nil
             update(force: false)
         }
@@ -152,7 +162,7 @@ final class LFSProgressMeter: @unchecked Sendable {
     func finish() {
         lock.withLock {
             update(force: false)
-            if let lastUpdate { output += lastUpdate + ", done.\n" }
+            if let lastUpdate { write(lastUpdate + ", done.\n") }
             try? log?.close()
             log = nil
         }
@@ -166,7 +176,7 @@ final class LFSProgressMeter: @unchecked Sendable {
         lastUpdate = line
         guard logsProgress else { return }
         if force || at > lastLogged.addingTimeInterval(Self.throttle) {
-            output += line + String(repeating: " ", count: max(0, width - line.utf8.count)) + "\r"
+            write(line + String(repeating: " ", count: max(0, width - line.utf8.count)) + "\r")
             lastLogged = at
         }
     }
@@ -176,7 +186,9 @@ final class LFSProgressMeter: @unchecked Sendable {
         let percentage = 100 * Double(finishedFiles) / Double(estimatedFiles)
         let label = direction == .download ? "Downloading LFS objects" : "Uploading LFS objects"
         let percent = String(format: "%3.f", locale: Locale(identifier: "en_US_POSIX"), percentage)
-        let rate = averageBytes < 0 ? 0 : UInt64(min(averageBytes, Double(UInt64.max)))
+        // `clampf`; `Double(UInt64.max)` rounds up to 2^64, which UInt64 can't hold.
+        let rate = averageBytes.isNaN || averageBytes < 0 ? 0
+            : averageBytes >= 18_446_744_073_709_551_616 ? UInt64.max : UInt64(averageBytes)
         return "\(label): \(percent)% (\(finishedFiles)/\(estimatedFiles)), "
             + "\(ByteFormat.formatBytes(UInt64(max(0, currentBytes)))) | \(ByteFormat.formatByteRate(rate))"
     }

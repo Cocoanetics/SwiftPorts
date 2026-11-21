@@ -38,7 +38,7 @@ struct LFSUploadObjectsTests {
         try await LFSTestServer.withServer { server in
             try await LFSServerRepository.run(server) { repo in
                 let (_, two) = try await history(repo)
-                let result = try await repo.client.uploadObjects(for: [update(two)], git: repo.git)
+                let result = try await repo.uploadObjects(for: [update(two)], git: repo.git)
                 #expect(result.status == 0)
                 #expect(result.stderr == "")
                 #expect(result.stdout == "Uploading LFS objects: 100% (2/2), 28 B | 0 B/s, done.\n")
@@ -55,7 +55,27 @@ struct LFSUploadObjectsTests {
                 let (one, two) = try await history(repo)
                 try await repo.setReference("refs/remotes/origin/main", to: one)
                 try await repo.setReference("refs/remotes/upstream/main", to: two)
-                let result = try await repo.client.uploadObjects(for: [update(two)], git: repo.git)
+                let result = try await repo.uploadObjects(for: [update(two)], git: repo.git)
+                #expect(result.status == 0)
+                #expect(puts(server) == ["/objects/\(oid(second))"])
+            }
+        }
+    }
+
+    @Test("only remote-tracking tips whose branch the remote still lists are excluded")
+    func advertisedBranches() async throws {
+        try await LFSTestServer.withServer { server in
+            try await LFSServerRepository.run(server) { repo in
+                let (one, two) = try await history(repo)
+                try await repo.setReference("refs/remotes/origin/main", to: one)
+                try await repo.setReference("refs/remotes/origin/topic", to: two)
+                // Unknown, or nothing listed matches: every tip is excluded.
+                _ = try await repo.uploadObjects(for: [update(two)], git: repo.git)
+                _ = try await repo.uploadObjects(for: [update(two)], remoteBranches: ["gone"], git: repo.git)
+                #expect(server.requests().isEmpty)
+                // topic was deleted on the server, so its tip is no exclusion.
+                let result = try await repo.uploadObjects(
+                    for: [update(two)], remoteBranches: ["refs/heads/main"], git: repo.git)
                 #expect(result.status == 0)
                 #expect(puts(server) == ["/objects/\(oid(second))"])
             }
@@ -67,7 +87,7 @@ struct LFSUploadObjectsTests {
         try await LFSTestServer.withServer { server in
             try await LFSServerRepository.run(server) { repo in
                 let (one, two) = try await history(repo)
-                let result = try await repo.client.uploadObjects(for: [update(two, remote: one)], git: repo.git)
+                let result = try await repo.uploadObjects(for: [update(two, remote: one)], git: repo.git)
                 #expect(result.status == 0)
                 #expect(result.stdout == "Uploading LFS objects: 100% (1/1), 15 B | 0 B/s, done.\n")
                 #expect(puts(server) == ["/objects/\(oid(second))"])
@@ -80,7 +100,7 @@ struct LFSUploadObjectsTests {
         try await LFSTestServer.withServer { server in
             try await LFSServerRepository.run(server) { repo in
                 _ = try await history(repo)
-                let result = try await repo.client.uploadObjects(for: [update(Self.zero)], git: repo.git)
+                let result = try await repo.uploadObjects(for: [update(Self.zero)], git: repo.git)
                 #expect(result.status == 0)
                 #expect(result.stdout == "")
                 #expect(result.stderr == "")
@@ -95,7 +115,7 @@ struct LFSUploadObjectsTests {
             server.store(first, oid: oid(first))
             try await LFSServerRepository.run(server) { repo in
                 let (_, two) = try await history(repo)
-                let result = try await repo.client.uploadObjects(for: [update(two)], git: repo.git)
+                let result = try await repo.uploadObjects(for: [update(two)], git: repo.git)
                 #expect(result.status == 0)
                 #expect(result.stdout == "Uploading LFS objects: 100% (2/2), 28 B | 0 B/s, done.\n")
                 #expect(puts(server) == ["/objects/\(oid(second))"])
@@ -109,7 +129,7 @@ struct LFSUploadObjectsTests {
             try await LFSServerRepository.run(server) { repo in
                 try await repo.storeLocally(first)
                 let tip = try await repo.commit([("a.dat", first), ("missing.dat", second)])
-                let result = try await repo.client.uploadObjects(for: [update(tip)], git: repo.git)
+                let result = try await repo.uploadObjects(for: [update(tip)], git: repo.git)
                 #expect(result.status == 2)
                 #expect(result.stderr == "")
                 #expect(result.stdout == """
@@ -129,7 +149,7 @@ struct LFSUploadObjectsTests {
             server.store(second, oid: oid(second))
             try await LFSServerRepository.run(server) { repo in
                 let tip = try await repo.commit([("missing.dat", second)])
-                let result = try await repo.client.uploadObjects(for: [update(tip)], git: repo.git)
+                let result = try await repo.uploadObjects(for: [update(tip)], git: repo.git)
                 #expect(result.status == 0)
                 #expect(result.stdout == "Uploading LFS objects: 100% (1/1), 15 B | 0 B/s, done.\n")
             }
@@ -143,7 +163,7 @@ struct LFSUploadObjectsTests {
                 try await repo.storeLocally(first)
                 try Data("short".utf8).write(to: try await repo.store.objectPath(oid(second)))
                 let tip = try await repo.commit([("a.dat", first), ("bad.dat", second)])
-                let result = try await repo.client.uploadObjects(for: [update(tip)], git: repo.git)
+                let result = try await repo.uploadObjects(for: [update(tip)], git: repo.git)
                 #expect(result.status == 2)
                 #expect(result.stdout.hasSuffix("""
                 Git LFS upload failed:
@@ -161,7 +181,7 @@ struct LFSUploadObjectsTests {
             try await LFSServerRepository.run(server, config: [("lfs.allowincompletepush", "true")]) { repo in
                 try await repo.storeLocally(first)
                 let tip = try await repo.commit([("a.dat", first), ("missing.dat", second)])
-                let result = try await repo.client.uploadObjects(for: [update(tip)], git: repo.git)
+                let result = try await repo.uploadObjects(for: [update(tip)], git: repo.git)
                 #expect(result.status == 0)
                 #expect(result.stderr == "")
                 #expect(result.stdout == """
@@ -181,7 +201,7 @@ struct LFSUploadObjectsTests {
             try await LFSServerRepository.run(server) { repo in
                 let (one, two) = try await history(repo)
                 let updates = [update(one), update(two)]
-                let result = try await repo.client.uploadObjects(for: updates, dryRun: true, git: repo.git)
+                let result = try await repo.uploadObjects(for: updates, dryRun: true, git: repo.git)
                 #expect(result.status == 0)
                 #expect(result.stderr == "")
                 #expect(result.stdout == """
@@ -201,7 +221,7 @@ struct LFSUploadObjectsTests {
                 let (_, two) = try await history(repo)
                 let update = LFSRefUpdate(localRef: "refs/heads/main", localOID: two,
                                           remoteRef: "refs/heads/release", remoteOID: Self.zero)
-                _ = try await repo.client.uploadObjects(for: [update], git: repo.git)
+                _ = try await repo.uploadObjects(for: [update], git: repo.git)
                 let batch = try #require(server.requests().first { $0.path == "/objects/batch" })
                 let body = String(decoding: batch.requestBody, as: UTF8.self)
                 #expect(body.contains(#""ref":{"name":"refs/heads/release"}"#))

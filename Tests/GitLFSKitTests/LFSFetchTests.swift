@@ -30,7 +30,7 @@ struct LFSFetchTests {
             for data in [old, new, other] { server.store(data, oid: oid(data)) }
             try await LFSServerRepository.run(server) { repo in
                 try await history(repo)
-                let result = try await repo.client.fetch(git: repo.git)
+                let result = try await repo.fetch(git: repo.git)
                 #expect(result.status == 0)
                 #expect(result.stderr == "Fetching reference refs/heads/main\n")
                 #expect(result.stdout == "")
@@ -47,7 +47,7 @@ struct LFSFetchTests {
             for data in [old, new, other] { server.store(data, oid: oid(data)) }
             try await LFSServerRepository.run(server) { repo in
                 try await history(repo)
-                let result = try await repo.client.fetch(all: true, git: repo.git)
+                let result = try await repo.fetch(all: true, git: repo.git)
                 #expect(result.status == 0)
                 #expect(result.stderr == "Fetching all references...\n")
                 #expect(result.stdout == "3 objects found, done.\n")
@@ -62,7 +62,7 @@ struct LFSFetchTests {
             for data in [old, new, other] { server.store(data, oid: oid(data)) }
             try await LFSServerRepository.run(server) { repo in
                 try await history(repo)
-                let result = try await repo.client.fetch(refs: ["refs/heads/main"], all: true, git: repo.git)
+                let result = try await repo.fetch(refs: ["refs/heads/main"], all: true, git: repo.git)
                 #expect(result.status == 0)
                 #expect(result.stderr == "")
                 #expect(result.stdout == "2 objects found, done.\n")
@@ -76,7 +76,7 @@ struct LFSFetchTests {
         try await LFSTestServer.withServer { server in
             try await LFSServerRepository.run(server) { repo in
                 try await history(repo)
-                let result = try await repo.client.fetch(include: "a.dat", all: true, git: repo.git)
+                let result = try await repo.fetch(include: "a.dat", all: true, git: repo.git)
                 #expect(result.status == 2)
                 #expect(result.stderr == "Cannot combine --all with --include or --exclude\n")
                 #expect(server.requests().isEmpty)
@@ -90,7 +90,7 @@ struct LFSFetchTests {
             for data in [old, new, other] { server.store(data, oid: oid(data)) }
             try await LFSServerRepository.run(server, config: [("lfs.fetchinclude", "nothing")]) { repo in
                 try await history(repo)
-                let result = try await repo.client.fetch(all: true, git: repo.git)
+                let result = try await repo.fetch(all: true, git: repo.git)
                 #expect(result.stderr == """
                 Ignoring global include / exclude paths to fulfil --all
                 Fetching all references...
@@ -109,13 +109,13 @@ struct LFSFetchTests {
             let config = [("lfs.fetchinclude", "dir"), ("lfs.fetchexclude", "dir/c.dat")]
             try await LFSServerRepository.run(server, config: config) { repo in
                 try await repo.commit([("a.dat", a), ("dir/b.dat", b), ("dir/c.dat", c)])
-                _ = try await repo.client.fetch(git: repo.git)
+                _ = try await repo.fetch(git: repo.git)
                 #expect(gets(server) == ["/objects/\(oid(b))"])
 
-                _ = try await repo.client.fetch(include: "a.dat, dir/", git: repo.git)
+                _ = try await repo.fetch(include: "a.dat, dir/", git: repo.git)
                 #expect(gets(server) == ["/objects/\(oid(b))", "/objects/\(oid(a))"])
 
-                _ = try await repo.client.fetch(exclude: "", git: repo.git)
+                _ = try await repo.fetch(exclude: "", git: repo.git)
                 #expect(gets(server).last == "/objects/\(oid(c))")
                 #expect(gets(server).count == 3)
             }
@@ -129,7 +129,7 @@ struct LFSFetchTests {
             try await LFSServerRepository.run(server) { repo in
                 try await repo.commit([("a.dat", new)])
                 try await repo.storeLocally(new)
-                let result = try await repo.client.fetch(git: repo.git)
+                let result = try await repo.fetch(git: repo.git)
                 #expect(result.status == 0)
                 #expect(server.requests().isEmpty)
             }
@@ -142,7 +142,7 @@ struct LFSFetchTests {
             server.store(new, oid: oid(new))
             try await LFSServerRepository.run(server) { repo in
                 try await repo.commit([("a.dat", new)])
-                let result = try await repo.client.fetch(
+                let result = try await repo.fetch(
                     refs: ["refs/heads/main", "refs/heads/main"], dryRun: true, git: repo.git)
                 #expect(result.status == 0)
                 #expect(result.stderr == """
@@ -165,8 +165,8 @@ struct LFSFetchTests {
             server.store(new, oid: oid(new))
             try await LFSServerRepository.run(server) { repo in
                 try await repo.commit([("a.dat", new)])
-                let dry = try await repo.client.fetch(dryRun: true, json: true, git: repo.git)
-                let result = try await repo.client.fetch(json: true, git: repo.git)
+                let dry = try await repo.fetch(dryRun: true, json: true, git: repo.git)
+                let result = try await repo.fetch(json: true, git: repo.git)
                 #expect(result.status == 0)
                 #expect(repo.hasLocally(new))
                 let path = try await LocalStore.open(repo.git).objectPathname(oid(new)).path
@@ -192,7 +192,7 @@ struct LFSFetchTests {
                 #expect(Self.redactingExpiry(dry.stdout) == expected)
                 #expect(Self.redactingExpiry(result.stdout) == expected)
 
-                let again = try await repo.client.fetch(json: true, git: repo.git)
+                let again = try await repo.fetch(json: true, git: repo.git)
                 #expect(again.stdout == "{\n \"transfers\": []\n}\n")
             }
         }
@@ -203,7 +203,7 @@ struct LFSFetchTests {
         try await LFSTestServer.withServer { server in
             try await LFSServerRepository.run(server) { repo in
                 try await repo.commit([("a.dat", new)])
-                let result = try await repo.client.fetch(json: true, git: repo.git)
+                let result = try await repo.fetch(json: true, git: repo.git)
                 #expect(result.status == 2)
                 #expect(result.stdout == "")
                 #expect(result.stderr == """
@@ -222,12 +222,27 @@ struct LFSFetchTests {
             server.store(new, oid: oid(new))
             try await LFSServerRepository.run(server, config: [("lfs.forceprogress", "true")]) { repo in
                 try await repo.commit([("a.dat", new)])
-                let result = try await repo.client.fetch(git: repo.git)
+                let result = try await repo.fetch(git: repo.git)
                 let line = "Downloading LFS objects: 100% (1/1), 13 B | 0 B/s"
                 #expect(result.stdout.hasSuffix(line + String(repeating: " ", count: 80 - line.count) + "\r"))
                 #expect(!result.stdout.contains("done."))
             }
         }
+    }
+
+    @Test("JSON syntax is found by byte, so a combining mark after a quote does not hide it")
+    func indentCombiningMark() {
+        let compact = "{\"transfers\":[{\"name\":\"\u{301},x\",\"size\":1}]}"
+        #expect(JSONIndent.indent(compact, by: " ") == """
+        {
+         "transfers": [
+          {
+           "name": "\u{301},x",
+           "size": 1
+          }
+         ]
+        }
+        """)
     }
 
     static func redactingExpiry(_ text: String) -> String {
