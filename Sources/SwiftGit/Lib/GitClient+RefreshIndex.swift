@@ -62,7 +62,8 @@ extension GitClient {
                 index: entry.mode, work: file.mode, trustFileMode: fileMode) else {
                 continue
             }
-            if UInt64(entry.file_size) == file.size && !DiffIndexStat.statDiffers(entry, file, trustCtime: trustCtime) {
+            if entry.file_size == UInt32(truncatingIfNeeded: file.size)
+                && !DiffIndexStat.statDiffers(entry, file, trustCtime: trustCtime) {
                 continue
             }
             let oid: git_oid

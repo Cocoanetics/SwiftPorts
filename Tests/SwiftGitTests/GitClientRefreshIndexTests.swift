@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 import ShellKit
+import CGitKit
 @testable import SwiftGit
 
 @Suite("GitClient.refreshIndex")
@@ -49,6 +50,42 @@ struct GitClientRefreshIndexTests {
         let refreshed = try snapshot(in: dir)
         try await client.refreshIndex(paths: ["f"])
         try expectUnchanged(refreshed, in: dir)
+    }
+
+    @Test("a matching 5 GiB stat neither runs the clean filter nor rewrites the index")
+    func largeFileStat() async throws {
+        let dir = try filteredRepo()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let client = GitClient(workingDirectory: dir)
+        let file = dir.appendingPathComponent("f")
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.truncate(atOffset: 5 * 1_024 * 1_024 * 1_024)
+        try handle.close()
+        // Keep the work-tree mtime older than snapshot's index mtime, so
+        // neither Git nor libgit2 treats the manually seeded stat as racy.
+        try FileManager.default.setAttributes(
+            [.modificationDate: past.addingTimeInterval(-60)], ofItemAtPath: file.path)
+        let stat = try #require(DiffIndexWorktree.fileStat(file.path))
+        #expect(stat.size == 5 * 1_024 * 1_024 * 1_024)
+        var index: OpaquePointer?
+        try GitClient.check(git_index_open(&index, dir.appendingPathComponent(".git/index").path))
+        defer { git_index_free(index) }
+        // Model the stat saved by an earlier successful refresh, without
+        // reading or storing 5 GiB just to arrange the matching-stat case.
+        try DiffIndexStat.rewriteStat(index, path: "f", file: stat)
+        try GitClient.check(git_index_write(index))
+        let cachedSize = try #require(git_index_get_bypath(index, "f", 0)?.pointee.file_size)
+        #expect(cachedSize == UInt32(1_073_741_824))
+        let driver = try driverName(in: dir)
+        // An attempted hash must fail while loading filters, before libgit2
+        // buffers 5 GiB. Matching stat must not need this required driver.
+        try support.runGit(["config", "filter.\(driver).required", "true"], in: dir)
+        try GitFilters.enforceRequiredDrivers()
+        let before = try snapshot(in: dir)
+        try await client.refreshIndex(paths: ["f"])
+        try expectUnchanged(before, in: dir)
+        try support.runGit(["update-index", "-q", "--refresh"], in: dir)
+        #expect(try Data(contentsOf: dir.appendingPathComponent(".git/index")) == before.0)
     }
 
     @Test("content mismatch does not rewrite or stage the index", arguments: ["x\n", "longer change\n"])
