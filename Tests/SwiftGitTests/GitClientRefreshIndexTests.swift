@@ -195,11 +195,12 @@ struct GitClientRefreshIndexTests {
         #expect(try await client.diffIndex(cached: false).isEmpty)
     }
 
-    @Test("all paths and the index are authorized before any filter reads", arguments: ["denied", "index"])
+    @Test("all paths and the index are authorized before any filter reads", arguments: ["denied", "index", "f"])
     func sandboxDenial(denied: String) async throws {
         let dir = try filteredRepo()
         defer { try? FileManager.default.removeItem(at: dir) }
         let driver = try driverName(in: dir)
+        if denied == "f" { try support.runGit(["config", "core.ignorecase", "true"], in: dir) }
         try GitFilters.register(name: driver, GitFilter(clean: { _, _ in
             Issue.record("a sandbox denial must happen before the first content read")
             return nil
@@ -219,11 +220,45 @@ struct GitClientRefreshIndexTests {
         let before = try snapshot(in: dir)
         await shell.withCurrent {
             let denial = await #expect(throws: Sandbox.Denial.self) {
-                try await GitClient(workingDirectory: dir).refreshIndex(paths: ["f", "denied"])
+                try await GitClient(workingDirectory: dir).refreshIndex(paths: [denied == "f" ? "F" : "f", "denied"])
             }
             #expect(denial?.url.lastPathComponent == denied)
         }
         try expectUnchanged(before, in: dir)
+    }
+
+    @Test("case aliases refresh using the index's stored spelling", arguments: [true, false])
+    func caseAlias(ignoreCase: Bool) async throws {
+        let dir = try support.makeRepo()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try support.runGit(["config", "core.ignorecase", ignoreCase ? "true" : "false"], in: dir)
+        try touch("a.txt", in: dir)
+        let driver = "refresh-case-" + UUID().uuidString
+        try Data("a.txt filter=\(driver)\n".utf8).write(to: dir.appendingPathComponent(".git/info/attributes"))
+        try GitFilters.register(name: driver, .buffered(clean: { source, _ in
+            #expect(source.path == "a.txt")
+            return nil
+        }))
+        defer { try? GitFilters.unregister(name: driver) }
+        let staged = try support.runGit(["ls-files", "-s"], in: dir)
+        let before = try snapshot(in: dir)
+        try await GitClient(workingDirectory: dir).refreshIndex(paths: ["A.TXT"])
+        #expect(try support.runGit(["ls-files", "-s"], in: dir) == staged)
+        let status = try gitExit(["diff-index", "--quiet", "HEAD", "--", "a.txt"], in: dir)
+        #expect(status == (ignoreCase ? 0 : 1))
+        if ignoreCase {
+            let refreshed = try snapshot(in: dir)
+            try await GitClient(workingDirectory: dir).refreshIndex(paths: ["A.TXT", "a.txt"])
+            try expectUnchanged(refreshed, in: dir)
+            // Compare the refreshed canonical entry with Git's stat refresh,
+            // which uses index paths, without staging positional operands.
+            try before.0.write(to: dir.appendingPathComponent(".git/index"))
+            try support.runGit(["update-index", "-q", "--refresh"], in: dir)
+            #expect(try gitExit(["diff-index", "--quiet", "HEAD", "--", "a.txt"], in: dir) == status)
+            #expect(try support.runGit(["ls-files", "-s"], in: dir) == staged)
+        } else {
+            try expectUnchanged(before, in: dir)
+        }
     }
 
     @Test("core.symlinks=false refreshes a regular link placeholder using raw target text",

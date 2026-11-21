@@ -30,8 +30,29 @@ extension GitClient {
         // Finish all authorizations before opening the index or statting even
         // the first file: a later denial must not allow a partial refresh.
         for url in urls { try await Shell.authorize(url) }
+        // Index lookup may match a case alias. Resolve it before authorizing
+        // the actual work-tree path, and keep that spelling for filter lookup
+        // and the stat rewrite as well as for the file read.
+        let resolved = try await withRepository { repository in
+            let repo = try Self.refreshIndexHandle(repository)
+            var index: OpaquePointer?
+            try Self.check(git_repository_index(&index, repo))
+            defer { git_index_free(index) }
+            var storedPaths: [String] = []
+            var storedURLs: [URL] = []
+            for path in paths {
+                guard let entry = git_index_get_bypath(index, path, 0)?.pointee,
+                      let name = entry.path else { continue }
+                let stored = String(cString: name)
+                guard let full = DiffIndexStat.worktreePath(repo, stored) else { continue }
+                storedPaths.append(stored)
+                storedURLs.append(URL(fileURLWithPath: full).standardizedFileURL)
+            }
+            return (paths: storedPaths, urls: storedURLs)
+        }
+        for url in resolved.urls { try await Shell.authorize(url) }
         try await withRepository { repository in
-            try Self.refreshIndex(paths, repo: Self.refreshIndexHandle(repository))
+            try Self.refreshIndex(resolved.paths, repo: Self.refreshIndexHandle(repository))
         }
     }
 
@@ -53,7 +74,8 @@ extension GitClient {
         let symlinks = DiffIndexStat.flag("core.symlinks", repo: repo, default: true)
         var changed = false
         for path in paths {
-            guard let entry = git_index_get_bypath(index, path, 0)?.pointee else { continue }
+            guard let entry = git_index_get_bypath(index, path, 0)?.pointee,
+                  let stored = entry.path, String(cString: stored) == path else { continue }
             if entry.flags & 0x8000 != 0 || entry.flags_extended & DiffIndexStat.skipWorktree != 0 { continue }
             guard let location = DiffIndexStat.worktreePath(repo, path),
                   let file = DiffIndexWorktree.fileStat(location) else { continue }
