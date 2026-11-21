@@ -7,7 +7,12 @@ extension LFSClient {
         dryRun: Bool, terminal: Bool, git: GitClient
     ) async throws -> LFSCommandResult {
         let remoteBranches = try? await git.remoteHeads(remote: remote)
-        return try await uploadObjects(for: updates, remote: remote, remoteBranches: remoteBranches,
-                                       all: all, dryRun: dryRun, terminal: terminal, git: git)
+        let locks = LFSLockVerifier(client: self, remote: remote, git: git)
+        try await locks.verify(updates)
+        var result = try await uploadObjects(
+            for: updates, remote: remote, remoteBranches: remoteBranches, all: all,
+            dryRun: dryRun, terminal: terminal, git: git, environment: LFSTransferEnvironment(), locks: locks)
+        result.stderr = locks.stderr + result.stderr
+        return result
     }
 }

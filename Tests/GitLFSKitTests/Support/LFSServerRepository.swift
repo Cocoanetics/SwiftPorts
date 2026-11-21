@@ -29,7 +29,7 @@ struct LFSServerRepository {
             try await GitClient(workingDirectory: remote).initRepository(bare: true)
             let made = try await LFSFixture.make(
                 host, "server", remotes: [("origin", remote.path)],
-                config: [("lfs.url", server.endpoint.absoluteString)] + config)
+                config: [("lfs.url", server.endpoint.absoluteString), ("lfs.locksverify", "false")] + config)
             let client = await LFSClient(git: made.client, credentials: credentials, configuration: .ephemeral)
             try await body(LFSServerRepository(
                 directory: made.directory, git: made.client, client: client,
