@@ -157,17 +157,22 @@ enum DiffIndexStat {
         return candidateKeys(diff) != before
     }
 
-    /// `git diff-index -M` hashes a rename destination and prints that
-    /// blob. A size poke never does, so an exact rename would keep a
-    /// zero new id. Fill only a renamed record that is still zero.
+    /// Git's exact-rename pass hashes every addition when a source exists,
+    /// including destinations it cannot pair. Keep those raw ids even though
+    /// hashing a work-tree candidate does not store its blob in the ODB.
     static func realizeRenames(_ diff: OpaquePointer?, repo: OpaquePointer?) {
         let count = git_diff_num_deltas(diff)
+        let hasSource = (0..<count).contains { offset in
+            guard let status = git_diff_get_delta(diff, offset)?.pointee.status else { return false }
+            return status == GIT_DELTA_DELETED || status == GIT_DELTA_RENAMED
+        }
         let valid = UInt32(GIT_DIFF_FLAG_VALID_ID.rawValue)
         let exists = UInt32(GIT_DIFF_FLAG_EXISTS.rawValue)
         for offset in 0..<count {
             guard let pointer = git_diff_get_delta(diff, offset) else { continue }
             let delta = UnsafeMutablePointer(mutating: pointer)
-            guard delta.pointee.status == GIT_DELTA_RENAMED else { continue }
+            let status = delta.pointee.status
+            guard status == GIT_DELTA_RENAMED || (hasSource && status == GIT_DELTA_ADDED) else { continue }
             guard oidIsZero(delta.pointee.new_file.id) else { continue }
             guard let pathPointer = delta.pointee.new_file.path else { continue }
             let path = String(cString: pathPointer)

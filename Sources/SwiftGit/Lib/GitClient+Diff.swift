@@ -124,8 +124,8 @@ extension GitClient {
                 try detectDiffIndexRenames(diff)
             }
         }
-        // A size poke leaves a rename destination with a zero id. `git
-        // diff-index -M` still prints the blob once the paths pair.
+        // A size poke leaves rename candidates with zero ids. Git's exact
+        // rename pass hashes them even when it cannot pair their paths.
         DiffIndexStat.realizeRenames(diff, repo: repo)
         let entries = diffIndexEntries(diff)
         try hold?.persist(refresh: refresh)
