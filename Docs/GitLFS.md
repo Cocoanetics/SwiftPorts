@@ -89,10 +89,43 @@ dispatch. Constructing a client or running `git lfs install` does not register
 it: that command continues to write filter configuration and hooks.
 
 The default attribute is `filter=lfs`. A configured, nonempty
-`filter.lfs.process` enables both directions; otherwise `filter.lfs.clean`
-and `filter.lfs.smudge` enable their respective directions. Streams currently
-pass bytes through synchronously. Streaming clean and queue-backed smudge
-are #231; parity coverage is #232. #192 remains incomplete until those land.
+`filter.lfs.process` enables both directions and takes precedence over
+`filter.lfs.clean` and `filter.lfs.smudge`, including when process is empty.
+When process is absent, clean and smudge enable their respective directions.
+An optional unconfigured direction passes through. Required clean fails without
+a command; Git's streamable checkout bypasses an absent smudge/process command,
+but explicitly empty values fail. Attributes that are absent, unset or select
+another driver do not invoke LFS.
+
+Clean hashes content incrementally into temporary storage, verifies and inserts
+the object, then emits the canonical pointer. Existing pointers below the
+1024-byte cutoff retain their original bytes; empty content remains empty.
+Smudge probes at most 1024 bytes and streams local or downloaded content in
+64 KiB chunks. Downloads use the basic transfer queue, endpoint selection,
+authentication and remote fallback. Checkout and clone restore content and
+leave status clean. Linked worktrees share objects through the common directory;
+`lfs.storage` also applies during clone when configured before checkout through
+the host's global or command configuration. Source-repository local settings
+are not inherited by clones.
+
+`--skip`, `GIT_LFS_SKIP_SMUDGE`, `lfs.fetchinclude` and `lfs.fetchexclude`
+preserve pointers even when the content is already cached. Optional single-shot
+smudge failures replay the original input. An optional process driver that exits
+during delayed checkout still fails with status 1 and Git's external-filter
+diagnostics. Required download failures report git-lfs's diagnostic
+and fail checkout/clone with Git's fatal text and status 128; this is distinct
+from standalone `git-lfs smudge`'s status 2. `lfs.skipdownloaderrors` suppresses
+the failure and emits the canonical pointer; `GIT_LFS_SKIP_DOWNLOAD_ERRORS`
+overrides it, including an explicit false value.
+
+The filter streams retain only a pointer probe and one bounded I/O chunk, not
+the full content. GitKit/libgit2 still buffer smudge **input** and add **output**;
+normally both are small pointers. Status/diff hash the full worktree file and
+can buffer that input inside libgit2. These limits are outside the stream's
+memory guarantee. The integration regression generates a 64 MiB file one block
+at a time, checks retained probe and I/O bounds, hashes the smudged output
+incrementally, and verifies the staged pointer. Task cancellation releases
+the clean stream's temporary file.
 
 Callback filesystem/network work uses ForgeKit's internal `BlockingBridge`.
 SwiftGit supplies a revocable operation context with the calling shell,
@@ -137,8 +170,8 @@ in the SDK's `Commands/` directory:
 
 All filesystem paths go through `Shell.authorize`; production code does not
 launch a system Git or git-lfs process. The hooks are scripts for real Git to
-execute. Filter execution, other LFS commands, and lock-based file
-permission management remain the separate sub-tasks described in #184.
+execute. Other LFS commands and lock-based file permission management remain
+the separate sub-tasks described in #184.
 
 Bare `git lfs` prints upstream's complete usage text, preceded by the port's
 version, and succeeds. Unsupported subcommands receive git-lfs's diagnostic
@@ -369,6 +402,20 @@ the assertion through #187's batch client/server remains open for that work.
   `PATH`.
 - `CommandBehaviorTests` — pointer checks, file-scoped filter installation,
   and hook conflict protection without a system git-lfs dependency.
+- `LFSFilterIntegrationTests` — direct SwiftGit add, local/server checkout and
+  clone, immediate clean status, linked/shared storage, credential retry,
+  bounded streaming and cancellation cleanup. Nested under the serialized
+  registration suite. On macOS/Linux, concurrent isolated subprocesses launch
+  the built `git` executable to prove startup registration, with hard deadlines
+  and file-backed output to prevent pipe deadlocks.
+- `LFSFilterOracleTests` (macOS/Linux, skipped unless git-lfs 3.7.1 is present)
+  — subprocess comparisons on the same repository: exact staged pointer bytes
+  and blob OIDs, attribute/command gating, process precedence, skip/include/
+  exclude, malformed input, remote selection and search-all fallback, download
+  diagnostics, checkout/clone fatal text and exit status, optional failure and
+  download-error suppression. Uses `GitLFSTestSupport`'s loopback server,
+  including a successful batch with no action and no local object. Oracle
+  operations never change the test runner's process-wide filter registration.
 - `GitCommandLFSParsingTests` — command and flag parsing, gated like the other
   `GitCommandTests` using `commandTestPlatforms`.
 - `GitCommandLFSOracleTests` and `GitCommandLFSConfigOracleTests` — twin
