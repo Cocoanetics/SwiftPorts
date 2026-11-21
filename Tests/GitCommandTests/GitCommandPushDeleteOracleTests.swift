@@ -154,6 +154,27 @@ struct GitCommandPushDeleteOracleTests {
         try FileManager.default.copyItem(at: backup, to: destination)
     }
 
+    /// `major.minor` of the system git the oracle runs, from
+    /// `git version 2.43.0`. `nil` when that line cannot be read.
+    private func systemGitVersion() throws -> (Int, Int)? {
+        let process = Process()
+        host.isolate(process)
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git", "--version"]
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = Pipe()
+        try process.run()
+        let stdout = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        let words = stdout.split(separator: " ")
+        guard words.count >= 3 else { return nil }
+        let numbers = words[2].split(separator: ".").compactMap { Int($0) }
+        guard numbers.count >= 2 else { return nil }
+        return (numbers[0], numbers[1])
+    }
+
     /// `git push --delete origin topic` and `git push origin --delete topic`.
     @Test("git push --delete before and after the repository")
     func deleteFlagBeforeAndAfterRemote() async throws {
@@ -251,12 +272,33 @@ struct GitCommandPushDeleteOracleTests {
             ["push", "--delete", "origin", ":topic"],
             ["push", "origin", "--delete", ":topic"],
             ["push", "--delete", "origin", "topic:topic"],
-            ["push", "--delete", "", "topic"],
-            ["push", "--delete", "", ":topic"],
             ["push", "--delete", "origin", "tag"],
             ["push", "origin", "--delete", "tag"]
         ] {
             try await compare(arguments, in: fixture)
+        }
+        // git 2.46 validates the repository before deletion refspecs, so
+        // `git push --delete '' topic` and `git push --delete '' :topic`
+        // are both `fatal: bad repository ''`. Older git checks the names
+        // first: a colon is `--delete only accepts plain target ref names`,
+        // and a plain name then dies as `no path specified` on the empty
+        // URL. The port follows 2.46, and asks system git only from then.
+        let emptyRepository = [
+            ["push", "--delete", "", "topic"],
+            ["push", "--delete", "", ":topic"]
+        ]
+        let validatesRemoteFirst = try systemGitVersion().map { $0 >= (2, 46) } ?? true
+        if validatesRemoteFirst {
+            for arguments in emptyRepository {
+                try await compare(arguments, in: fixture)
+            }
+        } else {
+            for arguments in emptyRepository {
+                let actual = try await portGit(arguments, in: fixture.clone)
+                #expect(actual.stdout.isEmpty, "stdout for \(arguments)")
+                #expect(actual.stderr == "fatal: bad repository ''\n", "stderr for \(arguments)")
+                #expect(actual.status == 128, "status for \(arguments)")
+            }
         }
         #expect(try listedRefs(fixture.remote) == before)
     }
