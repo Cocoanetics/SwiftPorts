@@ -133,6 +133,25 @@ enum DiffIndexStat {
         return urls
     }
 
+    /// Discover worktree destinations before libgit2's rename detection or
+    /// our raw-id realization can read them. Even unpaired additions are hashed
+    /// when a source exists. This pass inspects metadata without opening files.
+    static func renameInputURLs(_ diff: OpaquePointer?, repo: OpaquePointer?) -> [URL] {
+        let count = git_diff_num_deltas(diff)
+        let hasSource = (0..<count).contains { offset in
+            guard let status = git_diff_get_delta(diff, offset)?.pointee.status else { return false }
+            return status == GIT_DELTA_DELETED || status == GIT_DELTA_RENAMED
+        }
+        guard hasSource else { return [] }
+        return (0..<count).compactMap { offset in
+            guard let delta = git_diff_get_delta(diff, offset)?.pointee,
+                  delta.status == GIT_DELTA_ADDED || delta.status == GIT_DELTA_RENAMED,
+                  let path = delta.new_file.path,
+                  let full = worktreePath(repo, String(cString: path)) else { return nil }
+            return URL(fileURLWithPath: full).standardizedFileURL
+        }
+    }
+
     /// Rewrite deltas whose raw work-tree bytes match stage zero so rename
     /// detection does not see a stat-only touch as an add or a type change.
     /// Returns whether that changed the add/delete/type-change set.
