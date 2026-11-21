@@ -52,48 +52,70 @@ struct ErrorEnvelope: Decodable {
     var message: String
 }
 
-enum LFSWireClient {
+struct LFSWireClient: Sendable {
     static let mediaType = "application/vnd.git-lfs+json"
 
-    private static let session: URLSession = {
+    let session: URLSession
+
+    /// Keep the curl multi handle local to one test on Windows and finish
+    /// invalidating the session before shutting down that test's server.
+    static func withServer<T: Sendable>(
+        _ body: (LFSTestServer, LFSWireClient) async throws -> T
+    ) async throws -> T {
+        try await LFSTestServer.withServer { server in
+            let lifetime = LFSWireSessionDelegate()
+            let session = URLSession(configuration: configuration(), delegate: lifetime, delegateQueue: nil)
+            let client = LFSWireClient(session: session)
+            do {
+                let value = try await body(server, client)
+                await lifetime.invalidate(client.session)
+                return value
+            } catch {
+                await lifetime.invalidate(client.session)
+                throw error
+            }
+        }
+    }
+
+    private static func configuration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 10
         configuration.httpMaximumConnectionsPerHost = 8
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: configuration)
-    }()
+        return configuration
+    }
 
-    static func postBatch(
+    func postBatch(
         _ server: LFSTestServer, operation: String, objects: [(oid: String, size: Int)]
     ) async throws -> WireBody {
         let payload = BatchPost(
             operation: operation,
             objects: objects.map { ObjectPost(oid: $0.oid, size: $0.size) }
         )
-        let url = try url(server, "/objects/batch")
-        return try await send(request(url, method: "POST", body: try encode(payload), json: true))
+        let url = try Self.url(server, "/objects/batch")
+        return try await send(Self.request(url, method: "POST", body: try Self.encode(payload), json: true))
     }
 
     static func document(_ response: WireBody) throws -> BatchDocument {
         try JSONDecoder().decode(BatchDocument.self, from: response.body)
     }
 
-    static func get(_ href: String) async throws -> WireBody {
+    func get(_ href: String) async throws -> WireBody {
         let url = try #require(URL(string: href))
-        return try await send(request(url, method: "GET", body: nil, json: false))
+        return try await send(Self.request(url, method: "GET", body: nil, json: false))
     }
 
-    static func put(_ href: String, body: Data) async throws -> WireBody {
+    func put(_ href: String, body: Data) async throws -> WireBody {
         let url = try #require(URL(string: href))
-        var call = request(url, method: "PUT", body: body, json: false)
+        var call = Self.request(url, method: "PUT", body: body, json: false)
         call.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         return try await send(call)
     }
 
-    static func verify(_ href: String, oid: String, size: Int) async throws -> WireBody {
+    func verify(_ href: String, oid: String, size: Int) async throws -> WireBody {
         let url = try #require(URL(string: href))
         let payload = VerifyPost(oid: oid, size: size)
-        return try await send(request(url, method: "POST", body: try encode(payload), json: true))
+        return try await send(Self.request(url, method: "POST", body: try Self.encode(payload), json: true))
     }
 
     private static func url(_ server: LFSTestServer, _ path: String) throws -> URL {
@@ -111,7 +133,7 @@ enum LFSWireClient {
         return request
     }
 
-    private static func send(_ request: URLRequest) async throws -> WireBody {
+    private func send(_ request: URLRequest) async throws -> WireBody {
         let (data, response) = try await session.data(for: request)
         let http = try #require(response as? HTTPURLResponse)
         var headers: [String: String] = [:]

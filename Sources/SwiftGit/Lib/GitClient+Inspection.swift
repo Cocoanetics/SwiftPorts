@@ -20,7 +20,7 @@ extension GitClient {
     /// Remote-tracking branches (`git branch -r`), sorted by name.
     /// `origin/HEAD` is included. Pass a remote to keep only that remote.
     public func remoteBranches(remote: String? = nil) async throws -> [RemoteBranch] {
-        try await withRepository { try $0.remoteBranches(remote: remote) }
+        try await withFilterMetadataRepository { try $0.remoteBranches(remote: remote) }
     }
 
     /// References under `refs/` whose full name matches `pattern`.
@@ -31,12 +31,12 @@ extension GitClient {
     /// (an annotated tag's tag object, as `git for-each-ref` reports
     /// `%(objectname)`). A dangling symbolic ref is omitted.
     public func references(matching pattern: String? = nil) async throws -> [ReferenceEntry] {
-        try await withRepository { try $0.references(matching: pattern) }
+        try await withFilterMetadataRepository { try $0.references(matching: pattern) }
     }
 
     /// List configured remote names, sorted alphabetically.
     public func remoteList() async throws -> [String] {
-        try await withRepository { try $0.remoteList() }
+        try await withFilterMetadataRepository { try $0.remoteList() }
     }
 
     /// Delete a remote and the associated config entries.

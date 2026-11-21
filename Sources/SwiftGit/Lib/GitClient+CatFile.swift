@@ -8,7 +8,7 @@ extension GitClient {
 
     /// Look up a single object's kind and size — `git cat-file -t -s`.
     public func objectMetadata(of revspec: String) async throws -> ObjectMetadata {
-        try await withRepository { try $0.objectMetadata(of: revspec) }
+        try await withFilterMetadataRepository { try $0.objectMetadata(of: revspec) }
     }
 
     /// Read only an object's database header and return its blob size.
@@ -17,7 +17,7 @@ extension GitClient {
     /// revision walk. Unlike a blob lookup, this does not inflate or allocate
     /// the payload, so callers can reject large blobs safely.
     public func blobSize(ofOID oid: String) async throws -> Int? {
-        try await withRepository { repository in
+        try await withFilterMetadataRepository { repository in
             guard let repo = Self.handle(of: repository) else {
                 throw Libgit2Error(
                     code: -1, klass: Int32(GIT_ERROR_REPOSITORY.rawValue),
@@ -37,7 +37,7 @@ extension GitClient {
 
     /// Read the raw bytes of a blob — `git cat-file -p` for blobs.
     public func catFileBlob(_ revspec: String) async throws -> Data {
-        try await withRepository { try $0.catFileBlob(revspec) }
+        try await withFilterMetadataRepository { try $0.catFileBlob(revspec) }
     }
 
     /// Visit a blob without materialising it when its ODB backend supports
@@ -49,7 +49,7 @@ extension GitClient {
         _ consume: (UnsafeRawBufferPointer) throws -> Void
     ) async throws {
         let chunkSize = 64 * 1024
-        try await withRepository { repository in
+        try await withFilterMetadataRepository { repository in
             guard let repo = Self.handle(of: repository) else {
                 throw Libgit2Error(
                     code: -1, klass: Int32(GIT_ERROR_REPOSITORY.rawValue),

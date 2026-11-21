@@ -34,6 +34,16 @@ let client = GitClient(
 
 ### Reads
 
+GitKit 2.12.0's streaming filter API is re-exported through SwiftGit. LFS hosts
+opt into registration with `GitLFSKit.installFilter()` before operations; the
+`git` executable does this at startup. Clients and command initializers do not.
+An internal callback context captures the outer operation's shell, credentials,
+effective environment config and include gate. Filter metadata clients open
+their own handles at `GitFilterSource.gitDirectory` within that isolation scope,
+serialize accesses, and retain sandbox/include authorization. They cannot run
+checkout, stage files or reacquire the global lock, and are revoked on return.
+See [GitLFS.md](GitLFS.md#filter-registration-230-part-1-of-192) for scope.
+
 | Method | Maps to |
 |---|---|
 | `remoteURL(named:)` | `git remote get-url <name>` |
