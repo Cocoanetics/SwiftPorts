@@ -283,7 +283,8 @@ struct GitCommandVerifyTagSSHTests {
         try systemGit(["commit", "--allow-empty", "-q", "-m", "init"], in: root)
         let commit = try systemGit(["rev-parse", "HEAD"], in: root)
         let key = try SSHPrivateKey.generate(type: "ed25519")
-        let payload = "object \(commit)\ntype commit\ntag v1\ntagger Test <test@example.com> 1700000000 +0000\n\nrelease\n"
+        let payload = "object \(commit)\ntype commit\ntag v1\n"
+            + "tagger Test <test@example.com> 1700000000 +0000\n\nrelease\n"
         let signature = try SSHSignature(signing: Data(payload.utf8), namespace: "git", key: key)
         let tags = [("v1", payload), ("tampered", payload.replacingOccurrences(of: "release", with: "tampered"))]
         for (tag, body) in tags {
