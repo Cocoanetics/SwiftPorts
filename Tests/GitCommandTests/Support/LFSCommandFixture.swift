@@ -13,15 +13,39 @@ struct LFSCommandFixture {
     let ourHost = IsolatedGitHost()
     let theirHost = IsolatedGitHost()
 
-    static let isAvailable: Bool = {
+    /// `git lfs version` on `PATH`, read once; nil when git-lfs is missing.
+    static let installedVersion: String? = {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git", "lfs", "version"]
-        process.standardOutput = FileHandle.nullDevice
+        let out = Pipe()
+        process.standardOutput = out
         process.standardError = FileHandle.nullDevice
-        do { try process.run(); process.waitUntilExit(); return process.terminationStatus == 0 }
-        catch { return false }
+        do {
+            try process.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return process.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
+        } catch {
+            return nil
+        }
     }()
+
+    /// The oracle compares against the pinned git-lfs 3.7.1; other releases word warnings differently.
+    static var isAvailable: Bool { isAvailable(installedVersion) }
+
+    static var unavailableReason: Comment { Comment(rawValue: unavailableReason(installedVersion)) }
+
+    static func isAvailable(_ versionOutput: String?) -> Bool {
+        versionOutput.map(LFSSamePathOracle.isReferenceRelease) ?? false
+    }
+
+    static func unavailableReason(_ versionOutput: String?) -> String {
+        guard let versionOutput else { return "git-lfs is not on PATH" }
+        let token = versionOutput.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
+        let version = token.hasPrefix("git-lfs/") ? String(token.dropFirst("git-lfs/".count)) : token
+        return "oracle needs git-lfs 3.7.1, found \(version)"
+    }
 
     init() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("LFSCommand-\(UUID().uuidString)")
