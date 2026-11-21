@@ -67,6 +67,7 @@ let androidDroppedTargets: Set<String> = [
     "GitLFSKitTests",
     "GitLFSTestSupport",
     "GitLFSTestSupportTests",
+    "CLFSCurl",
 ]
 
 func androidFiltered(products list: [Product]) -> [Product] {
@@ -1193,11 +1194,21 @@ let package = Package(
             path: "Sources/GitLFSKit/CGitLFSEnvironment",
             publicHeadersPath: "include"
         ),
+        // Drive the Windows toolchain's existing libcurl with its blocking
+        // easy interface, avoiding FoundationNetworking's Dispatch socket loop.
+        // macOS/Linux build this adapter too so its streaming path is tested.
+        .target(
+            name: "CLFSCurl",
+            path: "Sources/GitLFSKit/CLFSCurl",
+            publicHeadersPath: "include",
+            linkerSettings: [.linkedLibrary("dl", .when(platforms: [.linux]))]
+        ),
         // No ArgumentParser dependency; stays in the Android build.
         .target(
             name: "GitLFSKit",
             dependencies: [
                 "CGitLFSEnvironment",
+                .target(name: "CLFSCurl", condition: .when(platforms: [.macOS, .linux, .windows])),
                 "SwiftGit",
                 .product(name: "CGitKit", package: "GitKit"),
                 "SSHKit",

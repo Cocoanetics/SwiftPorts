@@ -250,6 +250,13 @@ public final class LFSClient: @unchecked Sendable {
         guard var urlRequest = URLRequest(httpRequest: request) else {
             throw LFSClientError("invalid URL: \(request.url?.absoluteString ?? "")")
         }
+        #if os(Windows)
+        if request.method == .put, let body, LFSCurlUpload.usesDefaultProtocols(session.configuration) {
+            let result = try await LFSCurlUpload(stream: LFSTransferStream()).execute(
+                urlRequest, body: body, configuration: session.configuration)
+            return (result.body, result.response)
+        }
+        #endif
         let data: Data
         let response: URLResponse
         switch body {

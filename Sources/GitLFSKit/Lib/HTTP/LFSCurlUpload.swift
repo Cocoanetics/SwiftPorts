@@ -1,0 +1,230 @@
+#if os(Windows) || os(macOS) || os(Linux)
+import CLFSCurl
+import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+
+/// Windows uploads use libcurl's own polling loop instead of Foundation's
+/// Dispatch socket sources (swift-corelibs-foundation#5532). Each attempt has
+/// one worker and bounded disk reads; authentication/retries stay in LFSClient.
+final class LFSCurlUpload: @unchecked Sendable {
+    private let stream: LFSTransferStream
+    private let lock = NSLock()
+    private var cancelled = false
+    private var file: FileHandle?
+    private var input: InputStream?
+    private var data: Data?
+    private var offset = 0
+    private var sent: Int64 = 0
+    private var failure: Error?
+    private var response: HTTPURLResponse?
+    private var responseURL: URL?
+    private var responseBody = Data()
+    private var status = 0
+    private var headers: [String: String] = [:]
+    private var readingHeaders = false
+    private var redirecting = false
+    private var lastActivity = ContinuousClock.now
+    private var networkSent: Int64 = 0
+    private var networkReceived: Int64 = 0
+    private var idleTimeout: TimeInterval = 60
+
+    init(stream: LFSTransferStream) { self.stream = stream }
+
+    /// A caller-supplied URLProtocol must continue through URLSession, including
+    /// embedders' custom transports and the SDK's existing HTTP mocks.
+    static func usesDefaultProtocols(_ configuration: URLSessionConfiguration) -> Bool {
+        let supplied = (configuration.protocolClasses ?? []).map(ObjectIdentifier.init)
+        let defaults = (URLSessionConfiguration.ephemeral.protocolClasses ?? []).map(ObjectIdentifier.init)
+        return supplied.isEmpty || supplied == defaults
+    }
+
+    func execute(
+        _ request: URLRequest, body: LFSRequestBody, configuration: URLSessionConfiguration
+    ) async throws -> LFSTransferHTTPResult {
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async { [self] in
+                    do {
+                        continuation.resume(returning: try perform(request, body: body, configuration: configuration))
+                    }
+                    catch { continuation.resume(throwing: error) }
+                }
+            }
+        } onCancel: {
+            self.lock.withLock { self.cancelled = true }
+        }
+    }
+
+    private func perform(
+        _ request: URLRequest, body: LFSRequestBody, configuration: URLSessionConfiguration
+    ) throws -> LFSTransferHTTPResult {
+        guard let url = request.url else { throw URLError(.badURL) }
+        responseURL = url
+        lastActivity = .now
+        idleTimeout = configuration.timeoutIntervalForRequest
+        defer { try? file?.close(); input?.close() }
+        var length: Int64
+        switch body {
+        case .file(let url):
+            let handle = try FileHandle(forReadingFrom: url)
+            file = handle
+            length = Int64(clamping: try handle.seekToEnd())
+            try handle.seek(toOffset: 0)
+        case .data(let bytes):
+            data = bytes
+            length = Int64(bytes.count)
+        case .stream(let source):
+            input = source
+            source.open()
+            length = -1
+        }
+        var fields: [String: String] = [:]
+        for (key, value) in configuration.httpAdditionalHeaders ?? [:] {
+            if let key = key as? String, let value = value as? String { fields[key.lowercased()] = value }
+        }
+        for (key, value) in request.allHTTPHeaderFields ?? [:] { fields[key.lowercased()] = value }
+        if fields["transfer-encoding"] == "chunked" { length = -1 }
+        else if let supplied = fields["content-length"].flatMap(Int64.init) { length = supplied }
+        // Foundation suppresses curl's implicit Expect header; action-supplied
+        // Expect: 100-continue is preserved.
+        let headerLines = fields.map { "\($0.key): \($0.value)" }
+            + (fields["expect"] == nil ? ["Expect:"] : [])
+        var detail = [CChar](repeating: 0, count: 256)
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        let result = sp_lfs_curl_upload(
+            url.absoluteString, request.httpMethod ?? "PUT", headerLines.joined(separator: "\r\n"), length,
+            milliseconds(configuration.timeoutIntervalForRequest),
+            milliseconds(configuration.timeoutIntervalForResource),
+            context,
+            { context, buffer, count in
+                guard let context, let buffer else { return 0x10000000 }
+                return Unmanaged<LFSCurlUpload>.fromOpaque(context).takeUnretainedValue().read(buffer, count: count)
+            },
+            { context, buffer, count in
+                guard let context, let buffer else { return 0 }
+                let upload = Unmanaged<LFSCurlUpload>.fromOpaque(context).takeUnretainedValue()
+                upload.lastActivity = .now
+                if !upload.redirecting { upload.responseBody.append(buffer, count: count) }
+                return count
+            },
+            { context, buffer, count in
+                guard let context, let buffer else { return 0 }
+                let upload = Unmanaged<LFSCurlUpload>.fromOpaque(context).takeUnretainedValue()
+                upload.receiveHeader(String(decoding: UnsafeBufferPointer(start: buffer, count: count), as: UTF8.self))
+                return count
+            },
+            { context, offset, origin in
+                guard let context else { return 1 }
+                return Unmanaged<LFSCurlUpload>.fromOpaque(context).takeUnretainedValue().seek(offset, origin: origin)
+            },
+            { context, sent, received in
+                guard let context else { return 1 }
+                return Unmanaged<LFSCurlUpload>.fromOpaque(context).takeUnretainedValue().checkpoint(sent, received)
+            }, &detail, 256)
+        if let failure { throw failure }
+        guard result == 0 else {
+            if result == -1 { throw LFSClientError("The libcurl runtime is unavailable") }
+            let code: URLError.Code
+            switch result {
+            case 6: code = .cannotFindHost
+            case 7: code = .cannotConnectToHost
+            case 28: code = .timedOut
+            case 35, 60: code = .secureConnectionFailed
+            case 42: code = .cancelled
+            default: code = .networkConnectionLost
+            }
+            let bytes = detail.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
+            let message = String(decoding: bytes, as: UTF8.self)
+            throw URLError(code, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        guard let response else { throw URLError(.badServerResponse) }
+        return LFSTransferHTTPResult(response: response, body: responseBody, accepted: stream.accepts(response))
+    }
+
+    private func read(_ buffer: UnsafeMutablePointer<UInt8>, count: Int) -> Int {
+        if lock.withLock({ cancelled }) { failure = URLError(.cancelled); return 0x10000000 }
+        do {
+            let count = min(count, 64 * 1024)
+            let amount: Int
+            if let file {
+                let bytes = try file.read(upToCount: count) ?? Data()
+                bytes.copyBytes(to: buffer, count: bytes.count)
+                amount = bytes.count
+            } else if let input {
+                amount = input.read(buffer, maxLength: count)
+                if amount < 0 { throw input.streamError ?? URLError(.cannotOpenFile) }
+            } else if let data {
+                amount = min(count, data.count - offset)
+                data.copyBytes(to: buffer, from: offset..<(offset + amount))
+                offset += amount
+            } else { amount = 0 }
+            sent += Int64(amount)
+            if amount > 0 { stream.progress?(sent, Int64(amount)) }
+            return amount
+        } catch {
+            failure = error
+            return 0x10000000 // CURL_READFUNC_ABORT
+        }
+    }
+
+    private func seek(_ offset: Int64, origin: Int32) -> Int32 {
+        guard origin == 0, offset >= 0 else { return 2 } // CURL_SEEKFUNC_CANTSEEK
+        do {
+            if let file { try file.seek(toOffset: UInt64(offset)) }
+            else if let data, offset <= Int64(data.count) { self.offset = Int(offset) }
+            else { return 2 }
+            if sent > 0 { stream.progress?(sent, -sent) }
+            sent = 0
+            return 0
+        } catch { failure = error; return 1 }
+    }
+
+    private func checkpoint(_ sent: Int64, _ received: Int64) -> Int32 {
+        if lock.withLock({ cancelled }) { failure = URLError(.cancelled); return 1 }
+        if sent != networkSent || received != networkReceived {
+            lastActivity = .now
+            networkSent = sent
+            networkReceived = received
+        }
+        if idleTimeout > 0, lastActivity.duration(to: .now) >= .seconds(idleTimeout) {
+            failure = URLError(.timedOut)
+            return 1
+        }
+        return 0
+    }
+
+    private func receiveHeader(_ line: String) {
+        lastActivity = .now
+        if line.hasPrefix("HTTP/") {
+            status = Int(line.split(separator: " ").dropFirst().first ?? "") ?? 0
+            headers.removeAll(keepingCapacity: true)
+            responseBody.removeAll(keepingCapacity: true)
+            readingHeaders = true
+            redirecting = false
+        } else if line == "\r\n", readingHeaders {
+            readingHeaders = false
+            guard status >= 200, let url = responseURL else { return }
+            if [301, 302, 303, 307, 308].contains(status), let location = headers["location"],
+               let target = URL(string: location, relativeTo: url)?.absoluteURL {
+                responseURL = target
+                redirecting = true
+                return
+            }
+            response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)
+            if let response, stream.accepts(response) { stream.success?() }
+        } else if readingHeaders, let colon = line.firstIndex(of: ":") {
+            let key = line[..<colon].lowercased()
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            headers[key] = headers[key].map { $0 + ", " + value } ?? value
+        }
+    }
+
+    private func milliseconds(_ interval: TimeInterval) -> Int64 {
+        guard interval > 0, interval.isFinite else { return 0 }
+        return Int64(min(interval * 1000, Double(Int32.max)))
+    }
+}
+#endif

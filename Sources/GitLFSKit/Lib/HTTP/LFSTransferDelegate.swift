@@ -24,7 +24,13 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
     func execute(
         _ request: URLRequest, body: LFSRequestBody?, configuration: URLSessionConfiguration
     ) async throws -> LFSTransferHTTPResult {
-        try await withTaskCancellationHandler {
+        #if os(Windows)
+        if request.httpMethod == "PUT", let body, stream.destination == nil,
+           LFSCurlUpload.usesDefaultProtocols(configuration) {
+            return try await LFSCurlUpload(stream: stream).execute(request, body: body, configuration: configuration)
+        }
+        #endif
+        return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 self.continuation = continuation
                 let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)

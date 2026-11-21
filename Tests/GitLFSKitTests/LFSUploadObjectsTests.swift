@@ -84,18 +84,6 @@ struct LFSUploadObjectsTests {
         }
     }
 
-    // Windows Swift 6.4.2 reproduces the URLSession write-readiness stall tracked at
-    // https://github.com/swiftlang/swift-corelibs-foundation/issues/5532
-    // CI job 136784548448: plain file/Data PUTs stopped at 98,304/130,843 bytes;
-    // the server drained all reported bytes and had not chosen a response yet.
-    // No faithful URLSession workaround is validated; do not mask it by shrinking
-    // bodies or changing the basic adapter's Content-Length upload to chunked.
-    // Draft upstream follow-up (not posted): Swift 6.4.2 x86_64/windows-2022 still
-    // reproduces #5532 against an in-process HTTP server with 1 MB bodies, including
-    // plain 200 PUTs. Both fromFile and Data stall before the full body arrives;
-    // 503 retry and 401 resend are therefore never reached. A disk-stream change
-    // also failed. Re-enable these tests after the runtime fix is available.
-    #if !os(Windows)
     @Test("a plain 1 MB PUT completes without a retry or authentication challenge",
           .timeLimit(.minutes(1)), arguments: ["file", "stream", "data"])
     func largeUploadBody(kind: String) async throws {
@@ -184,8 +172,6 @@ struct LFSUploadObjectsTests {
             }
         }
     }
-    #endif
-
     #if !os(Windows)
     @Test("an object that can't be statted is an error, even with lfs.allowincompletepush")
     func unreadableObject() async throws {
