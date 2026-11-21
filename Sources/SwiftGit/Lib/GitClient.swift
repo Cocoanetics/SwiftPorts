@@ -218,9 +218,11 @@ public struct GitClient: ForgeKit.GitClient {
         // Captured eagerly, as `shellProgressSink` does, for callbacks on
         // libgit2's thread.
         let stderr = Shell.current.stderr
-        let progress = PushProgressSink(
+        let writer = PushProgressSink(
             reportProgress: reportProgress, quiet: quiet, terminal: TTY.isStderrTTY
         ).sink { stderr.write(Data($0.utf8)) }
+        defer { writer.flush() }
+        let progress: @Sendable (String) -> Void = { writer.write($0) }
         let connection = try await resolveRemoteOperand(remote, for: .push)
         // GitKit calls it on the thread running the push, inside its
         // isolation: the async work is bridged as ShellSigner bridges

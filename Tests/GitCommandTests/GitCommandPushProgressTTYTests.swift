@@ -42,7 +42,8 @@ struct GitCommandPushProgressTTYTests {
             reportProgress: command.progress, quiet: command.quiet, terminal: terminal)
         let records = Recorder()
         let sink = policy.sink(writing: records.append)
-        recorded.forEach(sink)
+        recorded.forEach(sink.write)
+        sink.flush()
         return records.texts
     }
 
@@ -107,6 +108,30 @@ struct GitCommandPushProgressTTYTests {
         #expect(try written(["origin"], terminal: false, recorded: recorded)
             == ["remote: hook ", "says hi\n", Self.header])
         #expect(try written(["origin"], terminal: true, recorded: recorded) == recorded)
+    }
+
+    @Test func remoteLabelSplitMidWordIsHeldUntilItsLineEnds() throws {
+        let recorded = ["remote: Resolving", " deltas: 100% (2/2), done.\n", Self.header]
+        #expect(try written(["origin"], terminal: false, recorded: recorded) == [Self.header])
+        #expect(try written(["--no-progress", "origin"], terminal: true, recorded: recorded)
+            == [Self.header])
+        #expect(try written(["origin"], terminal: true, recorded: recorded) == recorded)
+    }
+
+    @Test func hookTextWithAMeterTitleIsKept() throws {
+        let recorded = [
+            "remote: Checking objects: prohibited file secrets.env\n",
+            "remote: Resolving deltas: see the wiki\n",
+            "remote: Checking", " objects: denied\n",
+            "remote: Unpacking objects: 3, done.\n"
+        ]
+        #expect(try written(["origin"], terminal: false, recorded: recorded)
+            == Array(recorded.prefix(4)))
+    }
+
+    @Test func aLineStillHeldWhenThePushEndsIsWritten() throws {
+        #expect(try written(["origin"], terminal: false, recorded: ["remote: Resolving"])
+            == ["remote: Resolving"])
     }
 }
 #endif

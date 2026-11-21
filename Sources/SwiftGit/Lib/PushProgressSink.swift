@@ -60,12 +60,37 @@ struct PushProgressSink {
 
     static func classify(_ text: String) -> Record {
         if text.hasPrefix(sidebandPrefix) {
-            let body = text.dropFirst(sidebandPrefix.count)
-            return remoteMeterPrefixes.contains(where: body.hasPrefix) ? .remoteProgress : .message
+            return isRemoteMeterLine(text.dropFirst(sidebandPrefix.count)) ? .remoteProgress : .message
         }
         guard meterPrefixes.contains(where: text.hasPrefix) else { return .message }
         if text.contains(", done.\n") { return .phaseComplete }
         return text.hasSuffix("\r") ? .update : .message
+    }
+
+    /// Whether `body`, a `remote:` line without its prefix, is a line of
+    /// git's progress meter (`progress.c`): a phase's title, then a count
+    /// or `<pct>% (<n>/<total>)`, then nothing but `, …` (`, done.`, the
+    /// throughput) and padding. A hook's `Checking objects: denied` isn't.
+    static func isRemoteMeterLine(_ body: Substring) -> Bool {
+        guard let title = remoteMeterPrefixes.first(where: body.hasPrefix) else { return false }
+        var rest = body.dropFirst(title.count)
+        while let last = rest.last, last == "\r" || last == "\n" || last == " " { rest = rest.dropLast() }
+        func digits() -> Bool {
+            let count = rest.prefix(while: { $0.isASCII && $0.isNumber }).count
+            rest = rest.dropFirst(count)
+            return count > 0
+        }
+        guard rest.first == " " else { return false }
+        rest = rest.drop { $0 == " " }
+        guard digits() else { return false }
+        if rest.hasPrefix("% (") {
+            rest = rest.dropFirst(3)
+            guard digits(), rest.first == "/" else { return false }
+            rest = rest.dropFirst()
+            guard digits(), rest.first == ")" else { return false }
+            rest = rest.dropFirst()
+        }
+        return rest.isEmpty || rest.first == ","
     }
 
     /// Whether a record of `kind` is written.
@@ -77,33 +102,79 @@ struct PushProgressSink {
         }
     }
 
-    /// A callback for GitKit that hands `write` what this policy keeps,
-    /// unchanged. GitKit continues a `remote:` line split across sideband
-    /// packets without the prefix; the continuation goes with its line.
-    func sink(writing write: @escaping @Sendable (String) -> Void) -> @Sendable (String) -> Void {
-        if !meter && !messages { return { _ in } }
-        let line = OpenSidebandLine()
-        return { [self] text in
-            if keeps(line.kind(of: text)) { write(text) }
-        }
+    /// A writer for GitKit's callback that hands `write` what this policy
+    /// keeps, unchanged. ``Writer/flush()`` it once the push is done.
+    func sink(writing write: @escaping @Sendable (String) -> Void) -> Writer {
+        Writer(policy: self, write: write)
     }
 
-    /// The `remote:` line GitKit last left unterminated, if any.
-    private final class OpenSidebandLine: @unchecked Sendable {
+    /// Applies the policy to GitKit's records, which continue a `remote:`
+    /// line split across sideband packets without the prefix. A
+    /// continuation goes with its line; and when only the remote's meter
+    /// is dropped, a split line is held until it ends, since its first
+    /// part (`remote: Resolving`) can't tell meter from message.
+    final class Writer: @unchecked Sendable {
+        private let policy: PushProgressSink
+        private let output: @Sendable (String) -> Void
         private let lock = NSLock()
+        /// What the unterminated `remote:` line is, once decided.
         private var open: Record?
+        /// The unterminated `remote:` line's parts, while undecided.
+        private var pending: [String] = []
 
-        func kind(of text: String) -> Record {
+        init(policy: PushProgressSink, write: @escaping @Sendable (String) -> Void) {
+            self.policy = policy
+            output = write
+        }
+
+        /// Whether a line's kind changes what is written: only with
+        /// messages on and the remote's meter off.
+        private var holdsLines: Bool { policy.messages && !policy.meter }
+
+        func write(_ text: String) {
             lock.withLock {
-                var kind = PushProgressSink.classify(text)
-                if let open, kind == .message, !text.hasPrefix(PushProgressSink.sidebandPrefix) {
-                    kind = open
-                } else if kind != .remoteProgress, !text.hasPrefix(PushProgressSink.sidebandPrefix) {
-                    return kind
+                let kind = PushProgressSink.classify(text)
+                let sideband = text.hasPrefix(PushProgressSink.sidebandPrefix)
+                let ends = text.hasSuffix("\r") || text.hasSuffix("\n")
+                let continues = (open != nil || !pending.isEmpty) && !sideband && kind == .message
+                if continues, !pending.isEmpty {
+                    pending.append(text)
+                    if ends { release() }
+                } else if continues, let line = open {
+                    emit(text, as: line)
+                    if ends { open = nil }
+                } else if sideband {
+                    release()
+                    open = nil
+                    if ends {
+                        emit(text, as: kind)
+                    } else if holdsLines {
+                        pending = [text]
+                    } else {
+                        open = kind
+                        emit(text, as: kind)
+                    }
+                } else {
+                    emit(text, as: kind)
                 }
-                open = text.hasSuffix("\r") || text.hasSuffix("\n") ? nil : kind
-                return kind
             }
+        }
+
+        /// Write a line still held when the push ends.
+        func flush() {
+            lock.withLock { release() }
+        }
+
+        private func release() {
+            guard !pending.isEmpty else { return }
+            let parts = pending
+            pending = []
+            let kind = PushProgressSink.classify(parts.joined())
+            parts.forEach { emit($0, as: kind) }
+        }
+
+        private func emit(_ text: String, as kind: Record) {
+            if policy.keeps(kind) { output(text) }
         }
     }
 }

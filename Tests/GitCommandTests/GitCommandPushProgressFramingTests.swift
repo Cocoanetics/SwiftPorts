@@ -19,7 +19,8 @@ struct GitCommandPushProgressFramingTests {
     private func written(_ inputs: [String], by policy: PushProgressSink) -> [String] {
         let records = Recorder()
         let sink = policy.sink(writing: records.append)
-        inputs.forEach(sink)
+        inputs.forEach(sink.write)
+        sink.flush()
         return records.texts
     }
 
@@ -53,6 +54,12 @@ struct GitCommandPushProgressFramingTests {
         #expect(PushProgressSink.classify("Receiving objects: 100% (3/3), done.\n") == .phaseComplete)
         #expect(PushProgressSink.classify("remote: Counting objects: 1\r") == .message)
         #expect(PushProgressSink.classify("To /srv/repo\n") == .message)
+        #expect(PushProgressSink.classify("remote: Resolving deltas:  50% (1/2)   \r") == .remoteProgress)
+        #expect(PushProgressSink.classify(
+            "remote: Receiving objects: 50% (1/2), 1.00 MiB | 2.00 MiB/s\r") == .remoteProgress)
+        #expect(PushProgressSink.classify("remote: Unpacking objects: 3, done.\n") == .remoteProgress)
+        #expect(PushProgressSink.classify("remote: Checking objects: prohibited file\n") == .message)
+        #expect(PushProgressSink.classify("remote: Resolving deltas:5%\n") == .message)
         #expect(PushProgressSink.classify("   6bfcd70..8124fb4  main -> main\n") == .message)
     }
 }
