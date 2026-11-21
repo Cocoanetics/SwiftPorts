@@ -1,5 +1,6 @@
 import Foundation
 import HTTPTypes
+import ShellKit
 
 /// The HTTP basic transfer queue (`tq.TransferQueue`). Progress reports bytes;
 /// callers own presentation. Duplicate OIDs retain their first name and path.
@@ -12,6 +13,12 @@ public final class LFSTransferQueue: Sendable {
     let progress: (@Sendable (LFSTransferDirection, String, Int64, Int64, Int64) -> Void)?
     let settings: LFSTransferSettings
     let environment: LFSTransferEnvironment
+    /// `tq.DryRun`: batch, but report every object with an action as transferred.
+    let dryRun: Bool
+    /// `tq.WithProgress`.
+    let meter: LFSProgressMeter?
+    /// Fires once per OID the queue finishes without an error.
+    let completion: (@Sendable (LFSTransferCompletion) -> Void)?
 
     public convenience init(
         client: LFSClient, store: LocalStore, direction: LFSTransferDirection,
@@ -26,7 +33,10 @@ public final class LFSTransferQueue: Sendable {
         client: LFSClient, store: LocalStore, direction: LFSTransferDirection,
         remote: String, refName: String,
         progress: (@Sendable (LFSTransferDirection, String, Int64, Int64, Int64) -> Void)? = nil,
-        environment: LFSTransferEnvironment
+        environment: LFSTransferEnvironment,
+        dryRun: Bool = false,
+        meter: LFSProgressMeter? = nil,
+        completion: (@Sendable (LFSTransferCompletion) -> Void)? = nil
     ) {
         self.client = client
         self.store = store
@@ -35,13 +45,25 @@ public final class LFSTransferQueue: Sendable {
         self.refName = refName
         self.progress = progress
         self.environment = environment
+        self.dryRun = dryRun
+        self.meter = meter
+        self.completion = completion
         settings = LFSTransferSettings(client.finder.configuration)
     }
 
     public func transfer(_ objects: [LFSBatchObject]) async throws {
+        let failures = try await process(objects)
+        if !failures.isEmpty { throw LFSClientError(failures.map(\.description).joined(separator: "\n")) }
+    }
+
+    /// The queue's run and `Wait`, returning `Errors()`. On upload, an OID in
+    /// `missing` that the server asks for stops the queue
+    /// (`newObjectMissingError`); a job whose file is absent or of the wrong
+    /// size fails as missing or corrupt before any request is made.
+    func process(_ objects: [LFSBatchObject], missing: Set<String> = []) async throws -> [LFSTransferFailure] {
         var seen: Set<String> = []
         var pending = objects.filter { seen.insert($0.oid).inserted }.map { LFSTransferPending(object: $0) }
-        var failures: [String] = []
+        var failures: [LFSTransferFailure] = []
         var unsupported = false
         var authenticated = false
         while !pending.isEmpty {
@@ -61,6 +83,7 @@ public final class LFSTransferQueue: Sendable {
             }
             pending = waiting
             slice.sort { $0.object.size > $1.object.size }
+            meter?.pause()
             let response: LFSBatchResponse
             do {
                 response = try await client.batch(operation: direction.rawValue, objects: slice.map(\.object),
@@ -70,41 +93,23 @@ public final class LFSTransferQueue: Sendable {
                 let message = String(describing: error)
                 let shouldRetry = (error as? LFSClientError)?.retryInTransferQueue ?? true
                 if !shouldRetry {
-                    failures.append(message)
+                    failures.append(.message(message))
                     continue
                 }
                 var retries: [LFSTransferPending] = []
                 for item in slice {
                     if let item = scheduledRetry(item) { retries.append(item) }
-                    else { failures.append(message) }
+                    else { failures.append(.message(message)) }
                 }
                 pending = retries + pending
                 continue
             }
-            let originals = Dictionary(uniqueKeysWithValues: slice.map { ($0.object.oid, $0) })
-            var returned: Set<String> = []
-            var jobs: [LFSTransferPending] = []
-            for var object in response.objects {
-                guard var item = originals[object.oid] else {
-                    failures.append("[\(object.oid)] The server returned an unknown OID.")
-                    continue
-                }
-                guard returned.insert(object.oid).inserted else { continue }
-                if let error = object.errorText {
-                    failures.append(error)
-                    continue
-                }
-                object.name = item.object.name
-                object.path = item.object.path
-                item.object = object
-                if object.action(named: direction.rawValue) != nil {
-                    jobs.append(item)
-                }
+            guard let jobs = await jobs(for: response, slice: slice, missing: missing, failures: &failures)
+            else { break }
+            if dryRun {
+                for item in jobs { finished(item.object) }
+                continue
             }
-            for item in slice where !returned.contains(item.object.oid) {
-                failures.append("[\(item.object.oid)] The server did not return the requested OID.")
-            }
-            jobs.sort { $0.object.size > $1.object.size }
             let workers = LFSTransferWorkers(jobs, authenticated: authenticated)
             let results = await run(workers)
             authenticated = workers.authenticated
@@ -115,12 +120,97 @@ public final class LFSTransferQueue: Sendable {
                 if error.unsupportedContentType { unsupported = true }
                 if error.retry, let retry = scheduledRetry(item, delay: error.delay) {
                     retries.append(retry)
-                } else { failures.append(error.message) }
+                } else { failures.append(.message(error.message)) }
             }
             pending = retries + pending
         }
+        meter?.flush()
         if unsupported { environment.stderr(Self.contentTypeInfo) }
-        if !failures.isEmpty { throw LFSClientError(failures.joined(separator: "\n")) }
+        return failures
+    }
+
+    /// The response's objects that have an action, in transfer order. An
+    /// object without one is done; nil stops the queue on a missing upload.
+    private func jobs(
+        for response: LFSBatchResponse, slice: [LFSTransferPending], missing: Set<String>,
+        failures: inout [LFSTransferFailure]
+    ) async -> [LFSTransferPending]? {
+        let originals = Dictionary(uniqueKeysWithValues: slice.map { ($0.object.oid, $0) })
+        if direction == .upload {
+            for object in response.objects where !object.actions.isEmpty && missing.contains(object.oid) {
+                let name = originals[object.oid]?.object.name ?? object.name
+                failures.append(.malformed(name: name, oid: object.oid, missing: true))
+                return nil
+            }
+        }
+        meter?.start()
+        var returned: Set<String> = []
+        var jobs: [LFSTransferPending] = []
+        for var object in response.objects {
+            guard var item = originals[object.oid] else {
+                failures.append(.message("[\(object.oid)] The server returned an unknown OID."))
+                meter?.skip(object.size)
+                continue
+            }
+            guard returned.insert(object.oid).inserted else { continue }
+            if let error = object.errorText {
+                failures.append(.message(error))
+                meter?.skip(object.size)
+                continue
+            }
+            object.name = item.object.name
+            object.path = item.object.path
+            item.object = object
+            if object.action(named: direction.rawValue) != nil {
+                meter?.startTransfer(object.name)
+                jobs.append(item)
+            } else {
+                meter?.skip(object.size)
+                completion?(.skipped(object))
+            }
+        }
+        for item in slice where !returned.contains(item.object.oid) {
+            failures.append(.message("[\(item.object.oid)] The server did not return the requested OID."))
+        }
+        jobs.sort { $0.object.size > $1.object.size }
+        if direction == .upload {
+            var present: [LFSTransferPending] = []
+            for item in jobs {
+                if let failure = await Self.malformed(item.object) { failures.append(failure) }
+                else { present.append(item) }
+            }
+            jobs = present
+        }
+        return jobs
+    }
+
+    private func finished(_ object: LFSBatchObject) {
+        meter?.finishTransfer(object.name)
+        completion?(.transferred(object))
+    }
+
+    /// `partitionTransfers`: an upload whose file is absent is missing, and
+    /// one of the wrong size is corrupt. Any other `stat` failure is an
+    /// ordinary error, which `lfs.allowincompletepush` does not excuse.
+    private static func malformed(_ object: LFSBatchObject) async -> LFSTransferFailure? {
+        guard object.size >= 0 else { return nil }
+        do {
+            try await Shell.authorize(URL(fileURLWithPath: object.path))
+        } catch {
+            return .message(String(describing: error))
+        }
+        let attributes: [FileAttributeKey: Any]
+        do {
+            attributes = try FileManager.default.attributesOfItem(atPath: object.path)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            return .malformed(name: object.name, oid: object.oid, missing: true)
+        } catch {
+            return .message("stat \(object.path): \(error.localizedDescription)")
+        }
+        guard (attributes[.size] as? NSNumber)?.int64Value == object.size else {
+            return .malformed(name: object.name, oid: object.oid, missing: false)
+        }
+        return nil
     }
 
     private func scheduledRetry(
@@ -143,6 +233,9 @@ public final class LFSTransferQueue: Sendable {
                     while !Task.isCancelled, let item = workers.next() {
                         do {
                             try await self.perform(item.object) { workers.success() }
+                            // `handleTransferResult`: counted as each transfer
+                            // succeeds, not when the whole batch is done.
+                            self.finished(item.object)
                             results.append((item, nil))
                         } catch let error as LFSTransferError {
                             results.append((item, error))
@@ -193,7 +286,10 @@ public final class LFSTransferQueue: Sendable {
     }
 
     func report(_ object: LFSBatchObject) -> @Sendable (Int64, Int64) -> Void {
-        { read, delta in self.progress?(self.direction, object.name, object.size, read, delta) }
+        { read, delta in
+            self.meter?.transferBytes(object.name, read: read, total: object.size, current: delta)
+            self.progress?(self.direction, object.name, object.size, read, delta)
+        }
     }
 
     static let contentTypeInfo = """

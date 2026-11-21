@@ -173,7 +173,11 @@ public final class LFSClient: @unchecked Sendable {
             guard let urlRequest = URLRequest(httpRequest: request) else {
                 throw LFSClientError("invalid URL: \(request.url?.absoluteString ?? "")")
             }
-            let result = try await LFSTransferDelegate(stream: stream).execute(
+            // `basicUploadAdapter.makeRequest` resends after a 401 with a body
+            // that has no progress callback, so an upload's bytes count once.
+            var attemptStream = stream
+            if attempt > 0, body != nil { attemptStream.progress = nil }
+            let result = try await LFSTransferDelegate(stream: attemptStream).execute(
                 urlRequest, body: body, configuration: session.configuration)
             if (200..<300).contains(result.status), case .helper(let filled) = applied {
                 context.approve(filled)
