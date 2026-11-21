@@ -9,6 +9,33 @@ import FoundationNetworking
 
 @Suite("LFS platform upload transport")
 struct LFSURLSessionUploadTests {
+    #if os(Windows)
+    @Test("upload diagnostics require an explicit test sink and retain the raw curl result")
+    func diagnostics() async throws {
+        #expect(LFSUploadDiagnostics.sink == nil)
+        let messages = TransferTestLock<[String]>([])
+        try await LFSTestServer.withServer { server in
+            var request = URLRequest(url: server.endpoint.appendingPathComponent("objects/diagnostics"))
+            request.httpMethod = "PUT"
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.connectionProxyDictionary = ["HTTPEnable": 0]
+            try await LFSUploadDiagnostics.$sink.withValue({ message in
+                messages.withLock { $0.append(message) }
+            }, operation: {
+                _ = try await LFSTransferDelegate(stream: LFSTransferStream()).execute(
+                    request, body: .data(Data(repeating: 0x61, count: 1_000_000)), configuration: configuration)
+            })
+        }
+        let trace = messages.withLock { $0.joined(separator: "\n") }
+        #expect(trace.contains("LFSTransferDelegate selected curl"), Comment(rawValue: trace))
+        #expect(trace.contains("scheme=http host=127.0.0.1 length=1000000"), Comment(rawValue: trace))
+        #expect(trace.contains("proxy=disabled"), Comment(rawValue: trace))
+        #expect(trace.contains("CURLcode=0 curl_easy_strerror="), Comment(rawValue: trace))
+        #expect(trace.contains("bodyRead=1000000"), Comment(rawValue: trace))
+        #expect(LFSUploadDiagnostics.sink == nil)
+    }
+    #endif
+
     @Test("1 MB uploads preserve framing, progress and HTTP errors",
           .timeLimit(.minutes(1)), arguments: ["file", "data", "stream"], [200, 503, 401])
     func upload(kind: String, status: Int) async throws {

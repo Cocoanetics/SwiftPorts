@@ -16,6 +16,7 @@ extern void curl_slist_free_all(void *);
 extern const char *curl_easy_strerror(int);
 
 int sp_lfs_curl_initialize(void) { return curl_global_init(3L); }
+const char *sp_lfs_curl_error_string(int code) { return curl_easy_strerror(code); }
 
 typedef struct {
     void *context;

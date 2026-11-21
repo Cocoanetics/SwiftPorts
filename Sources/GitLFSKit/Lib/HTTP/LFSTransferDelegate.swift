@@ -30,7 +30,13 @@ final class LFSTransferDelegate: NSObject, URLSessionDataDelegate, @unchecked Se
         // https://github.com/swiftlang/swift-corelibs-foundation/issues/5532
         if request.httpMethod == "PUT", let body, stream.destination == nil,
            LFSCurlUpload.usesDefaultProtocols(configuration) {
+            LFSUploadDiagnostics.sink?("LFSTransferDelegate selected curl")
             return try await LFSCurlUpload(stream: stream).execute(request, body: body, configuration: configuration)
+        }
+        if request.httpMethod == "PUT" {
+            LFSUploadDiagnostics.sink?("LFSTransferDelegate selected URLSession "
+                + "defaultProtocols=\(LFSCurlUpload.usesDefaultProtocols(configuration)) "
+                + "hasBody=\(body != nil) hasDestination=\(stream.destination != nil)")
         }
         #endif
         return try await withTaskCancellationHandler {

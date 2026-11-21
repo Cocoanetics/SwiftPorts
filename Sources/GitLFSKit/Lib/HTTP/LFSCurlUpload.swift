@@ -16,6 +16,7 @@ final class LFSCurlUpload: @unchecked Sendable {
     // Swift's lazy static initialization is serialized across upload workers.
     private static let initialized = sp_lfs_curl_initialize()
     private let stream: LFSTransferStream
+    private let diagnostic = LFSUploadDiagnostics.sink
     private let lock = NSLock()
     private var cancelled = false
     private var fileURL: URL?
@@ -23,6 +24,7 @@ final class LFSCurlUpload: @unchecked Sendable {
     private var data: Data?
     private var offset = 0
     private var sent: Int64 = 0
+    private var readCalls = 0
     private var failure: Error?
     private var response: HTTPURLResponse?
     private var responseURL: URL?
@@ -69,7 +71,10 @@ final class LFSCurlUpload: @unchecked Sendable {
         _ request: URLRequest, body: LFSRequestBody, configuration: URLSessionConfiguration
     ) throws -> LFSTransferHTTPResult {
         guard let url = request.url else { throw URLError(.badURL) }
-        guard Self.initialized == 0 else { throw URLError(.cannotConnectToHost) }
+        guard Self.initialized == 0 else {
+            diagnostic?("curl initialization CURLcode=\(Self.initialized)")
+            throw URLError(.cannotConnectToHost)
+        }
         responseURL = url
         if request.httpShouldHandleCookies, configuration.httpShouldSetCookies {
             cookieStorage = configuration.httpCookieStorage
@@ -78,8 +83,10 @@ final class LFSCurlUpload: @unchecked Sendable {
         idleTimeout = configuration.timeoutIntervalForRequest
         defer { input?.close() }
         var length: Int64
+        let sourceKind: String
         switch body {
         case .file(let url):
+            sourceKind = "file"
             let handle = try FileHandle(forReadingFrom: url)
             do {
                 length = Int64(clamping: try handle.seekToEnd())
@@ -90,9 +97,11 @@ final class LFSCurlUpload: @unchecked Sendable {
             fileURL = url
             try openFileStream(url)
         case .data(let bytes):
+            sourceKind = "data"
             data = bytes
             length = Int64(bytes.count)
         case .stream(let source):
+            sourceKind = "stream"
             input = source
             source.open()
             length = -1
@@ -107,6 +116,10 @@ final class LFSCurlUpload: @unchecked Sendable {
         var detail = [CChar](repeating: 0, count: 256)
         let context = Unmanaged.passUnretained(self).toOpaque()
         let proxy = proxySettings(configuration, url: url)
+        let proxyMode = proxy.address.map { $0.isEmpty ? "disabled" : "configured" } ?? "environment"
+        diagnostic?("transport=curl source=\(sourceKind) scheme=\(url.scheme ?? "") host=\(url.host ?? "") "
+            + "length=\(length) chunked=\(fields["transfer-encoding"] == "chunked") "
+            + "expectContinue=\(fields["expect"] == "100-continue") proxy=\(proxyMode)")
         let result = sp_lfs_curl_upload(
             url.absoluteString, request.httpMethod ?? "PUT", headerLines.joined(separator: "\r\n"), length,
             milliseconds(configuration.timeoutIntervalForRequest),
@@ -138,6 +151,14 @@ final class LFSCurlUpload: @unchecked Sendable {
                 guard let context else { return 1 }
                 return Unmanaged<LFSCurlUpload>.fromOpaque(context).takeUnretainedValue().checkpoint(sent, received)
             }, &detail, 256)
+        let bytes = detail.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
+        let message = String(decoding: bytes, as: UTF8.self)
+        let description = sp_lfs_curl_error_string(result).map {
+            String(decodingCString: UnsafeRawPointer($0).assumingMemoryBound(to: UInt8.self), as: UTF8.self)
+        } ?? "unknown"
+        diagnostic?("CURLcode=\(result) curl_easy_strerror=\(description) detail=\(message) "
+            + "readCalls=\(readCalls) bodyRead=\(sent) networkSent=\(networkSent) "
+            + "networkReceived=\(networkReceived) status=\(status)")
         if let failure { throw failure }
         guard result == 0 else {
             let code: URLError.Code
@@ -149,8 +170,6 @@ final class LFSCurlUpload: @unchecked Sendable {
             case 42: code = .cancelled
             default: code = .networkConnectionLost
             }
-            let bytes = detail.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
-            let message = String(decoding: bytes, as: UTF8.self)
             throw URLError(code, userInfo: [NSLocalizedDescriptionKey: message])
         }
         guard let response else { throw URLError(.badServerResponse) }
@@ -175,6 +194,7 @@ final class LFSCurlUpload: @unchecked Sendable {
     }
 
     private func read(_ buffer: UnsafeMutablePointer<UInt8>, count: Int) -> Int {
+        readCalls += 1
         if lock.withLock({ cancelled }) { failure = URLError(.cancelled); return 0x10000000 }
         do {
             let count = min(count, 64 * 1024)

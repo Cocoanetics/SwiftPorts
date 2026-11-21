@@ -255,9 +255,15 @@ public final class LFSClient: @unchecked Sendable {
         // TODO: Remove alongside the transfer switch when the toolchain fixes
         // https://github.com/swiftlang/swift-corelibs-foundation/issues/5532
         if request.method == .put, let body, LFSCurlUpload.usesDefaultProtocols(session.configuration) {
+            LFSUploadDiagnostics.sink?("LFSClient selected curl")
             let result = try await LFSCurlUpload(stream: LFSTransferStream()).execute(
                 urlRequest, body: body, configuration: session.configuration)
             return (result.body, result.response)
+        }
+        if request.method == .put {
+            LFSUploadDiagnostics.sink?("LFSClient selected URLSession "
+                + "defaultProtocols=\(LFSCurlUpload.usesDefaultProtocols(session.configuration)) "
+                + "hasBody=\(body != nil)")
         }
         #endif
         let data: Data
