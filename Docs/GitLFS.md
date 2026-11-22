@@ -206,6 +206,7 @@ try await GitLFSKit.withOperation(credentials: credentials, shell: shell) { oper
     try operation.createRepository(at: cloneURL, using: { preparation in
         try Repository.clone(from: sourceURL, to: cloneURL, preparation: preparation)
     }, { repository in
+        try operation.authorize(linkedURL)
         let worktree = try repository.worktreeAdd(
             path: linkedURL, branch: "review", startPoint: "HEAD",
             preparation: operation.preparation)
