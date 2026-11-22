@@ -54,14 +54,16 @@ struct LFSServerRepository {
 
     /// ``LFSClient/fetch(refs:remote:include:exclude:all:dryRun:json:terminal:git:)``,
     /// with the progress text it streams to stdout placed before the result's
-    /// own stdout, which is the order a shell sees them in.
+    /// own stdout, which is the order a shell sees them in, on a terminal
+    /// `columns` wide.
     func fetch(
         refs: [String] = [], include: String? = nil, exclude: String? = nil, all: Bool = false,
-        dryRun: Bool = false, json: Bool = false, terminal: Bool = false, git: GitClient
+        dryRun: Bool = false, json: Bool = false, terminal: Bool = false, columns: Int = 80, git: GitClient
     ) async throws -> LFSCommandResult {
         let streamed = TransferTestLock("")
         var environment = LFSTransferEnvironment()
         environment.stdout = { text in streamed.withLock { $0 += text } }
+        environment.terminalWidth = { columns }
         var result = try await client.fetch(
             refs: refs, remote: "", include: include, exclude: exclude, all: all, dryRun: dryRun,
             json: json, terminal: terminal, git: git, environment: environment)
