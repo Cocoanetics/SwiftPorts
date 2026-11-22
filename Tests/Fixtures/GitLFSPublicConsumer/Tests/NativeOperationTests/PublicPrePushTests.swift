@@ -12,8 +12,8 @@ extension PublicOperationTests {
             try await GitLFSKit.withOperation(shell: fixture.shell) { operation in
                 let first = try fixture.seed(operation)
                 let remote = fixture.path("remote.git")
-                try operation.createRepository(at: remote, using: {
-                    _ = try Repository.initialize(at: remote, bare: true)
+                try operation.createRepository(at: remote, using: { _ in
+                    try Repository.initialize(at: remote, bare: true)
                 }, { _ in })
                 try operation.withRepository(at: fixture.path("source")) { repository in
                     try repository.addRemote(name: "origin", url: remote)
@@ -76,6 +76,112 @@ extension PublicOperationTests {
                 try operation.withRepository(at: fixture.path("source")) { repository throws in
                     #expect(try repository.currentBranch() == "main")
                 }
+            }
+        }
+    }
+
+    @Test("pre-push handles temporary fork remotes, actual push URLs, credentials and push leases")
+    func prePushForkAndLeases() async throws {
+        try await NativeFixture.run { fixture, originServer in
+            try await LFSTestServer.withServer { forkServer in
+                // Drop global lfs.url so per-remote URLs / push URLs select each server.
+                let config = fixture.path("effective.config")
+                try """
+                [filter "lfs"]
+                    process = git-lfs filter-process
+                    clean = git-lfs clean -- %f
+                    smudge = git-lfs smudge -- %f
+                    required = true
+                [lfs]
+                    locksverify = false
+                [user]
+                    name = Public consumer
+                    email = consumer@example.invalid
+                """.write(to: config, atomically: true, encoding: .utf8)
+
+                let forkRemote = fixture.path("fork.git")
+                let first = try await GitLFSKit.withOperation(shell: fixture.shell) { operation -> String in
+                    let sha = try fixture.seed(operation)
+                    try operation.createRepository(at: forkRemote, using: { _ in
+                        try Repository.initialize(at: forkRemote, bare: true)
+                    }, { _ in })
+                    try operation.withRepository(at: fixture.path("source")) { repository in
+                        try repository.configSet("remote.origin.url", fixture.path("origin.git").path)
+                        try repository.configSet("remote.origin.lfsurl", originServer.endpoint.absoluteString)
+                        // Temporary fork remote with a distinct push URL and LFS push URL.
+                        try repository.addRemote(name: "fork", url: fixture.path("unused-fetch.git"))
+                        try repository.configSet("remote.fork.pushurl", forkRemote.path)
+                        try repository.configSet("remote.fork.lfspushurl", forkServer.endpoint.absoluteString)
+                    }
+                    return sha
+                }
+
+                // Require authentication only on the fork LFS server to verify credential scoping.
+                forkServer.inject(.unauthorized)
+                let forkCreds: CredentialProvider = { _, _, _ in
+                    .userPassword(username: "fork-user", password: "fork-secret")
+                }
+                let expectedAuth = "Basic " + Data("fork-user:fork-secret".utf8).base64EncodedString()
+
+                try await GitLFSKit.withOperation(credentials: forkCreds, shell: fixture.shell) { operation in
+                    try operation.withRepository(at: fixture.path("source")) { repository in
+                        _ = try repository.push(
+                            remote: "fork", refspecs: ["main:main"], setUpstream: false,
+                            leases: PushLeases([.init(ref: "main", expectation: .absent)]),
+                            connectingTo: forkRemote.path, progress: { _ in }, beforeSending: { updates in
+                                _ = try PrePushOptions().run(
+                                    ["fork", forkRemote.path], updates: NativeFixture.updates(updates),
+                                    at: fixture.path("source"))
+                            })
+                    }
+                }
+                #expect(forkServer.bytes(for: NativeFixture.pointer.oid) == NativeFixture.bytes)
+                #expect(originServer.bytes(for: NativeFixture.pointer.oid) == nil)
+                #expect(forkServer.requests().contains { $0.requestHeaders["authorization"] == expectedAuth })
+
+                // Advance local branch and test stale lease vs matching lease (explicit + trackingForRest).
+                let next = try await GitLFSKit.withOperation(shell: fixture.shell) { operation -> String in
+                    try operation.withRepository(at: fixture.path("source")) { repository in
+                        try NativeFixture.otherBytes.write(to: fixture.path("source/new.lfs"))
+                        try repository.add(paths: ["new.lfs"])
+                        return try repository.commitDetailed(
+                            message: "lease-next", author: NativeFixture.signature,
+                            allowEmpty: false, sign: .noSign).sha
+                    }
+                }
+                var staleCalled = 0
+                try await GitLFSKit.withOperation(credentials: forkCreds, shell: fixture.shell) { operation in
+                    try operation.withRepository(at: fixture.path("source")) { repository in
+                        // Stale explicit lease (expects absent while remote is at `first`) refuses before upload.
+                        _ = #expect(throws: PushRejectedError.self) {
+                            _ = try repository.push(
+                                remote: "fork", refspecs: ["main:main"], setUpstream: false,
+                                leases: PushLeases([.init(ref: "main", expectation: .absent)]),
+                                connectingTo: forkRemote.path, progress: { _ in },
+                                beforeSending: { _ in staleCalled += 1 })
+                        }
+                        #expect(staleCalled == 0)
+                        #expect(forkServer.bytes(for: NativeFixture.otherPointer.oid) == nil)
+
+                        // Matching tracking lease (`refs/remotes/fork/main` == `first`) uploads before ref update.
+                        _ = try repository.push(
+                            remote: "fork", refspecs: ["main:main"], setUpstream: false,
+                            leases: PushLeases(trackingForRest: true),
+                            connectingTo: forkRemote.path, progress: { _ in }, beforeSending: { updates in
+                                _ = try PrePushOptions().run(
+                                    ["fork", forkRemote.path], updates: NativeFixture.updates(updates),
+                                    at: fixture.path("source"))
+                                try operation.withRepository(at: forkRemote) { bare throws in
+                                    #expect(try bare.resolveOID("refs/heads/main") == first)
+                                }
+                            })
+                        try repository.remoteDelete(name: "fork")
+                    }
+                    try operation.withRepository(at: forkRemote) { bare throws in
+                        #expect(try bare.resolveOID("refs/heads/main") == next)
+                    }
+                }
+                #expect(forkServer.bytes(for: NativeFixture.otherPointer.oid) == NativeFixture.otherBytes)
             }
         }
     }

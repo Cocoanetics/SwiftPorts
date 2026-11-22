@@ -193,6 +193,73 @@ It permits config, metadata, raw-blob and ref access, and rejects git mutations
 and access after the outer operation returns. Borrowed input and downstream
 filter output never cross the async bridge.
 
+## Native GitKit host operations (#277)
+
+Hosts that call `GitKit.Repository` directly (instead of going through
+`SwiftGit.GitClient`) can still run with `GitLFSKit.installFilter()` active by
+wrapping each synchronous native git transaction in
+`GitLFSKit.withOperation(credentials:shell:_:)`:
+
+```swift
+try await GitLFSKit.withOperation(credentials: credentials, shell: shell) { operation in
+    try operation.authorize(sourceURL)
+    try operation.createRepository(at: cloneURL, using: { preparation in
+        try Repository.clone(from: sourceURL, to: cloneURL, preparation: preparation)
+    }, { repository in
+        let worktree = try repository.worktreeAdd(
+            path: linkedURL, branch: "review", startPoint: "HEAD",
+            preparation: operation.preparation)
+        _ = try worktree.status()
+    })
+}
+```
+
+`GitLFSKit.withOperation` takes one `Libgit2Turnstile` / `Libgit2Sandboxing`
+isolation turn asynchronously, installs the revocable filter context on the
+calling thread, and invokes the synchronous body once without blocking the whole
+async scope on `BlockingBridge`. No repository needs to exist at entry.
+
+`GitLFSKit.Operation` provides:
+
+- `authorize(_:)` — authorizes additional filesystem destinations or resolved
+  connection URLs through the enclosing shell's sandbox before native GitKit
+  touches them.
+- `preparation` (`RepositoryPreparation`) — creation-time preparation for
+  GitKit 2.14.0+ APIs (`Repository.clone(..., preparation:)` and
+  `Repository.worktreeAdd(..., preparation:)`). Installs the operation's
+  `ConfigIncludePolicy`, `ShellSigner`, and effective configuration levels via
+  GitKit's typed `Repository.addConfigFile(at:level:)` and
+  `Repository.addConfigEntries(_:level:name:)` before the first checkout.
+- `withRepository(at:_:)` — authorizes `directory`, opens and prepares an
+  existing primary repository, linked worktree, branch-holder worktree, or
+  submodule, and invokes `body` once.
+- `createRepository(at:using:_:)` — authorizes `directory`, runs `create` once
+  with a scoped `RepositoryPreparation`, prepares the returned handle if it was
+  not already prepared via `RepositoryPreparation` (such as
+  `Repository.initialize`), and invokes `body` once.
+
+Late `[include]` / `[includeIf]` files are authorized on demand without
+replaying host mutations or durable claim callbacks; a sandbox denial surfaces
+directly and GitKit rolls back any aborted clone or worktree creation. Submodules
+retain their own repository and `LocalStore` identity, while linked worktrees
+keep private `config.worktree` settings distinct from their shared common-dir
+LFS storage. Process-wide clean filtering covers staging as well as `status()`
+and `diff(.workdirVsIndex)`. `Operation` and `RepositoryPreparation` are revoked
+when `withOperation` returns, and task cancellation aborts in-flight bridged
+transfers and cleans temporary store files before releasing isolation.
+
+For native `Repository.push(remote:refspecs:...:beforeSending:)` (plural
+refspecs overload, including `PushLeases`), call
+`PrePushOptions().run(_:updates:at:terminal:)` inside `beforeSending`. It
+borrows the enclosing push's isolation without reacquiring a turn, uses the
+operation's credentials and selected remote (including temporary fork remotes
+and push URLs), completes the upload before returning, and throws any nonzero
+`LFSCommandResult` so remote refs are not updated.
+
+`Tests/Fixtures/GitLFSPublicConsumer`'s `NativeOperationTests` target exercises
+this public surface with only `GitKit`, `GitLFSKit`, `GitLFSTestSupport`, and
+`ShellKit` (no `@testable` or SPI imports).
+
 ## Commands (`git lfs`, #189)
 
 `GitCommand` depends on `GitLFSKit` and registers `lfs`. Its ArgumentParser

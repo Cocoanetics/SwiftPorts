@@ -14,6 +14,9 @@ struct NativeFixture: Sendable {
     static let otherBytes = Data("hello".utf8)
     static let otherPointer = Pointer(
         oid: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", size: 5)
+    static let thirdBytes = Data("world".utf8)
+    static let thirdPointer = Pointer(
+        oid: "486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7", size: 5)
     static let signature = Signature(name: "Public consumer", email: "consumer@example.invalid")
 
     init(endpoint: URL) throws {
@@ -62,18 +65,21 @@ struct NativeFixture: Sendable {
         }
     }
 
-    func seed(_ operation: GitLFSKit.Operation, name: String = "source") throws -> String {
+    func seed(
+        _ operation: GitLFSKit.Operation, name: String = "source",
+        file: String = "a.lfs", bytes: Data = NativeFixture.bytes, pointer: Pointer = NativeFixture.pointer
+    ) throws -> String {
         let directory = path(name)
-        return try operation.createRepository(at: directory, using: {
-            _ = try Repository.initialize(at: directory, initialBranch: "main")
+        return try operation.createRepository(at: directory, using: { _ in
+            try Repository.initialize(at: directory, initialBranch: "main")
         }, { repository in
             try Data("*.lfs filter=lfs -text\n".utf8).write(to: directory.appendingPathComponent(".gitattributes"))
-            try Self.bytes.write(to: directory.appendingPathComponent("a.lfs"))
+            try bytes.write(to: directory.appendingPathComponent(file))
             try repository.add(paths: [])
             #expect(try repository.configGet("consumer.operation") == "scoped")
             let commit = try repository.commitDetailed(
                 message: "content", author: Self.signature, allowEmpty: false, sign: .noSign)
-            #expect(try repository.catFileBlob("HEAD:a.lfs") == Data(Self.pointer.encoded.utf8))
+            #expect(try repository.catFileBlob("HEAD:\(file)") == Data(pointer.encoded.utf8))
             return commit.sha
         })
     }

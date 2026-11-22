@@ -76,17 +76,26 @@ extension PublicOperationTests {
         }
     }
 
-    @Test("escaped scope access is revoked and a following operation succeeds")
+    @Test("escaped scope and preparation are revoked and a following operation succeeds")
     func lifetime() async throws {
         try await NativeFixture.run { fixture, _ in
             var escaped: GitLFSKit.Operation?
+            var escapedPreparation: RepositoryPreparation?
             try await GitLFSKit.withOperation(shell: fixture.shell) { operation in
                 escaped = operation
+                escapedPreparation = operation.preparation
                 _ = try fixture.seed(operation)
             }
             #expect(throws: (any Error).self) {
                 try escaped?.withRepository(at: fixture.path("source")) { _ in Issue.record("expired scope ran") }
             }
+            let escapedClone = fixture.path("escaped-clone")
+            #expect(throws: (any Error).self) {
+                _ = try Repository.clone(
+                    from: fixture.path("source"), to: escapedClone, progress: { _ in },
+                    preparation: try #require(escapedPreparation))
+            }
+            #expect(!FileManager.default.fileExists(atPath: escapedClone.path))
             try await GitLFSKit.withOperation(shell: fixture.shell) { operation in
                 try operation.withRepository(at: fixture.path("source")) { repository throws in
                     #expect(try repository.status().isClean)
@@ -101,8 +110,8 @@ extension PublicOperationTests {
             let remote = fixture.path("remote.git")
             try await GitLFSKit.withOperation(shell: fixture.shell) { operation in
                 _ = try fixture.seed(operation)
-                try operation.createRepository(at: remote, using: {
-                    _ = try Repository.initialize(at: remote, bare: true)
+                try operation.createRepository(at: remote, using: { _ in
+                    try Repository.initialize(at: remote, bare: true)
                 }, { _ in })
                 try operation.withRepository(at: fixture.path("source")) { repository in
                     try repository.addRemote(name: "origin", url: remote)
@@ -138,7 +147,7 @@ extension PublicOperationTests {
             await #expect(throws: CancellationError.self) { try await queued.value }
             try await GitLFSKit.withOperation(shell: fixture.shell) { operation in
                 try operation.withRepository(at: remote) { repository throws in
-                    #expect(throws: (any Error).self) { try repository.resolveOID("refs/heads/main") }
+                    _ = #expect(throws: (any Error).self) { try repository.resolveOID("refs/heads/main") }
                 }
                 #expect(try FileManager.default.contentsOfDirectory(
                     at: fixture.store().temporaryDirectory, includingPropertiesForKeys: nil).isEmpty)
