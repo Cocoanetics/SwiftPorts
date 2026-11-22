@@ -12,6 +12,7 @@ struct LFSFilterContext: Sendable {
     let shell: Shell
     let remotes: LFSFilterRemotes
     var processCommand: String?
+    var operation: GitFilterOperationContext?
 
     static func command(_ git: SwiftGit.GitClient, direction: GitFilterDirection) async throws -> String? {
         // convert.c gives process presence precedence, including an empty value.
@@ -53,7 +54,8 @@ struct LFSFilterContext: Sendable {
     }
 
     func run<T: Sendable>(_ body: @escaping @Sendable () async throws -> T) throws -> T {
-        try BlockingBridge.runBlocking { try await shell.withCurrent(body) }
+        if let operation { return try operation.runBlocking(body) }
+        return try BlockingBridge.runBlocking { try await shell.withCurrent(body) }
     }
 
     var configuration: LFSConfiguration { client.finder.configuration }

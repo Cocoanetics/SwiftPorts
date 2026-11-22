@@ -27,13 +27,19 @@ import Foundation
 /// actor-isolated work off the pool, but a
 /// nonisolated async call can require a cooperative-pool thread.
 package enum BlockingBridge {
-    package static func runBlocking<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) throws -> T {
+    package static func runBlocking<T: Sendable>(
+        cancellation: BlockingBridgeCancellation? = nil,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) throws -> T {
+        try cancellation?.checkCancellation()
         let semaphore = DispatchSemaphore(value: 0)
         let box = ResultBox<T>()
 
+        let task: Task<Void, Never>
         if #available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, *) {
-            Task(executorPreference: blockingBridgeThread) {
+            task = Task(executorPreference: blockingBridgeThread) {
                 do {
+                    try Task.checkCancellation()
                     box.value = .success(try await operation())
                 } catch {
                     box.value = .failure(error)
@@ -41,8 +47,9 @@ package enum BlockingBridge {
                 semaphore.signal()
             }
         } else {
-            Task { @BlockingBridgeExecutor in
+            task = Task { @BlockingBridgeExecutor in
                 do {
+                    try Task.checkCancellation()
                     box.value = .success(try await operation())
                 } catch {
                     box.value = .failure(error)
@@ -51,7 +58,10 @@ package enum BlockingBridge {
             }
         }
 
+        let registration = cancellation?.register(task)
+        defer { if let registration { cancellation?.unregister(registration) } }
         semaphore.wait()
+        try cancellation?.checkCancellation()
         return try box.value.get()
     }
 

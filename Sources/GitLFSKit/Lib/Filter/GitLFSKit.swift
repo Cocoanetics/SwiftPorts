@@ -14,13 +14,14 @@ public enum GitLFSKit {
     static let stream: GitFilter.StreamFactory = { source, output in
         guard source.driver == "lfs" else { return nil }
         let operation = try GitFilterOperationContext.capture()
-        let context = try BlockingBridge.runBlocking {
+        let context = try operation.runBlocking {
             try await operation.withSource(source) { git in
                 try await LFSFilterContext.load(git, direction: source.direction,
                                                 remotes: LFSFilterRemotes.forOperation(operation, source: source))
             }
         }
-        guard let context else { return nil }
+        guard var context else { return nil }
+        context.operation = operation
         switch source.direction {
         case .clean: return LFSCleanStream(context: context, output: output.write)
         case .smudge:

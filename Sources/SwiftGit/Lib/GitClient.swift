@@ -317,13 +317,15 @@ public struct GitClient: ForgeKit.GitClient {
         // goes onto the repository's live config before anything reads it.
         return try await isolatedGated(deferFilterFailures: deferFilterFailures) {
             let repo = try Repository.open(at: workingDirectory)
-            // Whatever the operation signs, it signs through the shell.
-            repo.setSigner(ShellSigner(client: self, shell: Shell.current))
-            try Self.installEnvironmentConfig(into: repo)
-            // What git refuses of its config stops it before anything else.
-            try self.checkConfigSyntax(of: repo)
+            try prepare(repo)
             return try body(repo)
         }
+    }
+
+    func prepare(_ repo: Repository) throws {
+        repo.setSigner(ShellSigner(client: self, shell: Shell.current))
+        try Self.installEnvironmentConfig(into: repo)
+        try checkConfigSyntax(of: repo)
     }
 
     /// GitKit's own signer launches programs with `Foundation.Process`,

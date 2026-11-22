@@ -16,6 +16,7 @@ package final class GitFilterOperationContext: @unchecked Sendable {
     private let environment: EnvironmentConfig
     private let gate: ConfigIncludeGate
     private let deferFilterFailures: Bool
+    private let cancellation: BlockingBridgeCancellation?
 
     enum Failure: Error, Equatable {
         case expired
@@ -24,12 +25,13 @@ package final class GitFilterOperationContext: @unchecked Sendable {
     }
 
     init(shell: Shell, credentials: CredentialProvider?, environment: EnvironmentConfig, gate: ConfigIncludeGate,
-         deferFilterFailures: Bool = false) {
+         deferFilterFailures: Bool = false, cancellation: BlockingBridgeCancellation? = nil) {
         self.shell = shell
         self.credentials = credentials
         self.environment = environment
         self.gate = gate
         self.deferFilterFailures = deferFilterFailures
+        self.cancellation = cancellation
     }
 
     /// Capture on the libgit2 callback thread, before starting async work.
@@ -58,6 +60,7 @@ package final class GitFilterOperationContext: @unchecked Sendable {
         let repair = Result { try gate.run { try GitFilterIndex.invalidate(paths) } }
         let value = try result.get()
         try repair.get()
+        try cancellation?.checkCancellation()
         if let failure = lock.withLock({ deferredFailure }) { throw failure }
         return value
     }
@@ -93,13 +96,50 @@ package final class GitFilterOperationContext: @unchecked Sendable {
         try lock.withLock {
             guard active else { throw Failure.expired }
         }
+        try cancellation?.checkCancellation()
+    }
+
+    /// Synchronous facilities are usable only on the enclosing GitKit thread.
+    package func checkCurrent() throws {
+        try checkActive()
+        guard try Self.capture() === self else { throw Failure.unsupportedOperation }
+    }
+
+    package func runBlocking<T: Sendable>(
+        _ body: @escaping @Sendable () async throws -> T
+    ) throws -> T {
+        try checkActive()
+        return try BlockingBridge.runBlocking(cancellation: cancellation) { [shell] in
+            try await shell.withCurrent(body)
+        }
+    }
+
+    /// Retry preparation only, while the native host transaction retains its turn.
+    package func prepare<T>(_ body: () throws -> T) throws -> T {
+        try checkCurrent()
+        while true {
+            do { return try gate.run(body) }
+            catch {
+                let authorized = try runBlocking { [gate] in try await gate.authorizeRefused() }
+                guard authorized else { throw error }
+            }
+        }
+    }
+
+    package func authorize(_ url: URL) throws {
+        try checkCurrent()
+        try runBlocking { try await Shell.authorize(url) }
+    }
+
+    package func client(at directory: URL) -> GitClient {
+        GitClient(workingDirectory: directory, credentials: credentials)
     }
 
     /// The client a push lends its isolation to while it waits for
     /// `beforeSending` (`git push` with git-lfs's pre-push hook): unlike a
     /// filter's, every git operation it runs goes ahead in the push's
     /// isolation, one at a time. The push is blocked until `body` returns.
-    func withLentClient<T: Sendable>(
+    package func withLentClient<T: Sendable>(
         _ outer: GitClient, _ body: @Sendable (GitClient) async throws -> T
     ) async throws -> T {
         try await shell.withCurrent {

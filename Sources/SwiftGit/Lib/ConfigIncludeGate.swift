@@ -1,6 +1,7 @@
 import Foundation
 import CGitKit
 import ShellKit
+import ForgeKit
 
 /// Lets libgit2 read an `[include]` file only once the sandbox has
 /// authorised it. The sandbox gate is async and libgit2 asks synchronously,
@@ -86,7 +87,10 @@ extension GitClient {
     /// which is repeated once the sandbox has allowed it (or the denial is
     /// thrown). Without a sandbox nothing is gated. The shell's
     /// `GIT_CONFIG_*` plan is applied for the run, as ``isolated`` did.
-    func isolatedGated<T>(deferFilterFailures: Bool = false, _ body: () throws -> T) async throws -> T {
+    func isolatedGated<T>(
+        deferFilterFailures: Bool = false, retryIncludes: Bool = true,
+        cancellation: BlockingBridgeCancellation? = nil, _ body: () throws -> T
+    ) async throws -> T {
         if let filterContext {
             guard borrowsIsolation else { throw GitFilterOperationContext.Failure.unsupportedOperation }
             return try await filterContext.isolated(body)
@@ -98,16 +102,17 @@ extension GitClient {
                 // Waiting for the run suspends rather than blocks (see
                 // `Libgit2Turnstile`).
                 return try await Libgit2Turnstile.shared.run {
-                    try Libgit2Sandboxing.shared.runIsolated(
+                    try Task.checkCancellation()
+                    return try Libgit2Sandboxing.shared.runIsolated(
                         Shell.current.sandbox, environment: plan) {
                             let context = GitFilterOperationContext(
                                 shell: Shell.current, credentials: credentials, environment: plan, gate: gate,
-                                deferFilterFailures: deferFilterFailures)
+                                deferFilterFailures: deferFilterFailures, cancellation: cancellation)
                             return try context.run { try gate.run(body) }
                         }
                 }
             } catch {
-                guard try await gate.authorizeRefused() else { throw error }
+                guard retryIncludes, try await gate.authorizeRefused() else { throw error }
             }
         }
     }
