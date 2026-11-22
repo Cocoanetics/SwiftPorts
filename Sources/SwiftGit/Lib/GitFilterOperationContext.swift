@@ -53,7 +53,7 @@ package final class GitFilterOperationContext: @unchecked Sendable {
             }
             Thread.current.threadDictionary[Self.threadKey] = previous
         }
-        let result = Result { try body() }
+        let result = Result { try rethrowDenial(body) }
         // Checkout has finished writing its index. Do not leave empty failed
         // output cached against the original blob, even if another path threw.
         let paths = lock.withLock { failedPaths }
@@ -157,13 +157,12 @@ package final class GitFilterOperationContext: @unchecked Sendable {
     /// Surface the exact sandbox denial or cancellation recorded by an include
     /// callback instead of libgit2's generic refusal error.
     package func rethrowDenial<T>(_ body: () throws -> T) throws -> T {
-        _ = gate.takeDenial()
-        do {
-            return try body()
-        } catch {
-            if let denial = gate.takeDenial() { throw denial }
-            throw error
-        }
+        if let denial = gate.takeDenial() { throw denial }
+        let result = Result { try body() }
+        // libgit2 can suppress an internal submodule open error and return
+        // success. Preserve the include callback's denial in that case too.
+        if let denial = gate.takeDenial() { throw denial }
+        return try result.get()
     }
 
     /// Install this operation's include policy, signer, effective configuration
