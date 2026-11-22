@@ -1,6 +1,8 @@
 import Foundation
 import ShellKit
-#if canImport(Darwin)
+#if os(Windows)
+import WinSDK
+#elseif canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
 import Glibc
@@ -27,10 +29,13 @@ struct LFSTransferEnvironment: Sendable {
     var terminalWidth: @Sendable () -> Int = LFSTransferEnvironment.stdoutColumns
 
     /// `tasklog.NewLogger`'s `widthFn`: `ts.GetSize()` reads stdout's window
-    /// size, and is 80 when that fails.
+    /// size, and is 80 when that fails. On Windows `ts` takes the console
+    /// window's `Right` edge as its columns, as unsigned.
     static func stdoutColumns() -> Int {
         #if os(Windows)
-        return 80
+        var info = CONSOLE_SCREEN_BUFFER_INFO()
+        guard GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info) else { return 80 }
+        return Int(UInt16(bitPattern: info.srWindow.Right))
         #else
         var size = winsize()
         #if os(Linux) || os(Android)
