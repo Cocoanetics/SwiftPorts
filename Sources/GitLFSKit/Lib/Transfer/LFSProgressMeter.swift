@@ -67,18 +67,17 @@ final class LFSProgressMeter: @unchecked Sendable {
     }
 
     /// `buildProgressMeter` plus the logger's `ForceProgress` option. `terminal`
-    /// is whether stdout is a terminal; off one, the logger's `widthFn` fails
-    /// and pads to 80 columns.
+    /// is whether the logger's stream is a terminal; off one, the logger's
+    /// `widthFn` fails and pads to 80 columns.
     static func make(
         direction: Direction, display: Bool, terminal: Bool,
         configuration: LFSConfiguration, environment: LFSTransferEnvironment
     ) async -> LFSProgressMeter {
         let forced = LFSConfiguration.bool(Shell.env("GIT_LFS_FORCE_PROGRESS"), fallback: false)
             || configuration.boolean("lfs.forceprogress")
-        var width: @Sendable () -> Int = { 80 }
-        if terminal { width = environment.terminalWidth }
         return LFSProgressMeter(
-            direction: direction, display: display, logsProgress: terminal || forced, width: width,
+            direction: direction, display: display, logsProgress: terminal || forced,
+            width: environment.lineWidth(terminal: terminal),
             log: await progressLog(environment), now: environment.now, write: environment.stdout)
     }
 
