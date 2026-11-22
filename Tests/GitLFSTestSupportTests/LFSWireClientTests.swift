@@ -65,6 +65,23 @@ struct LFSWireClientTests {
         }
     }
 
+    @Test("cancelling a wire request inside a pending write reports cancellation after the socket closes")
+    func cancelPendingWrite() async throws {
+        // The close in the cancellation handler fails the write the task is awaiting
+        // with ChannelError.ioOnClosedChannel. Callers must still see CancellationError (#273).
+        try await StalledWireServer.withServer { stalled in
+            try await LFSWireClient.withServer { _, client in
+                let body = Data(count: 64 * 1024 * 1024)
+                let pending = Task { try await client.put(stalled.endpoint + "/objects/stalled", body: body) }
+                try await stalled.requestStarted()
+                #expect(client.openConnectionCount == 1)
+                pending.cancel()
+                await #expect(throws: CancellationError.self) { try await pending.value }
+                #expect(client.openConnectionCount == 0)
+            }
+        }
+    }
+
     @Test("a failed connection leaves no wire socket or unresolved response")
     func connectionFailure() async throws {
         try await LFSWireClient.withServer { server, client in

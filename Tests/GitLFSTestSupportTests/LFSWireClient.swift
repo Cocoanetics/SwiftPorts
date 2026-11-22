@@ -216,6 +216,9 @@ final class LFSWireClient: @unchecked Sendable {
             timeout.cancel()
             try? await channel.close().get()
             try? await channel.closeFuture.get()
+            // The cancellation handler's close fails whatever write or read the task
+            // was awaiting, usually with ChannelError.ioOnClosedChannel (#273).
+            if Task.isCancelled { throw CancellationError() }
             throw error
         }
     }
