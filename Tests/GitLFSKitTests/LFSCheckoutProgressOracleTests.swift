@@ -3,9 +3,11 @@
 // stdout. Off a terminal git-lfs 3.7.1 still prints the final `, done.` line
 // (`tasklog.Logger.logTask` skips only the `\r` updates), and a local
 // checkout's rate is `0 B/s`: the first `TransferBytes` sample is measured
-// from Go's zero time. On a terminal lines are padded to its width. A busy
-// git-lfs sometimes exits before its logger goroutine writes the done line;
-// that drop is a race, not a rule, so the oracle is asked again.
+// from Go's zero time. On a terminal lines are padded to its width.
+// `checkout` returns without waiting for its logger goroutine, so git-lfs
+// often exits before writing the done line (on Linux CI nearly always). That
+// drop is a race, not a rule: the oracle is asked again, a reference that
+// still lost it is accepted, and ours must print the line it prints when it wins.
 #if os(macOS) || os(Linux)
 import Foundation
 import ShellKit
@@ -95,8 +97,8 @@ extension LFSFilterTests {
             let theirs = try reference(["lfs", "checkout"], oracle: oracle, in: repo)
             let ours = try await port(oracle: oracle, in: repo)
             #expect(theirs.status == 0 && ours.status == 0)
-            #expect(theirs.out == Self.done)
-            #expect(ours.stdout == theirs.out)
+            #expect(ours.stdout == Self.done)
+            #expect(theirs.out.isEmpty || theirs.out == ours.stdout, "\(theirs.out.debugDescription)")
             #expect(ours.stderr == theirs.err && ours.stderr.isEmpty)
         }
 
@@ -124,9 +126,10 @@ extension LFSFilterTests {
             // Updates after the first fall inside the 200 ms throttle unless the run is slow.
             let first = "Checking out LFS objects:   0% (0/1), 0 B | 0 B/s"
             let update = first + String(repeating: " ", count: columns - first.count) + "\r"
+            #expect(ours.stdout.hasSuffix("\r" + Self.done), "\(ours.stdout.debugDescription)")
+            #expect(theirs.hasSuffix("\r" + Self.done) || theirs.hasSuffix("\r"), "\(theirs.debugDescription)")
             for output in [theirs, ours.stdout] {
                 #expect(output.hasPrefix(update), "\(output.debugDescription)")
-                #expect(output.hasSuffix("\r" + Self.done), "\(output.debugDescription)")
                 let updates = output.split(separator: "\r", omittingEmptySubsequences: false).dropLast()
                 #expect(updates.allSatisfy { $0.utf8.count == columns }, "\(output.debugDescription)")
             }
