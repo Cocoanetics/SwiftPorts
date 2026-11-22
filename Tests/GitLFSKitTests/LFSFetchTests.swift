@@ -56,6 +56,27 @@ struct LFSFetchTests {
         }
     }
 
+    @Test("on a terminal the object count and meter are padded to its width")
+    func allOnTerminal() async throws {
+        try await LFSTestServer.withServer { server in
+            for data in [old, new, other] { server.store(data, oid: oid(data)) }
+            try await LFSServerRepository.run(server) { repo in
+                try await history(repo)
+                let result = try await repo.fetch(all: true, terminal: true, columns: 100, git: repo.git)
+                #expect(result.status == 0)
+                let counts = (1...3).map { count in
+                    let line = "\(count) object\(count == 1 ? "" : "s") found"
+                    return line + String(repeating: " ", count: 100 - line.count) + "\r"
+                }.joined()
+                #expect(result.stdout.hasPrefix(counts + "3 objects found, done.\n"))
+                let updates = result.stdout.split(separator: "\n").flatMap { $0.split(separator: "\r") }
+                    .filter { !$0.hasSuffix(", done.") }
+                #expect(!updates.isEmpty && updates.allSatisfy { $0.utf8.count == 100 },
+                        "\(result.stdout.debugDescription)")
+            }
+        }
+    }
+
     @Test("--all with refs scans only their history, without the banner")
     func allWithRefs() async throws {
         try await LFSTestServer.withServer { server in

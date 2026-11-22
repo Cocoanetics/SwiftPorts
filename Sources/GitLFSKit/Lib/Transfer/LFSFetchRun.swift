@@ -53,9 +53,10 @@ struct LFSFetchRun {
         guard counting, !pointers.isEmpty else { return pointers }
         func found(_ count: Int) -> String { "\(count) object\(count == 1 ? "" : "s") found" }
         if logsProgress {
+            let width = environment.lineWidth(terminal: terminal)
             for count in 1...pointers.count {
                 let line = found(count)
-                environment.stdout(line + String(repeating: " ", count: max(0, 80 - line.utf8.count)) + "\r")
+                environment.stdout(line + String(repeating: " ", count: max(0, width() - line.utf8.count)) + "\r")
             }
         }
         environment.stdout(found(pointers.count) + ", done.\n")

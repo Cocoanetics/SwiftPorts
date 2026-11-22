@@ -12,7 +12,7 @@ import Android
 #endif
 
 /// `tq.Meter` as drained by a `tasklog.Logger`. Progress lines are padded to
-/// the terminal width and end in `\r`; they are logged only when stdout is a
+/// the terminal width, asked for each line, and end in `\r`; they are logged only when stdout is a
 /// terminal or progress is forced (`GIT_LFS_FORCE_PROGRESS` / `lfs.forceprogress`),
 /// at most every 200 ms unless flushed. ``finish()`` logs the last line with
 /// `, done.` whether or not stdout is a terminal. A meter whose `display` is
@@ -33,7 +33,7 @@ final class LFSProgressMeter: @unchecked Sendable {
     let direction: Direction
     private let display: Bool
     private let logsProgress: Bool
-    private let width: Int
+    private let width: @Sendable () -> Int
     private let now: @Sendable () -> Date
     private let write: @Sendable (String) -> Void
     private let lock = NSLock()
@@ -53,7 +53,7 @@ final class LFSProgressMeter: @unchecked Sendable {
     private var lastUpdate: String?
 
     init(
-        direction: Direction, display: Bool, logsProgress: Bool, width: Int = 80,
+        direction: Direction, display: Bool, logsProgress: Bool, width: @escaping @Sendable () -> Int = { 80 },
         log: FileHandle? = nil, now: @escaping @Sendable () -> Date = { Date() },
         write: @escaping @Sendable (String) -> Void
     ) {
@@ -66,7 +66,9 @@ final class LFSProgressMeter: @unchecked Sendable {
         self.write = write
     }
 
-    /// `buildProgressMeter` plus the logger's `ForceProgress` option.
+    /// `buildProgressMeter` plus the logger's `ForceProgress` option. `terminal`
+    /// is whether the logger's stream is a terminal; off one, the logger's
+    /// `widthFn` fails and pads to 80 columns.
     static func make(
         direction: Direction, display: Bool, terminal: Bool,
         configuration: LFSConfiguration, environment: LFSTransferEnvironment
@@ -75,6 +77,7 @@ final class LFSProgressMeter: @unchecked Sendable {
             || configuration.boolean("lfs.forceprogress")
         return LFSProgressMeter(
             direction: direction, display: display, logsProgress: terminal || forced,
+            width: environment.lineWidth(terminal: terminal),
             log: await progressLog(environment), now: environment.now, write: environment.stdout)
     }
 
@@ -194,7 +197,7 @@ final class LFSProgressMeter: @unchecked Sendable {
         lastUpdate = line
         guard logsProgress else { return }
         if force || at > lastLogged.addingTimeInterval(Self.throttle) {
-            write(line + String(repeating: " ", count: max(0, width - line.utf8.count)) + "\r")
+            write(line + String(repeating: " ", count: max(0, width() - line.utf8.count)) + "\r")
             lastLogged = at
         }
     }

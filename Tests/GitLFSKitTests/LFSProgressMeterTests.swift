@@ -169,6 +169,44 @@ struct LFSProgressMeterTests {
         #expect(sink.drain() == padded("Uploading LFS objects:   0% (0/1), 0 B | 0 B/s"))
     }
 
+    @Test("on a terminal lines are padded to its width, asked for each line")
+    func terminalWidth() async throws {
+        let host = IsolatedLFSHost()
+        defer { try? FileManager.default.removeItem(at: host.root) }
+        let clock = Clock()
+        let sink = Sink()
+        let columns = TransferTestLock(100)
+        let meter = try await run(host, [:], sink) { environment in
+            var environment = environment
+            environment.now = clock.now
+            environment.terminalWidth = { columns.withLock { $0 } }
+            return await LFSProgressMeter.make(direction: .checkout, display: true, terminal: true,
+                                               configuration: LFSConfiguration(), environment: environment)
+        }
+        let first = "Checking out LFS objects:   0% (0/1), 0 B | 0 B/s"
+        meter.add(1)
+        #expect(sink.drain() == first + String(repeating: " ", count: 100 - first.count) + "\r")
+        columns.withLock { $0 = 0 }
+        clock.advance(0.3)
+        meter.skip(1)
+        #expect(sink.drain() == "Checking out LFS objects: 100% (1/1), 1 B | 0 B/s\r")
+    }
+
+    @Test("forced progress off a terminal pads to 80 columns, whatever the width")
+    func forcedWidth() async throws {
+        let host = IsolatedLFSHost()
+        defer { try? FileManager.default.removeItem(at: host.root) }
+        let sink = Sink()
+        let meter = try await run(host, ["GIT_LFS_FORCE_PROGRESS": "1"], sink) { environment in
+            var environment = environment
+            environment.terminalWidth = { 100 }
+            return await LFSProgressMeter.make(direction: .checkout, display: true, terminal: false,
+                                               configuration: LFSConfiguration(), environment: environment)
+        }
+        meter.add(1)
+        #expect(sink.drain() == padded("Checking out LFS objects:   0% (0/1), 0 B | 0 B/s"))
+    }
+
     @Test("two meters on one GIT_LFS_PROGRESS file both append")
     func progressLogAppends() async throws {
         let host = IsolatedLFSHost()
