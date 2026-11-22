@@ -161,6 +161,7 @@ extension PublicOperationTests {
                 }, { outerRepo in
                     try outerRepo.submoduleSync(recursive: true)
                     #expect(try Data(contentsOf: outerDir.appendingPathComponent("o.lfs")) == NativeFixture.otherBytes)
+                    try outerRepo.configSet("core.autocrlf", "true")
                 })
                 try operation.createRepository(at: nestedDir, using: { preparation in
                     try Repository.clone(
@@ -170,6 +171,9 @@ extension PublicOperationTests {
                     #expect(try Data(contentsOf: nestedDir.appendingPathComponent("plain.txt"))
                             == Data("line\r\n".utf8))
                     #expect(try Data(contentsOf: nestedDir.appendingPathComponent("n.lfs")) == NativeFixture.thirdBytes)
+                    // Persist autocrlf after verifying creation-time GIT_CONFIG_COUNT checkout:
+                    // libgit2's internal submodule status handle reads nested's on-disk config.
+                    try nestedRepo.configSet("core.autocrlf", "true")
                 })
 
                 // 2. Existing recursive submodules: sync recursively and reopen each handle.
