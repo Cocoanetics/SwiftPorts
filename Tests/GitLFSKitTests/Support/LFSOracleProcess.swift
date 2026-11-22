@@ -56,10 +56,11 @@ enum LFSOracleProcess {
     static func runInTerminal(
         _ process: Process, columns: Int, timeout: TimeInterval = 60
     ) throws -> (out: Data, status: Int32) {
-        let controller = posix_openpt(O_RDWR | O_NOCTTY)
-        guard controller >= 0 else { throw LFSOracleFailure(description: "posix_openpt: \(errno)") }
+        let controller = open("/dev/ptmx", O_RDWR | O_NOCTTY)
+        guard controller >= 0 else { throw LFSOracleFailure(description: "open /dev/ptmx: \(errno)") }
         defer { close(controller) }
-        guard grantpt(controller) == 0, unlockpt(controller) == 0, let name = ptsname(controller) else {
+        guard pseudoTerminalCall("grantpt", controller) == 0, pseudoTerminalCall("unlockpt", controller) == 0,
+              let name = pseudoTerminalName(controller) else {
             throw LFSOracleFailure(description: "pseudo-terminal setup: \(errno)")
         }
         let device = open(name, O_RDWR | O_NOCTTY)
@@ -102,6 +103,20 @@ enum LFSOracleProcess {
             throw LFSOracleFailure(description: "Oracle terminal subprocess timed out: \(process.arguments ?? [])")
         }
         return (output, process.terminationStatus)
+    }
+
+    // Glibc's Swift module hides the XSI pseudo-terminal calls (`_XOPEN_SOURCE`),
+    // so both platforms look them up in the C library.
+    private static func pseudoTerminalCall(_ name: String, _ descriptor: Int32) -> Int32 {
+        typealias Call = @convention(c) (Int32) -> Int32
+        guard let symbol = dlsym(dlopen(nil, RTLD_NOW), name) else { return -1 }
+        return unsafeBitCast(symbol, to: Call.self)(descriptor)
+    }
+
+    private static func pseudoTerminalName(_ descriptor: Int32) -> UnsafeMutablePointer<CChar>? {
+        typealias Call = @convention(c) (Int32) -> UnsafeMutablePointer<CChar>?
+        guard let symbol = dlsym(dlopen(nil, RTLD_NOW), "ptsname") else { return nil }
+        return unsafeBitCast(symbol, to: Call.self)(descriptor)
     }
 }
 #endif
