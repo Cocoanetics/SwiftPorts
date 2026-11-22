@@ -20,6 +20,7 @@ import ShellKit
 struct ShellSigner: GitSigner {
     let client: GitClient
     let shell: Shell
+    var cancellation: BlockingBridgeCancellation?
 
     func sign(_ payload: [UInt8], request: SigningRequest) throws -> String {
         // Read here rather than taken from `request`: GitKit hands an
@@ -28,7 +29,7 @@ struct ShellSigner: GitSigner {
         // asked for the signature.
         let settings = try GitClient.SigningSettings(in: client.workingDirectory)
         let key = request.key.flatMap { $0.isEmpty ? nil : $0 } ?? settings.signingKey
-        return try BlockingBridge.runBlocking { [client, shell] in
+        return try BlockingBridge.runBlocking(cancellation: cancellation) { [client, shell] in
             try await shell.withCurrent {
                 try await client.signBuffer(payload, key: key, identity: request.identity, settings: settings)
             }

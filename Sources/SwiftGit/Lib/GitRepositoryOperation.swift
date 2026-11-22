@@ -35,27 +35,47 @@ package struct GitRepositoryOperation {
         try context.authorize(url)
     }
 
+    package var preparation: RepositoryPreparation {
+        RepositoryPreparation { [context] repository in
+            try context.prepareRepository(repository)
+        }
+    }
+
     package func withRepository<T>(at directory: URL, _ body: (Repository) throws -> T) throws -> T {
+        try context.checkCurrent()
         try context.authorize(directory)
-        let client = context.client(at: directory)
-        let repository = try context.prepare {
-            let repo = try Repository.open(at: directory)
-            try client.prepare(repo)
+        let repository = try context.rethrowDenial {
+            let repo = try Repository.open(at: directory, includePolicy: context.includePolicy)
+            try context.prepareRepository(repo)
             return repo
         }
-        // Never put the host body in the include-authorization retry loop.
-        let result = try body(repository)
+        // Never replay the host body across include authorization.
+        let result = try context.rethrowDenial { try body(repository) }
         try context.checkCurrent()
         return result
     }
 
     package func createRepository<T>(
-        at directory: URL, using create: () throws -> Void, _ body: (Repository) throws -> T
+        at directory: URL,
+        using create: (RepositoryPreparation) throws -> Repository,
+        _ body: (Repository) throws -> T
     ) throws -> T {
+        try context.checkCurrent()
         try context.authorize(directory)
-        // Creation (including clone's filter callbacks) inherits this operation.
-        // It is a mutation: failure must propagate without calling it twice.
-        try create()
-        return try withRepository(at: directory, body)
+        weak var preparedHandle: Repository?
+        let scopedPreparation = RepositoryPreparation { [context] repository in
+            try context.prepareRepository(repository)
+            preparedHandle = repository
+        }
+        let repository = try context.rethrowDenial {
+            let created = try create(scopedPreparation)
+            if preparedHandle !== created {
+                try context.prepareRepository(created)
+            }
+            return created
+        }
+        let result = try context.rethrowDenial { try body(repository) }
+        try context.checkCurrent()
+        return result
     }
 }

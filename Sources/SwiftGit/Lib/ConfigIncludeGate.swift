@@ -8,15 +8,21 @@ import ForgeKit
 /// so a file not yet authorised is refused and remembered: the caller
 /// authorises it, then reads the config again.
 final class ConfigIncludeGate: @unchecked Sendable {
-    private let enforcing: Bool
+    let enforcing: Bool
     private let lock = NSLock()
     private var allowed: Set<String> = []
     private var refused: String?
+    private var denial: (any Error)?
 
     /// - Parameter enforcing: whether there is a sandbox to ask; without
     ///   one every include is read, as git does.
     init(enforcing: Bool) {
         self.enforcing = enforcing
+    }
+
+    func isAllowed(_ path: String) -> Bool {
+        guard enforcing else { return true }
+        return lock.withLock { allowed.contains(path) }
     }
 
     /// Whether `path` may be read; one that may not is kept as the next
@@ -30,6 +36,10 @@ final class ConfigIncludeGate: @unchecked Sendable {
         }
     }
 
+    func refuse(_ path: String) {
+        lock.withLock { refused = path }
+    }
+
     private func takeRefused() -> String? {
         lock.withLock {
             defer { refused = nil }
@@ -37,8 +47,33 @@ final class ConfigIncludeGate: @unchecked Sendable {
         }
     }
 
-    private func allow(_ path: String) {
+    func allow(_ path: String) {
         lock.withLock { _ = allowed.insert(path) }
+    }
+
+    func recordDenial(_ error: any Error) {
+        lock.withLock {
+            if denial == nil { denial = error }
+        }
+    }
+
+    func takeDenial() -> (any Error)? {
+        lock.withLock {
+            defer { denial = nil }
+            return denial
+        }
+    }
+
+    static func readablePath(_ path: String) -> String {
+        // Authorise the path libgit2 will open. On Windows it may report
+        // `C:\repo\extra.cfg` while the sandbox prefix check uses `C:/repo/...`,
+        // so only that platform rewrites separators. On Unix `\` is part of
+        // the name: authorising the slash form would approve a different file.
+        #if os(Windows)
+        return path.replacingOccurrences(of: "\\", with: "/")
+        #else
+        return path
+        #endif
     }
 
     /// Authorises the file the last read was refused, so the next read can
@@ -46,16 +81,7 @@ final class ConfigIncludeGate: @unchecked Sendable {
     /// gate's). Throws the sandbox's denial.
     func authorizeRefused() async throws -> Bool {
         guard let path = takeRefused() else { return false }
-        // Authorise the path libgit2 will open. On Windows it may report
-        // `C:\repo\extra.cfg` while the sandbox prefix check uses `C:/repo/...`,
-        // so only that platform rewrites separators. On Unix `\` is part of
-        // the name: authorising the slash form would approve a different file.
-        #if os(Windows)
-        let readable = path.replacingOccurrences(of: "\\", with: "/")
-        #else
-        let readable = path
-        #endif
-        try await Shell.authorize(URL(fileURLWithPath: readable))
+        try await Shell.authorize(URL(fileURLWithPath: Self.readablePath(path)))
         allow(path)
         return true
     }
@@ -76,6 +102,31 @@ final class ConfigIncludeGate: @unchecked Sendable {
             gitkit_config_set_thread_include_callback(previousCallback, previousPayload, nil, nil)
         }
         return try withExtendedLifetime(self) { try body() }
+    }
+
+    private final class OnDemandAuthorizer {
+        let decide: (String) -> Bool
+        init(_ decide: @escaping (String) -> Bool) { self.decide = decide }
+    }
+
+    /// Runs `body` with a custom include decider on the calling thread, so an
+    /// outer synchronous operation can authorize late includes without replaying
+    /// host mutations.
+    func run<T>(authorizing decide: @escaping (String) -> Bool, _ body: () throws -> T) rethrows -> T {
+        let box = OnDemandAuthorizer(decide)
+        var previousCallback: gitkit_config_include_cb?
+        var previousPayload: UnsafeMutableRawPointer?
+        let payload = Unmanaged.passUnretained(box).toOpaque()
+        gitkit_config_set_thread_include_callback(
+            { path, _, _, payload in
+                guard let path, let payload else { return 1 }
+                let box = Unmanaged<OnDemandAuthorizer>.fromOpaque(payload).takeUnretainedValue()
+                return box.decide(String(cString: path)) ? 0 : 1
+            }, payload, &previousCallback, &previousPayload)
+        defer {
+            gitkit_config_set_thread_include_callback(previousCallback, previousPayload, nil, nil)
+        }
+        return try withExtendedLifetime(box) { try body() }
     }
 }
 
@@ -108,7 +159,14 @@ extension GitClient {
                             let context = GitFilterOperationContext(
                                 shell: Shell.current, credentials: credentials, environment: plan, gate: gate,
                                 deferFilterFailures: deferFilterFailures, cancellation: cancellation)
-                            return try context.run { try gate.run(body) }
+                            return try context.run {
+                                if retryIncludes {
+                                    return try gate.run(body)
+                                }
+                                return try context.rethrowDenial {
+                                    try gate.run(authorizing: { context.authorizeInclude($0) }, body)
+                                }
+                            }
                         }
                 }
             } catch {

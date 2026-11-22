@@ -114,15 +114,70 @@ package final class GitFilterOperationContext: @unchecked Sendable {
         }
     }
 
-    /// Retry preparation only, while the native host transaction retains its turn.
-    package func prepare<T>(_ body: () throws -> T) throws -> T {
-        try checkCurrent()
-        while true {
-            do { return try gate.run(body) }
-            catch {
-                let authorized = try runBlocking { [gate] in try await gate.authorizeRefused() }
-                guard authorized else { throw error }
+    /// Authorize an `[include]` path encountered during the outer synchronous
+    /// operation without replaying host mutations. Never bridges on the async
+    /// callback thread (`filterContext.isolated` uses its async retry loop).
+    func authorizeInclude(_ path: String) -> Bool {
+        let isActive = lock.withLock { active }
+        guard isActive else { return false }
+        do {
+            try cancellation?.checkCancellation()
+        } catch {
+            gate.recordDenial(error)
+            return false
+        }
+        if !gate.enforcing || gate.isAllowed(path) { return true }
+        guard Thread.current.threadDictionary[Self.threadKey] as? GitFilterOperationContext === self else {
+            gate.refuse(path)
+            return false
+        }
+        let url = URL(fileURLWithPath: ConfigIncludeGate.readablePath(path))
+        do {
+            try BlockingBridge.runBlocking(cancellation: cancellation) { [shell] in
+                try await shell.withCurrent { try await Shell.authorize(url) }
             }
+            gate.allow(path)
+            return true
+        } catch {
+            gate.recordDenial(error)
+            return false
+        }
+    }
+
+    /// Per-repository include policy bound to this operation; refuses includes
+    /// once the enclosing operation ends so escaped handles fail closed.
+    var includePolicy: ConfigIncludePolicy {
+        ConfigIncludePolicy { [weak self] include in
+            guard let self else { return false }
+            return self.authorizeInclude(include.path)
+        }
+    }
+
+    /// Surface the exact sandbox denial or cancellation recorded by an include
+    /// callback instead of libgit2's generic refusal error.
+    package func rethrowDenial<T>(_ body: () throws -> T) throws -> T {
+        _ = gate.takeDenial()
+        do {
+            return try body()
+        } catch {
+            if let denial = gate.takeDenial() { throw denial }
+            throw error
+        }
+    }
+
+    /// Install this operation's include policy, signer, effective configuration
+    /// levels and syntax checks on `repository`.
+    package func prepareRepository(_ repository: Repository) throws {
+        try checkCurrent()
+        let directory = try repository.workdirURL
+            ?? repository.gitDir().map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? URL(fileURLWithPath: shell.environment.workingDirectory)
+        let client = GitClient(workingDirectory: directory, credentials: credentials)
+        try rethrowDenial {
+            try gate.run(authorizing: { [self] in authorizeInclude($0) }, {
+                try repository.setIncludePolicy(includePolicy)
+                try client.prepare(repository, cancellation: cancellation)
+            })
         }
     }
 

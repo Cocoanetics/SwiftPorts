@@ -513,8 +513,10 @@ let package = Package(
         // 2.12.1 hides dynamic OpenSSL pointers to prevent Linux TLS symbol collisions.
         // 2.13.0's `push(…, beforeSending:)` hands over the updates git
         // gives its pre-push hook, which `git push` uploads LFS objects for.
+        // 2.14.0 adds typed repository config-level APIs and creation-time
+        // repository preparation callbacks for clone/worktree bootstrap (#89, #90).
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.13.0",
+                 from: "2.14.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface

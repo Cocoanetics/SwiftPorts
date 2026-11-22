@@ -14,19 +14,31 @@ extension GitLFSKit {
             try operation.authorize(url)
         }
 
+        /// Creation-time preparation for native GitKit APIs that accept
+        /// `RepositoryPreparation` (such as `Repository.clone(..., preparation:)`
+        /// and `Repository.worktreeAdd(..., preparation:)`). Installs this
+        /// operation's include policy, signer and effective configuration levels
+        /// before the first checkout. Revoked when `withOperation` returns.
+        public var preparation: RepositoryPreparation {
+            operation.preparation
+        }
+
         /// Open and prepare a primary, linked-worktree or submodule repository.
-        /// Configuration preparation may retry; `body` is called only once.
+        /// Include authorization happens on demand; `body` runs at most once.
         public func withRepository<T>(at directory: URL, _ body: (Repository) throws -> T) throws -> T {
             try operation.withRepository(at: directory, body)
         }
 
-        /// Create a repository using native GitKit (initialize or clone), then
-        /// reopen and prepare its handle before invoking `body`. Both closures
-        /// run at most once. Clone's filters use their own source repository's
-        /// metadata and this operation's credentials, including during creation.
-        /// Authorize the clone source separately before entering `create`.
+        /// Create a repository using native GitKit (such as `Repository.clone`
+        /// with the supplied `RepositoryPreparation`, or `Repository.initialize`),
+        /// then invoke `body` with the prepared handle. Both closures run at most
+        /// once; a handle not already prepared via `RepositoryPreparation` is
+        /// prepared before `body`. Authorize any clone source separately before
+        /// entering `create`.
         public func createRepository<T>(
-            at directory: URL, using create: () throws -> Void, _ body: (Repository) throws -> T
+            at directory: URL,
+            using create: (RepositoryPreparation) throws -> Repository,
+            _ body: (Repository) throws -> T
         ) throws -> T {
             try operation.createRepository(at: directory, using: create, body)
         }
