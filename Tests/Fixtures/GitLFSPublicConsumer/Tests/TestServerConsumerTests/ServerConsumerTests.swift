@@ -18,6 +18,7 @@ struct ServerConsumerTests {
             #expect(server.endpoint.host == "127.0.0.1")
             #expect((1...65535).contains(server.port))
             #expect(server.endpoint.port == server.port)
+            #expect(try TCPConnectionProbe.connects(port: server.port))
             server.store(Self.bytes, oid: Self.oid)
             #expect(server.bytes(for: Self.oid) == Self.bytes)
             try await LFSTestServer.withServer { other in
@@ -38,7 +39,7 @@ struct ServerConsumerTests {
         }
         // Explicit shutdown is idempotent; a fresh connection must be refused.
         await server.shutdown()
-        await Self.expectStopped(server)
+        #expect(try !TCPConnectionProbe.connects(port: server.port))
     }
 
     @Test("withServer shuts down after return and throw", arguments: [false, true])
@@ -47,6 +48,7 @@ struct ServerConsumerTests {
         do {
             let port = try await LFSTestServer.withServer { server in
                 captured = server
+                #expect(try TCPConnectionProbe.connects(port: server.port))
                 let (_, response) = try await Self.request(Self.objectURL(server))
                 #expect(response.statusCode == 404)
                 if throwFromBody { throw URLError(.cancelled) }
@@ -58,7 +60,7 @@ struct ServerConsumerTests {
             // The body error survives cleanup.
         }
         let server = try #require(captured)
-        await Self.expectStopped(server)
+        #expect(try !TCPConnectionProbe.connects(port: server.port))
     }
 
     @Test("an injected PUT fault is recorded, prevents storage, and is consumed")
@@ -92,7 +94,7 @@ struct ServerConsumerTests {
     private static func request(
         _ url: URL, method: String = "GET", body: Data? = nil
     ) async throws -> (Data, HTTPURLResponse) {
-        // Each request opens a fresh connection, including the shutdown check.
+        // HTTP behavior is checked separately from the TCP lifecycle probes.
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 5
         configuration.timeoutIntervalForResource = 5
@@ -103,22 +105,5 @@ struct ServerConsumerTests {
         request.httpBody = body
         let (data, response) = try await session.data(for: request)
         return (data, try #require(response as? HTTPURLResponse))
-    }
-
-    private static func expectStopped(_ server: LFSTestServer) async {
-        do {
-            _ = try await request(objectURL(server))
-            Issue.record("The server accepted a new connection after shutdown")
-        } catch let error as URLError {
-            #if os(Windows)
-            // Windows URLSession reports a stopped loopback listener as timedOut.
-            // Each test first checks a live HTTP response from this same endpoint.
-            #expect(error.code == .cannotConnectToHost || error.code == .timedOut)
-            #else
-            #expect(error.code == .cannotConnectToHost)
-            #endif
-        } catch {
-            Issue.record("Unexpected shutdown-check error: \(error)")
-        }
     }
 }

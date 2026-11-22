@@ -53,6 +53,8 @@ to use the server.
 `Tests/Fixtures/GitLFSPublicConsumer` is a separate SwiftPM package that selects
 this product only from its test target and checks the public API without
 `@testable` or SPI. Its server tests run in the macOS, Linux, and Windows CI jobs.
+Lifecycle checks establish native TCP connections before shutdown and require
+connection refusal afterward, independently of HTTP responses or timeouts.
 From the repository root, run it with a scratch directory outside the checkout:
 
 ```sh
