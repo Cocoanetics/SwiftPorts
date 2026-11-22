@@ -106,10 +106,11 @@ package final class GitFilterOperationContext: @unchecked Sendable {
     }
 
     package func runBlocking<T: Sendable>(
+        onDiscard: @Sendable (T) -> Void = { _ in },
         _ body: @escaping @Sendable () async throws -> T
     ) throws -> T {
         try checkActive()
-        return try BlockingBridge.runBlocking(cancellation: cancellation) { [shell] in
+        return try BlockingBridge.runBlocking(cancellation: cancellation, onDiscard: onDiscard) { [shell] in
             try await shell.withCurrent(body)
         }
     }

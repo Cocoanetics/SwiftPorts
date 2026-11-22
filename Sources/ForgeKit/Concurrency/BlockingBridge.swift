@@ -29,6 +29,7 @@ import Foundation
 package enum BlockingBridge {
     package static func runBlocking<T: Sendable>(
         cancellation: BlockingBridgeCancellation? = nil,
+        onDiscard: @Sendable (T) -> Void = { _ in },
         _ operation: @escaping @Sendable () async throws -> T
     ) throws -> T {
         try cancellation?.checkCancellation()
@@ -61,7 +62,14 @@ package enum BlockingBridge {
         let registration = cancellation?.register(task)
         defer { if let registration { cancellation?.unregister(registration) } }
         semaphore.wait()
-        try cancellation?.checkCancellation()
+        do {
+            try cancellation?.checkCancellation()
+        } catch {
+            // The task may have acquired a resource before cancellation won.
+            // Its caller never receives that value, so release it here.
+            if case .success(let value) = box.value { onDiscard(value) }
+            throw error
+        }
         return try box.value.get()
     }
 

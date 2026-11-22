@@ -53,9 +53,12 @@ struct LFSFilterContext: Sendable {
         }
     }
 
-    func run<T: Sendable>(_ body: @escaping @Sendable () async throws -> T) throws -> T {
-        if let operation { return try operation.runBlocking(body) }
-        return try BlockingBridge.runBlocking { try await shell.withCurrent(body) }
+    func run<T: Sendable>(
+        onDiscard: @Sendable (T) -> Void = { _ in },
+        _ body: @escaping @Sendable () async throws -> T
+    ) throws -> T {
+        if let operation { return try operation.runBlocking(onDiscard: onDiscard, body) }
+        return try BlockingBridge.runBlocking(onDiscard: onDiscard) { try await shell.withCurrent(body) }
     }
 
     var configuration: LFSConfiguration { client.finder.configuration }

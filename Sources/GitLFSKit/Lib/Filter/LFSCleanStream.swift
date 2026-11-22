@@ -43,7 +43,9 @@ final class LFSCleanStream: GitFilterStream {
             consumed = probing
             do {
                 let store = context.store
-                let file = try context.run { try await store.makeTemporaryFile() }
+                let file = try context.run(onDiscard: { try? FileManager.default.removeItem(at: $0) }, {
+                    try await store.makeTemporaryFile()
+                })
                 temporary = file
                 handle = try FileHandle(forWritingTo: file)
                 try append(probe)
@@ -97,7 +99,9 @@ final class LFSCleanStream: GitFilterStream {
             }
             do {
                 let store = context.store
-                temporary = try context.run { try await store.makeTemporaryFile() }
+                temporary = try context.run(onDiscard: { try? FileManager.default.removeItem(at: $0) }, {
+                    try await store.makeTemporaryFile()
+                })
                 handle = try FileHandle(forWritingTo: temporary!)
                 try append(probe)
             } catch {
