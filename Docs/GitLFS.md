@@ -261,6 +261,14 @@ and push URLs), completes the upload before returning, and throws any nonzero
 this public surface with only `GitKit`, `GitLFSKit`, `GitLFSTestSupport`, and
 `ShellKit` (no `@testable` or SPI imports).
 
+Known prerequisite: GitKit 2.14.0 cannot apply the operation's effective
+configuration to submodule handles opened internally by libgit2 during
+`status()` / `diff`. Those handles need a scoped preparation hook before their
+configuration is consumed ([GitKit #98](https://github.com/Cocoanetics/GitKit/issues/98)).
+The public `recursiveSubmodules` regression forces an unchanged CRLF file to be
+rehashed with scoped `core.autocrlf=true`, without writing it to local config;
+it remains a failing acceptance test until that native hook is available.
+
 ## Commands (`git lfs`, #189)
 
 `GitCommand` depends on `GitLFSKit` and registers `lfs`. Its ArgumentParser
