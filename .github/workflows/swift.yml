@@ -87,6 +87,8 @@ jobs:
         # .build/debug/gh can't even launch on the macos runner
         # (dyld: Library not loaded), which has an older OS than the
         # SDK's native Span.
+      - name: Test public LFS server consumer (macOS)
+        run: swift test --package-path Tests/Fixtures/GitLFSPublicConsumer --scratch-path "${{ runner.temp }}/GitLFSPublicConsumer"
       - name: Test engine traits FTS5 + SQLiteVec (macOS)
         # Build the SQLite subgraph once with both opt-in engine traits and run
         # their on-state proofs: fullTextSearchFTS5 (#if FTS5 — MATCH / bm25) and
@@ -206,6 +208,8 @@ jobs:
         run: swift build --build-system native --build-tests -v
       - name: Test (Linux)
         run: swift test --build-system native -v --skip-build --no-parallel
+      - name: Test public LFS server consumer (Linux)
+        run: swift test --package-path Tests/Fixtures/GitLFSPublicConsumer --scratch-path "${{ runner.temp }}/GitLFSPublicConsumer" --build-system native
       - name: Smoke-test standalone argv handling (Linux)
         # The standalone binaries read argv through `Shell.arguments`
         # ($@ semantics); the unit suites never exercise that seam. A
@@ -318,6 +322,9 @@ jobs:
           swift test --build-system native -v --skip-build --no-parallel `
             -Xcc "-I$env:VCPKG_BASE\include" `
             -Xlinker "/LIBPATH:$env:VCPKG_BASE\lib"
+      - name: Test public LFS server consumer (Windows)
+        shell: pwsh
+        run: swift test --package-path Tests/Fixtures/GitLFSPublicConsumer --scratch-path "${{ runner.temp }}/GitLFSPublicConsumer" --build-system native
       - name: Test engine traits FTS5 + SQLiteVec (Windows)
         # One rebuild with both engine traits instead of recompiling sqlite3.c
         # twice (the slow part that overran the 30-min timeout on Windows). Runs
