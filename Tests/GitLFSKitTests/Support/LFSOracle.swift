@@ -25,10 +25,24 @@ struct LFSOracle: Sendable {
         return output.split(whereSeparator: { $0.isWhitespace }).first == "git-lfs/3.7.1"
     }()
 
-    /// `git <args>` in `dir`, with `input` on stdin: its stdout bytes,
-    /// stderr text and exit status.
+    /// `git <args>` in `dir`, with `input` on stdin and `extra` added to the
+    /// environment: its stdout bytes, stderr text and exit status.
     @discardableResult
-    func run(_ args: [String], in dir: URL, input: Data? = nil) throws -> (out: Data, err: String, status: Int32) {
+    func run(
+        _ args: [String], in dir: URL, input: Data? = nil, environment extra: [String: String] = [:]
+    ) throws -> (out: Data, err: String, status: Int32) {
+        try LFSOracleProcess.run(process(args, in: dir, environment: extra), input: input, directory: root)
+    }
+
+    /// `git <args>` in `dir` with stdout on a pseudo-terminal `columns` wide:
+    /// what the terminal received, and the exit status.
+    func runInTerminal(
+        _ args: [String], in dir: URL, columns: Int, environment extra: [String: String] = [:]
+    ) throws -> (out: Data, status: Int32) {
+        try LFSOracleProcess.runInTerminal(process(args, in: dir, environment: extra), columns: columns)
+    }
+
+    private func process(_ args: [String], in dir: URL, environment extra: [String: String]) -> Process {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git"] + args
@@ -38,8 +52,8 @@ struct LFSOracle: Sendable {
                 && !name.hasPrefix("GIT_CONFIG_KEY_") && !name.hasPrefix("GIT_CONFIG_VALUE_")
                 && !name.hasPrefix("GIT_LFS_")
         }
-        process.environment = inherited.merging(variables) { _, new in new }
-        return try LFSOracleProcess.run(process, input: input, directory: root)
+        process.environment = inherited.merging(variables) { _, new in new }.merging(extra) { _, new in new }
+        return process
     }
 
     /// `git <args>` that must succeed; its stdout, trimmed.

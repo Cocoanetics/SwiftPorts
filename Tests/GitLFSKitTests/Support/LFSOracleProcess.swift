@@ -49,5 +49,59 @@ enum LFSOracleProcess {
         return (try Data(contentsOf: stdout),
                 String(decoding: try Data(contentsOf: stderr), as: UTF8.self), process.terminationStatus)
     }
+
+    /// Runs `process` with stdout on a new pseudo-terminal `columns` wide and
+    /// stdin / stderr on the null device; returns what the terminal received
+    /// (the line discipline turns `\n` into `\r\n`) once every writer closed it.
+    static func runInTerminal(
+        _ process: Process, columns: Int, timeout: TimeInterval = 60
+    ) throws -> (out: Data, status: Int32) {
+        let controller = posix_openpt(O_RDWR | O_NOCTTY)
+        guard controller >= 0 else { throw LFSOracleFailure(description: "posix_openpt: \(errno)") }
+        defer { close(controller) }
+        guard grantpt(controller) == 0, unlockpt(controller) == 0, let name = ptsname(controller) else {
+            throw LFSOracleFailure(description: "pseudo-terminal setup: \(errno)")
+        }
+        let device = open(name, O_RDWR | O_NOCTTY)
+        guard device >= 0 else { throw LFSOracleFailure(description: "open \(String(cString: name)): \(errno)") }
+        var size = winsize()
+        size.ws_col = UInt16(columns)
+        size.ws_row = 24
+        #if os(Linux)
+        _ = ioctl(device, UInt(TIOCSWINSZ), &size)
+        #else
+        _ = ioctl(device, TIOCSWINSZ, &size)
+        #endif
+        let terminal = FileHandle(fileDescriptor: device, closeOnDealloc: true)
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = terminal
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            try? terminal.close()
+            throw error
+        }
+        try terminal.close()
+
+        var output = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        let deadline = ContinuousClock.now + .seconds(timeout)
+        while ContinuousClock.now < deadline {
+            var poller = pollfd(fd: controller, events: Int16(POLLIN), revents: 0)
+            guard poll(&poller, 1, 100) >= 0 else { break }
+            if poller.revents == 0 { continue }
+            let count = read(controller, &buffer, buffer.count)
+            // Once every copy of the terminal device is closed, the controller reads 0 or EIO.
+            if count <= 0 { break }
+            output.append(contentsOf: buffer[0..<count])
+        }
+        while process.isRunning, ContinuousClock.now < deadline { Thread.sleep(forTimeInterval: 0.005) }
+        if process.isRunning {
+            process.terminate()
+            throw LFSOracleFailure(description: "Oracle terminal subprocess timed out: \(process.arguments ?? [])")
+        }
+        return (output, process.terminationStatus)
+    }
 }
 #endif
