@@ -20,6 +20,45 @@ match it; nothing it doesn't have is added.
   BoringSSL C++ target, so it is in `androidDroppedTargets` (see
   [Android.md](Android.md)).
 
+## Downstream test server (`GitLFSTestSupport`)
+
+The `GitLFSTestSupport` library product publishes the existing in-process
+basic-transfer server from `Tests/GitLFSTestSupport`. Select it only in a
+consumer's test targets, alongside the package's normal SwiftPorts dependency:
+
+```swift
+.testTarget(
+    name: "MyAppTests",
+    dependencies: [
+        .product(name: "GitLFSTestSupport", package: "SwiftPorts"),
+    ]
+)
+```
+
+SwiftPM does not enforce test-only products. Keeping this dependency in test
+targets avoids linking the server and its NIO/Crypto dependencies into the app.
+The product and target are excluded on Android by the existing manifest filters;
+`GitLFSKit` remains available there.
+
+Use ordinary `import GitLFSTestSupport`. `LFSTestServer.start()` binds
+`127.0.0.1` on an ephemeral port; `endpoint` is the LFS API root and `port` is
+the assigned port. Call `await server.shutdown()` when finished, or use
+`try await LFSTestServer.withServer { server in ... }` to shut down on both
+return and throw. `store(_:oid:)` seeds bytes under their SHA-256 object id,
+`bytes(for:)` reads stored objects, `inject(_:)` arms an `LFSTestFault` (for
+example `.putStatus(oid: oid, code: 422)`), and `requests()` returns the recorded
+requests and responses. No system Git, git-lfs, or external LFS service is needed
+to use the server.
+
+`Tests/Fixtures/GitLFSPublicConsumer` is a separate SwiftPM package that selects
+this product only from its test target and checks the public API without
+`@testable` or SPI. Its server tests run in the macOS, Linux, and Windows CI jobs.
+From the repository root, run it with a scratch directory outside the checkout:
+
+```sh
+swift test --package-path Tests/Fixtures/GitLFSPublicConsumer --scratch-path /tmp/SwiftPorts-LFSConsumer
+```
+
 ## Pointer (`Pointer/`)
 
 | Swift | git-lfs |

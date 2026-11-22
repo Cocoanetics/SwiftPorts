@@ -64,7 +64,7 @@ let androidDroppedTargets: Set<String> = [
     // GitLFSKit's `Crypto` dependency), so it's dropped for the same reason.
     // `GitLFSKit` itself stays on Android.
     // GitLFSTestSupport is the in-process LFS server (NIOHTTP1, issue #199):
-    // a test-only target, not a library product. It links swift-crypto so
+    // a library product for test targets only. It links swift-crypto so
     // verify can check the object id. GitLFSTestSupportTests links that
     // server too. Both are dropped with GitLFSKitTests.
     "GitLFSKitTests",
@@ -410,6 +410,8 @@ let package = Package(
         // GitLFSKit — Git LFS SDK (git-lfs ≥ 3.x port, issue #184): v1
         // pointers and the local object store shared by linked worktrees.
         .library(name: "GitLFSKit", targets: ["GitLFSKit"]),
+        // In-process LFS server for downstream test targets (excluded on Android).
+        .library(name: "GitLFSTestSupport", targets: ["GitLFSTestSupport"]),
     ]),
     // Package traits — opt-in, build-time toggles. Off by default (none are
     // listed in any `.default(enabledTraits:)`).
@@ -1254,7 +1256,7 @@ let package = Package(
             ],
             path: "Sources/GitLFSKit/Lib"
         ),
-        // In-process Git LFS server for tests (issue #199). Not a library product.
+        // In-process Git LFS server for local and downstream tests (issues #199, #278).
         // NIOHTTP1, NIOCore, NIOPosix, and Crypto are linked here. GitLFSKit is unchanged.
         // GitLFSKitTests and GitCommandTests import the server for LFS transfers
         // (issue #238) and `git push`'s LFS upload (issue #234).
