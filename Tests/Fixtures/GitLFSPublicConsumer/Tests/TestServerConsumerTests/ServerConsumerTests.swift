@@ -110,7 +110,13 @@ struct ServerConsumerTests {
             _ = try await request(objectURL(server))
             Issue.record("The server accepted a new connection after shutdown")
         } catch let error as URLError {
-            #expect(error.code != .timedOut)
+            #if os(Windows)
+            // Windows URLSession reports a stopped loopback listener as timedOut.
+            // Each test first checks a live HTTP response from this same endpoint.
+            #expect(error.code == .cannotConnectToHost || error.code == .timedOut)
+            #else
+            #expect(error.code == .cannotConnectToHost)
+            #endif
         } catch {
             Issue.record("Unexpected shutdown-check error: \(error)")
         }
