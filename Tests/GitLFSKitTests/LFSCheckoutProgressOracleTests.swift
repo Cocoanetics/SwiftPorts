@@ -108,18 +108,25 @@ extension LFSFilterTests {
             defer { try? GitLFSKit.uninstallFilter() }
             let repo = try fixture(oracle)
 
-            let run = try oracle.runInTerminal(["lfs", "checkout"], in: repo, columns: columns)
-            let theirs = String(decoding: run.out, as: UTF8.self).replacingOccurrences(of: "\r\n", with: "\n")
+            // The done line can race git-lfs's exit here too; ask again until it arrives.
+            var status: Int32 = 0
+            var theirs = ""
+            for _ in 0..<8 {
+                let run = try oracle.runInTerminal(["lfs", "checkout"], in: repo, columns: columns)
+                status = run.status
+                theirs = String(decoding: run.out, as: UTF8.self).replacingOccurrences(of: "\r\n", with: "\n")
+                if theirs.hasSuffix(", done.\n") { break }
+            }
             let ours = try await port(oracle: oracle, in: repo, terminal: true, columns: columns)
-            #expect(run.status == 0 && ours.status == 0)
+            #expect(status == 0 && ours.status == 0)
             #expect(ours.stderr.isEmpty)
 
             // Updates after the first fall inside the 200 ms throttle unless the run is slow.
             let first = "Checking out LFS objects:   0% (0/1), 0 B | 0 B/s"
             let update = first + String(repeating: " ", count: columns - first.count) + "\r"
             for output in [theirs, ours.stdout] {
-                #expect(output.hasPrefix(update))
-                #expect(output.hasSuffix("\r" + Self.done))
+                #expect(output.hasPrefix(update), "\(output.debugDescription)")
+                #expect(output.hasSuffix("\r" + Self.done), "\(output.debugDescription)")
                 let updates = output.split(separator: "\r", omittingEmptySubsequences: false).dropLast()
                 #expect(updates.allSatisfy { $0.utf8.count == columns }, "\(output.debugDescription)")
             }
