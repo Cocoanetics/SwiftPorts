@@ -20,26 +20,32 @@ struct ReleaseCreate: AsyncParsableCommand {
             """
     )
 
-    @Option(name: [.customShort("R"), .long],
+    // String options take the next word verbatim (`-N '- Fixed a bug'`)
+    // and accept a joined shorthand value (`-Nfixes`), as pflag does.
+    @Option(name: [.customShort("R", allowingJoined: true), .long], parsing: .unconditional,
             help: "Repository as OWNER/REPO or GROUP/NAMESPACE/REPO.")
     var repo: RepositoryReference?
 
-    @Option(name: [.customShort("n"), .customLong("name")],
+    @Option(name: [.customShort("n", allowingJoined: true), .customLong("name")],
+            parsing: .unconditional,
             help: "The release name or title.")
     var name: String?
 
-    @Option(name: [.customShort("r"), .customLong("ref")],
+    @Option(name: [.customShort("r", allowingJoined: true), .customLong("ref")],
+            parsing: .unconditional,
             help: """
                 If the specified tag doesn't exist, create a release from the ref and tag it \
                 with the specified tag name. Accepts a commit SHA, tag name, or branch name.
                 """)
     var ref: String?
 
-    @Option(name: [.customShort("N"), .customLong("notes")],
+    @Option(name: [.customShort("N", allowingJoined: true), .customLong("notes")],
+            parsing: .unconditional,
             help: "The release notes or description. Accepts Markdown.")
     var notes: String?
 
-    @Option(name: [.customShort("F"), .customLong("notes-file")],
+    @Option(name: [.customShort("F", allowingJoined: true), .customLong("notes-file")],
+            parsing: .unconditional,
             help: """
                 Read release notes 'file'. To read from stdin, use '-'. \
                 If both --notes and --notes-file are set, --notes takes precedence.

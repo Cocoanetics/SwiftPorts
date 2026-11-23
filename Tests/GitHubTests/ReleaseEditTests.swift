@@ -48,18 +48,23 @@ extension HTTPMockedNetworkTests {
                     == ["release", "edit", "v1", "--draft=true", "--latest=false"])
             #expect(GhCommand.preprocess(["release", "edit", "v1", "--prerelease", "--verify-tag"])
                     == ["release", "edit", "v1", "--prerelease=true", "--verify-tag=true"])
-            // Option values and post-`--` args are never rewritten.
+            // Option values are attached verbatim; post-`--` args are untouched.
             #expect(GhCommand.preprocess(["release", "edit", "v1", "--notes", "--draft"])
-                    == ["release", "edit", "v1", "--notes", "--draft"])
+                    == ["release", "edit", "v1", "--notes=--draft"])
             #expect(GhCommand.preprocess(["release", "edit", "--", "--draft"])
                     == ["release", "edit", "--", "--draft"])
             #expect(GhCommand.preprocess(["release", "create", "v1", "--draft"])
                     == ["release", "create", "v1", "--draft"])
         }
 
-        @Test func preprocessSplitsAttachedLongValues() {
+        @Test func preprocessAttachesValuesAndSplitsOnlyEmptyOnes() {
             #expect(GhCommand.preprocess(["release", "edit", "v1", "--notes=", "--title=a=b"])
-                    == ["release", "edit", "v1", "--notes", "", "--title", "a=b"])
+                    == ["release", "edit", "v1", "--notes", "", "--title=a=b"])
+            #expect(GhCommand.preprocess(["release", "edit", "v1", "-n", "---", "-t=x", "-F-", "--tag", ""])
+                    == ["release", "edit", "v1", "--notes=---", "--title=x", "--notes-file=-", "--tag", ""])
+            // No generic `--json` rewrite: `--json` here is a notes value.
+            #expect(GhCommand.preprocess(["release", "edit", "v1", "--notes", "--json"])
+                    == ["release", "edit", "v1", "--notes=--json"])
         }
 
         @Test func parsesGoBoolSpellingsAndRejectsOthers() throws {
@@ -86,6 +91,16 @@ extension HTTPMockedNetworkTests {
             #expect(emptied.tag == "v1")
             #expect(emptied.notes == "")
             #expect(emptied.title == "")
+
+            // Option-shaped and terminator-shaped values stay literal.
+            let literal = try Self.parse(["v1", "--notes=---", "--title", "--json", "--target=--"])
+            #expect(literal.tag == "v1")
+            #expect(literal.notes == "---")
+            #expect(literal.title == "--json")
+            #expect(literal.target == "--")
+            let terminator = try Self.parse(["v1", "-n", "--", "--draft"])
+            #expect(terminator.notes == "--")
+            #expect(terminator.draft == ReleaseEditBool(true))
 
             let joined = try Self.parse(["v1", "-Fnotes.md", "-Rghe.example.com/o/r", "-nNotes", "-tTitle"])
             #expect(joined.notesFile == "notes.md")
@@ -146,6 +161,15 @@ extension HTTPMockedNetworkTests {
             let body = try server.payload("PATCH /repos/cli/cli/releases/42")
             #expect(body["body"] as? String == "- Fixed a bug")
             #expect(body["name"] as? String == "")
+        }
+
+        @Test func optionShapedValuesReachTheWriteVerbatim() async throws {
+            let server = Self.published(id: 42, tag: "v1.0")
+            _ = try await Self.run(["v1.0", "--notes=---", "--title", "--json"], server: server)
+            #expect(server.rest.map(\.method) == ["GET", "PATCH"])
+            let body = try server.payload("PATCH /repos/cli/cli/releases/42")
+            #expect(body["body"] as? String == "---")
+            #expect(body["name"] as? String == "--json")
         }
 
         @Test func titleOnlyEditSendsNoDatesTargetOrStateDefaults() async throws {

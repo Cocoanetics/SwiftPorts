@@ -50,7 +50,7 @@ extension HTTPMockedNetworkTests {
             #expect(GlabCommand.preprocess(["release", "create", "v1", "--no-update"])
                     == ["release", "create", "v1", "--no-update=true"])
             #expect(GlabCommand.preprocess(["release", "create", "v1", "-N", "--no-update"])
-                    == ["release", "create", "v1", "-N", "--no-update"])
+                    == ["release", "create", "v1", "--notes=--no-update"])
             #expect(GlabCommand.preprocess(["release", "list", "--no-update"])
                     == ["release", "list", "--no-update"])
             #expect(try Self.parse(["v1", "--no-update"]).noUpdate)
@@ -58,6 +58,27 @@ extension HTTPMockedNetworkTests {
             #expect(try !Self.parse(["v1", "--no-update=false"]).noUpdate)
             #expect(try !Self.parse(["v1"]).noUpdate)
             #expect(throws: (any Error).self) { try Self.parse(["v1", "--no-update=maybe"]) }
+        }
+
+        /// pflag string options: joined shorthands, values that look like
+        /// options or terminators, and an empty attached `--notes=`.
+        @Test func parsesPflagStringValueForms() throws {
+            #expect(GlabCommand.preprocess(["release", "create", "v1", "-Nfixes", "--notes=", "-r", "--"])
+                    == ["release", "create", "v1", "--notes=fixes", "--notes", "", "--ref=--"])
+
+            let joined = try Self.parse(["v1", "-Nfixes", "-nTitle", "-r", "main", "-Rg/s/r"])
+            #expect(joined.notes == "fixes")
+            #expect(joined.name == "Title")
+            #expect(joined.ref == "main")
+            #expect(joined.repo?.fullPath == "g/s/r")
+
+            let dashed = try Self.parse(["v1", "-N", "- Fixed a bug", "-n", "---"])
+            #expect(dashed.notes == "- Fixed a bug")
+            #expect(dashed.name == "---")
+
+            let emptied = try Self.parse(["--notes=", "v1"])
+            #expect(emptied.tagName == "v1")
+            #expect(emptied.notes == "")
         }
 
         // MARK: Payloads
@@ -112,6 +133,26 @@ extension HTTPMockedNetworkTests {
             #expect(out.contains("• Creating or updating release repo=group/sub/repo tag=v1.0\n"))
             #expect(out.contains("✓ Release updated\turl=https://gitlab.com/group/sub/repo/-/releases/v1.0\n"))
             #expect(out.contains("✓ Release succeeded after "))
+        }
+
+        @Test func joinedAndDashedValuesReachTheUpdate() async throws {
+            let server = Self.server(existing: Self.release(name: "Old", description: "old"))
+            server.route("PUT", "\(Self.project)/releases/v1.0") { (200, Self.release()) }
+            _ = try await Self.run(["v1.0", "-N- Fixed a bug", "-nTitle", "-r", "main"], server: server)
+            #expect(server.requests.map(\.method) == ["GET", "PUT"])
+            let body = try server.payload(1)
+            #expect(body["name"] as? String == "Title")
+            #expect(body["description"] as? String == "- Fixed a bug")
+        }
+
+        @Test func attachedEmptyNotesClearDescription() async throws {
+            let server = Self.server(existing: Self.release(name: "Old", description: "gone"))
+            server.route("PUT", "\(Self.project)/releases/v1.0") { (200, Self.release()) }
+            _ = try await Self.run(["v1.0", "--notes=", "-r", "main"], server: server)
+            #expect(server.requests.map(\.method) == ["GET", "PUT"])
+            let body = try server.payload(1)
+            #expect(body["name"] as? String == "Old")
+            #expect(body["description"] as? String == "")
         }
 
         @Test func explicitEmptyNotesClearDescriptionAndKeepName() async throws {
