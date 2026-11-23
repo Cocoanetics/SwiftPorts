@@ -328,7 +328,7 @@ import Testing
             "-n", "First Stable",
             "-N", "Body of the release notes",
             "-r", "main",
-            "--no-update",
+            "--no-update"
         ])
         #expect(cmd.tagName == "v1.0.0")
         #expect(cmd.name == "First Stable")
