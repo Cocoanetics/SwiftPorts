@@ -325,14 +325,16 @@ import Testing
     @Test func releaseCreateRequiresTagAndAcceptsFlags() throws {
         let cmd = try ReleaseCreate.parse([
             "v1.0.0",
-            "--name", "First Stable",
-            "-n", "Body of the release notes",
-            "--ref", "main",
+            "-n", "First Stable",
+            "-N", "Body of the release notes",
+            "-r", "main",
+            "--no-update",
         ])
         #expect(cmd.tagName == "v1.0.0")
         #expect(cmd.name == "First Stable")
         #expect(cmd.notes == "Body of the release notes")
         #expect(cmd.ref == "main")
+        #expect(cmd.noUpdate)
     }
 
     @Test func releaseDeleteRequiresTag() throws {
