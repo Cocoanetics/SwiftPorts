@@ -149,8 +149,10 @@ pipeline / job ends in `failed`, mirroring `gh run watch
 ```
 glab release list             --repo, -l/--limit
 glab release view <tag>       --repo
-glab release create <tag>     --repo, --name, --ref,
-                              -n/--notes "...", -F/--notes-file <path|->
+glab release create <tag>     --repo, -n/--name, -r/--ref, --no-update,
+                              -N/--notes "...", -F/--notes-file <path|->
+                              creates the release, or updates an
+                              existing one's name / notes (one PUT)
 glab release delete <tag>     --repo
 glab release download <tag>   --repo, -p/--pattern (repeatable, glob),
                               -D/--dir <dir>, --sources
