@@ -22,10 +22,10 @@ extension PublicOperationTests {
             try FileManager.default.setAttributes(
                 [.modificationDate: Date(timeIntervalSince1970: 1_000_000)],
                 ofItemAtPath: fixture.path("source/a.lfs").path)
-            let temporaryDirectory = fixture.store().temporaryDirectory.standardizedFileURL
+            let temporaryDirectory = fixture.store().temporaryDirectory
             let gate = CancellationAuthorizationGate()
             fixture.shell.sandbox = fixture.sandbox { url in
-                if url.deletingLastPathComponent().standardizedFileURL == temporaryDirectory {
+                if NativeFixture.isFile(url, directlyIn: temporaryDirectory) {
                     await gate.suspend()
                 }
             }
@@ -91,10 +91,10 @@ extension PublicOperationTests {
                 }
             }
             try Data(repeating: 0x61, count: size).write(to: fixture.path("source/a.lfs"))
-            let temporaryDirectory = fixture.store().temporaryDirectory.standardizedFileURL
+            let temporaryDirectory = fixture.store().temporaryDirectory
             let gate = CancellationAuthorizationGate()
             fixture.shell.sandbox = fixture.sandbox { url in
-                if url.deletingLastPathComponent().standardizedFileURL == temporaryDirectory {
+                if NativeFixture.isFile(url, directlyIn: temporaryDirectory) {
                     await gate.suspend()
                 }
             }

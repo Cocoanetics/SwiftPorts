@@ -84,6 +84,21 @@ struct NativeFixture: Sendable {
         })
     }
 
+    /// Whether `url` names a file directly in `directory`, as the file system
+    /// resolves both. A store opened by the filter takes its directories from
+    /// libgit2, which canonicalizes them (`GetLongPathNameW` on Windows), while
+    /// `root` keeps the temporary directory's spelling, an 8.3 short path such
+    /// as `RUNNER~1` on Windows runners.
+    static func isFile(_ url: URL, directlyIn directory: URL) -> Bool {
+        canonicalPath(url.deletingLastPathComponent()) == canonicalPath(directory)
+    }
+
+    private static func canonicalPath(_ url: URL) -> String {
+        var path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+        return path
+    }
+
     func store(_ name: String = "source", storage: String? = nil) -> LocalStore {
         LocalStore(gitStorageDirectory: path(name).appendingPathComponent(".git"), storage: storage)
     }
