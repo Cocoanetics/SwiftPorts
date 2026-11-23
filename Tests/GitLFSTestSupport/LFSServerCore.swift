@@ -233,7 +233,7 @@ private struct LFSServerState {
         }
     }
 
-    private static func path(of uri: String) -> String {
+    fileprivate static func path(of uri: String) -> String {
         let raw: String
         if uri.hasPrefix("http://") || uri.hasPrefix("https://"), let url = URL(string: uri) {
             raw = url.path
@@ -263,6 +263,9 @@ final class LFSServerCore: @unchecked Sendable {
     private var state = LFSServerState()
     /// Touched only on the server event loop.
     private var hold = LFSObjectHold()
+    private let heldRequests = AsyncStream<LFSHeldObjectRequest>.makeStream(bufferingPolicy: .bufferingNewest(1))
+
+    var heldObjectRequests: AsyncStream<LFSHeldObjectRequest> { heldRequests.stream }
 
     func setEndpoint(_ endpoint: URL) {
         var text = endpoint.absoluteString
@@ -335,6 +338,7 @@ final class LFSServerCore: @unchecked Sendable {
     /// Drop a held response so shutdown can finish. Call this on the server event loop.
     func releaseObjectHold() {
         hold.release()
+        heldRequests.continuation.finish()
     }
 
     /// Count this request toward the overlap hold. Call this on the server event loop.
@@ -347,8 +351,11 @@ final class LFSServerCore: @unchecked Sendable {
 
     /// Park `promise` until enough object transfers overlap, then succeed it.
     /// Call this on the server event loop.
-    func parkObjectHold(_ promise: EventLoopPromise<Void>) {
-        hold.park(promise)
+    func parkObjectHold(_ promise: EventLoopPromise<Void>, method: String, uri: String, body: Data) {
+        let held = hold.park(promise)
+        heldRequests.continuation.yield(LFSHeldObjectRequest(
+            method: method, path: LFSServerState.path(of: uri), requestBody: body,
+            responseIsHeld: held, receivedAt: ContinuousClock.now))
     }
 }
 
@@ -392,9 +399,10 @@ private final class LFSObjectHold: @unchecked Sendable {
         return .hold
     }
 
-    func park(_ promise: EventLoopPromise<Void>) {
+    func park(_ promise: EventLoopPromise<Void>) -> Bool {
         parked.append(promise)
         if started >= target { release() }
+        return holding
     }
 
     func release() {
