@@ -240,6 +240,33 @@ extension HTTPMockedNetworkTests {
             #expect(out.contains("✓ Release created:\turl="))
         }
 
+        @Test func semverRejectionGetsUpstreamHintWithoutRetry() async throws {
+            let server = FakeGitLab()
+            server.route("GET", "\(Self.project)/releases/v1") { (404, #"{"message":"x"}"#) }
+            server.route("POST", "\(Self.project)/releases") {
+                (422, #"{"message":"Tag Semver must follow semantic version"}"#)
+            }
+            do {
+                _ = try await Self.run(["v1", "-r", "main"], server: server)
+                Issue.record("expected the create to fail")
+            } catch let error as ReleaseCreateError {
+                let text = error.localizedDescription
+                #expect(text.contains("Semver must follow semantic version"))
+                #expect(text.contains(". Use a MAJOR.MINOR.PATCH tag such as 1.0.0, v1.0.0, or 1.0.0-alpha."))
+                #expect(text.hasSuffix("See https://docs.gitlab.com/ci/components/#semantic-versioning"))
+            }
+            #expect(server.requests.map(\.method) == ["GET", "POST"])
+        }
+
+        @Test func releaseFailedLeavesOtherErrorsUnchanged() {
+            let url = URL(string: "https://gitlab.com/api/v4/x")!
+            let invalid = ReleaseCreate.releaseFailed(APIError.http(status: 422, message: "invalid", url: url))
+            #expect((invalid as? APIError).map { if case .http = $0 { true } else { false } } == true)
+            let refused = ReleaseCreate.releaseFailed(ReleaseCreateError.alreadyExists(tag: "v1"))
+            #expect(refused.localizedDescription
+                    == "release for tag \"v1\" already exists and --no-update flag was specified")
+        }
+
         @Test func otherLookupFailuresStopWithoutWriting() async throws {
             let server = FakeGitLab()
             server.route("GET", "\(Self.project)/releases/v1.0") { (500, #"{"message":"boom"}"#) }

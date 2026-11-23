@@ -105,6 +105,24 @@ struct ReleaseCreate: AsyncParsableCommand {
         let start = Date()
         Shell.print("• Creating or updating release repo=\(target.fullPath) tag=\(tagName)")
 
+        let release: Release
+        do {
+            release = try await createOrUpdate(
+                client: client, project: project, tagPath: tagPath,
+                notes: resolvedNotes, noteProvided: noteProvided, ref: ref)
+        } catch {
+            throw Self.releaseFailed(error)
+        }
+        let elapsed = String(format: "%0.2f", Date().timeIntervalSince(start))
+        Shell.print("✓ Release succeeded after \(elapsed) seconds.")
+    }
+
+    /// Lookup, then one PUT (existing) or one POST (absent). Every
+    /// failure here goes through upstream's `releaseFailedErr`.
+    private func createOrUpdate(
+        client: APIClient, project: String, tagPath: String,
+        notes resolvedNotes: String, noteProvided: Bool, ref: String
+    ) async throws -> Release {
         let existing: Release?
         do {
             existing = try await client.get("\(project)/releases/\(tagPath)")
@@ -130,8 +148,19 @@ struct ReleaseCreate: AsyncParsableCommand {
                 method: .post, path: "\(project)/releases", body: body)
             Shell.print("✓ Release created:\turl=\(release._links?.selfLink?.absoluteString ?? "")")
         }
-        let elapsed = String(format: "%0.2f", Date().timeIntervalSince(start))
-        Shell.print("✓ Release succeeded after \(elapsed) seconds.")
+        return release
+    }
+
+    /// Upstream `releaseFailedErr`. Its "release failed after N seconds."
+    /// goes into `ExitError.Details`, which glab's error handler never
+    /// prints (`ExitError.Error()` is the wrapped error alone), so the
+    /// only visible change is the semantic-versioning hint on a 422.
+    static func releaseFailed(_ error: Error) -> Error {
+        if case APIError.http(let status, let message, _) = error, status == 422,
+           message.lowercased().contains("semver must follow semantic version") {
+            return ReleaseCreateError.semverTag(underlying: error)
+        }
+        return error
     }
 
     /// Upstream's update branch: resend the current name / description
