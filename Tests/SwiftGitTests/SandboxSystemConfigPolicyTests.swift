@@ -111,6 +111,11 @@ struct SandboxSystemConfigPolicyTests {
         let shell = shell(fixture)
         Libgit2Sandboxing.shared.hostSystemSearchPath = fixture.system.path
         defer { Libgit2Sandboxing.shared.hostSystemSearchPath = nil }
+        // As a concurrent unsandboxed run leaves libgit2's process-wide
+        // search path: on the fixture's system directory, inside the sandbox.
+        try Libgit2Sandboxing.shared.runIsolated(nil) {
+            #expect(effectiveSystemSearchPath() == fixture.system.path)
+        }
         await #expect(throws: (any Error).self) {
             try await shell.withCurrent {
                 _ = try await GitClient(workingDirectory: fixture.repo).configGet(Self.key, scope: .system)
