@@ -10,6 +10,9 @@ import Musl
 #elseif canImport(Android)
 import Android
 #endif
+#if os(Windows)
+import WinSDK
+#endif
 
 extension GitCommand {
 
@@ -67,21 +70,17 @@ extension GitCommand {
 
     /// The working directory `chdir(operand)` would leave `shell` in: the
     /// operand from its working directory, followed on disk (symlinks, then
-    /// `..`) as the kernel does, for the next `-C` to start from. One that
-    /// can't be entered is git's `fatal: cannot change to '<operand>'`.
+    /// `..`) as the kernel does, or on Windows as Git for Windows'
+    /// `mingw_chdir` does (the final path of a symlink or junction), for the
+    /// next `-C` to start from. One that can't be entered is git's
+    /// `fatal: cannot change to '<operand>'`. A sandbox sees both the path
+    /// asked for and the one it leads to.
     private static func changeDirectory(to operand: String, in shell: Shell) async throws -> String {
         let requested = shell.resolve(operand)
         try await shell.sandbox?.authorize(requested)
         let physical: String
         #if os(Windows)
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: requested.path, isDirectory: &isDirectory) else {
-            throw cannotChange(to: operand, reason: "No such file or directory")
-        }
-        guard isDirectory.boolValue else {
-            throw cannotChange(to: operand, reason: "Not a directory")
-        }
-        physical = Shell.normalizePath(requested.path)
+        physical = try finalPath(of: requested.path, operand: operand)
         #else
         let path = requested.path
         var status = stat()
@@ -107,6 +106,68 @@ extension GitCommand {
         }
         return shell.displayPath(for: physical)
     }
+
+    #if os(Windows)
+    /// `mingw_chdir`: the directory opened (`FILE_FLAG_BACKUP_SEMANTICS`),
+    /// its final path (`GetFinalPathNameByHandleW`) with the NT prefixes
+    /// `normalize_ntpath` strips, in forward slashes.
+    private static func finalPath(of path: String, operand: String) throws -> String {
+        let share = DWORD(FILE_SHARE_READ) | DWORD(FILE_SHARE_WRITE) | DWORD(FILE_SHARE_DELETE)
+        let handle = path.withCString(encodedAs: UTF16.self) {
+            CreateFileW($0, 0, share, nil, DWORD(OPEN_EXISTING), DWORD(FILE_FLAG_BACKUP_SEMANTICS), nil)
+        }
+        guard let handle, handle != INVALID_HANDLE_VALUE else {
+            throw cannotChange(to: operand, reason: windowsReason(GetLastError()))
+        }
+        defer { CloseHandle(handle) }
+        var information = BY_HANDLE_FILE_INFORMATION()
+        guard GetFileInformationByHandle(handle, &information) else {
+            throw cannotChange(to: operand, reason: windowsReason(GetLastError()))
+        }
+        // `SetCurrentDirectoryW` refuses a file with ERROR_DIRECTORY.
+        guard information.dwFileAttributes & DWORD(FILE_ATTRIBUTE_DIRECTORY) != 0 else {
+            throw cannotChange(to: operand, reason: windowsReason(DWORD(ERROR_DIRECTORY)))
+        }
+        let size = GetFinalPathNameByHandleW(handle, nil, 0, 0)
+        var buffer = [WCHAR](repeating: 0, count: Int(size) + 1)
+        let length = GetFinalPathNameByHandleW(handle, &buffer, DWORD(buffer.count), 0)
+        guard size > 0, length > 0, Int(length) < buffer.count else {
+            throw cannotChange(to: operand, reason: windowsReason(GetLastError()))
+        }
+        var target = String(decoding: buffer.prefix(Int(length)), as: UTF16.self)
+        if target.hasPrefix("\\??\\") || target.hasPrefix("\\\\?\\") {
+            target.removeFirst(4)
+        } else if target.lowercased().hasPrefix("\\dosdevices\\") {
+            target.removeFirst(12)
+        }
+        if target.lowercased().hasPrefix("unc\\") {
+            target = "\\" + target.dropFirst(3)
+        }
+        return target.replacingOccurrences(of: "\\", with: "/")
+    }
+
+    /// `strerror(err_win_to_posix(error))` for what opening a path returns.
+    private static func windowsReason(_ error: DWORD) -> String {
+        let code: Int32
+        switch error {
+        case DWORD(ERROR_FILE_NOT_FOUND), DWORD(ERROR_PATH_NOT_FOUND), DWORD(ERROR_BAD_PATHNAME):
+            code = ENOENT
+        case DWORD(ERROR_ACCESS_DENIED), DWORD(ERROR_SHARING_VIOLATION), DWORD(ERROR_LOCK_VIOLATION):
+            code = EACCES
+        case DWORD(ERROR_FILENAME_EXCED_RANGE):
+            code = ENAMETOOLONG
+        case DWORD(ERROR_INVALID_NAME), DWORD(ERROR_DIRECTORY), DWORD(ERROR_NOT_A_REPARSE_POINT):
+            code = EINVAL
+        case DWORD(ERROR_INVALID_DRIVE):
+            code = ENODEV
+        case DWORD(ERROR_NOT_READY):
+            code = EAGAIN
+        default:
+            code = ENOSYS
+        }
+        return String(cString: strerror(code))
+    }
+    #endif
 
     private static func cannotChange(to operand: String, reason: String) -> CLIError {
         CLIError.stderr("fatal: cannot change to '\(operand)': \(reason)", exitCode: 128)
