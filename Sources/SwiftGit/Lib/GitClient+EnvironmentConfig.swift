@@ -468,7 +468,8 @@ extension GitClient {
     ) throws {
         for segment in segments {
             if let include = segment.include {
-                try check(git_config_add_file_ondisk(config, include, git_config_level_t(rawValue: segment.level), repo, 1))
+                let level = git_config_level_t(rawValue: segment.level)
+                try check(git_config_add_file_ondisk(config, include, level, repo, 1))
             } else if !segment.entries.isEmpty {
                 try addCommandLineBackend(segment.entries, to: config, level: segment.level, repo: repo)
             }
