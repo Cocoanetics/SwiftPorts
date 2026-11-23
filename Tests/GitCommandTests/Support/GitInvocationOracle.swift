@@ -86,12 +86,19 @@ struct GitInvocationOracle {
     }
 
     /// The environment every run gets, `extra` over it.
+    ///
+    /// `GIT_TEST_MAINT_AUTO_DETACH=false` keeps system git's auto
+    /// maintenance (after a commit, say) in the foreground: detached, it holds
+    /// `objects/maintenance.lock` after git has returned, while the fixture
+    /// is copied. It is read only when no `*.autoDetach` is configured, and
+    /// it is no config entry, so no `config` output shows it.
     func environment(_ extra: [String: String] = [:]) -> [String: String] {
         let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
         let temporary = ProcessInfo.processInfo.environment["TMPDIR"] ?? "/tmp"
         var environment = ["PATH": path, "TMPDIR": temporary, "LC_ALL": "C",
                            "HOME": home.path, "XDG_CONFIG_HOME": xdgConfigHome.path,
-                           "GIT_CONFIG_GLOBAL": globalConfig.path, "GIT_CONFIG_NOSYSTEM": "1"]
+                           "GIT_CONFIG_GLOBAL": globalConfig.path, "GIT_CONFIG_NOSYSTEM": "1",
+                           "GIT_TEST_MAINT_AUTO_DETACH": "false"]
         for (key, value) in extra { environment[key] = value }
         return environment
     }
