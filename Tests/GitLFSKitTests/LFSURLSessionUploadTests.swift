@@ -100,19 +100,67 @@ struct LFSURLSessionUploadTests {
             let url = try #require(URL(string: server.endpoint.absoluteString + "/objects/test"))
             var request = URLRequest(url: url)
             request.httpMethod = "PUT"
-            let configuration = URLSessionConfiguration.ephemeral
             _ = try await LFSTransferDelegate(stream: LFSTransferStream()).execute(
-                request, body: .data(Data()), configuration: configuration)
-            configuration.timeoutIntervalForRequest = 0.2
-            configuration.timeoutIntervalForResource = 10
+                request, body: .data(Data()), configuration: .ephemeral)
+            let bytes = Data(repeating: 0x61, count: 1_000_000)
             let sent = TransferTestLock<Int64>(0)
-            await #expect {
-                _ = try await LFSTransferDelegate(stream: LFSTransferStream(progress: { _, delta in
-                    sent.withLock { $0 += delta }
-                })).execute(
-                    request, body: .data(Data(repeating: 0x61, count: 1_000_000)), configuration: configuration)
-            } throws: { error in
-                (error as? URLError)?.code == .timedOut
+            let receipts = server.heldObjectRequests()
+            try await withThrowingTaskGroup(of: LFSUploadTimeoutEvent.self) { group in
+                defer { group.cancelAll() }
+                group.addTask {
+                    var iterator = receipts.makeAsyncIterator()
+                    guard let receipt = await iterator.next() else { return .missingReceipt }
+                    return .receipt(receipt)
+                }
+                group.addTask { [request] in
+                    let configuration = URLSessionConfiguration.ephemeral
+                    // #283: Linux FoundationNetworking converts Int(seconds) * 1000,
+                    // so fractional seconds collapse to a roughly 1 ms timer.
+                    configuration.timeoutIntervalForRequest = 2
+                    configuration.timeoutIntervalForResource = 10
+                    do {
+                        _ = try await LFSTransferDelegate(stream: LFSTransferStream(progress: { _, delta in
+                            sent.withLock { $0 += delta }
+                        })).execute(request, body: .data(bytes), configuration: configuration)
+                        return .completed(.success(()), at: ContinuousClock.now)
+                    } catch {
+                        return .completed(.failure(error), at: ContinuousClock.now)
+                    }
+                }
+                group.addTask {
+                    // Bound missing arrival or completion before the hold's
+                    // ten-second auto-release could answer the request.
+                    try await Task.sleep(for: .seconds(8))
+                    return .deadline
+                }
+                // Task-group delivery order need not match event order; collect
+                // both and compare the timestamps taken where each happened.
+                var receipt: LFSHeldObjectRequest?
+                var completion: (result: Result<Void, any Error>, at: ContinuousClock.Instant)?
+                events: while receipt == nil || completion == nil, let event = try await group.next() {
+                    switch event {
+                    case .receipt(let value): receipt = value
+                    case .completed(let result, let at): completion = (result, at)
+                    case .missingReceipt, .deadline: break events
+                    }
+                }
+                guard let receipt, let completion else {
+                    Issue.record("""
+                        gate ended without both a parked-response receipt and upload completion: \
+                        receipt \(receipt != nil), completion \(completion != nil)
+                        """)
+                    return
+                }
+                #expect(receipt.method == "PUT")
+                #expect(receipt.path == "/objects/test")
+                #expect(receipt.requestBody == bytes)
+                try #require(receipt.responseIsHeld)
+                #expect(receipt.receivedAt < completion.at)
+                #expect {
+                    try completion.result.get()
+                } throws: { error in
+                    (error as? URLError)?.code == .timedOut
+                }
             }
             #expect(sent.withLock { $0 } == 1_000_000)
             #expect(await server.peakObjectTransfers() == 1)
