@@ -186,3 +186,69 @@ extension PublicOperationTests {
         }
     }
 }
+
+extension PublicOperationTests {
+    @Test("nested creation keeps default and explicit configuration for its first checkout without persisting it",
+          arguments: ["home", "explicit"])
+    func nestedCreationConfiguration(globalSource: String) async throws {
+        try await NativeFixture.run { fixture, server in
+            let globalConfig = fixture.path("effective.config")
+            let settings = "\n[core]\n\tautocrlf = true\n[consumer]\n\tglobalSource = \(globalSource)\n"
+            let effective = try String(contentsOf: globalConfig, encoding: .utf8)
+            if globalSource == "home" {
+                // Ordinary defaults: the shell's HOME and XDG files, no GIT_CONFIG_GLOBAL.
+                try (effective + settings).write(
+                    to: fixture.path(".gitconfig"), atomically: true, encoding: .utf8)
+                let xdg = fixture.path("xdg/git")
+                try FileManager.default.createDirectory(at: xdg, withIntermediateDirectories: true)
+                try "[consumer]\n\tfromXDG = yes\n".write(
+                    to: xdg.appendingPathComponent("config"), atomically: true, encoding: .utf8)
+                fixture.shell.environment["GIT_CONFIG_GLOBAL"] = nil
+            } else {
+                try (effective + settings).write(to: globalConfig, atomically: true, encoding: .utf8)
+            }
+            try await GitLFSKit.withOperation(shell: fixture.shell) { operation in
+                _ = try fixture.seed(operation)
+                try operation.withRepository(at: fixture.path("source")) { repository in
+                    try repository.configSet("core.autocrlf", "false")
+                    try Data("line\n".utf8).write(to: fixture.path("source/plain.txt"))
+                    try repository.add(paths: ["plain.txt"])
+                    _ = try repository.commitDetailed(message: "plain", author: NativeFixture.signature,
+                                                       allowEmpty: false, sign: .noSign)
+                }
+            }
+            server.store(NativeFixture.bytes, oid: NativeFixture.pointer.oid)
+            let clone = fixture.path("nested-config")
+            try await GitLFSKit.withOperation(shell: fixture.shell) { operation in
+                try operation.authorize(fixture.path("source"))
+                try operation.withRepository(at: fixture.path("source")) { source in
+                    try operation.createRepository(at: clone, using: { preparation in
+                        try Repository.clone(from: fixture.path("source"), to: clone,
+                                             progress: { _ in }, preparation: preparation)
+                    }, { repository throws in
+                        #expect(try repository.configGet("core.autocrlf") == "true")
+                        #expect(try repository.configGet("consumer.globalSource") == globalSource)
+                        #expect(try repository.configGet("consumer.operation") == "scoped")
+                        if globalSource == "home" {
+                            #expect(try repository.configGet("consumer.fromXDG") == "yes")
+                        }
+                        #expect(try Data(contentsOf: clone.appendingPathComponent("plain.txt"))
+                                == Data("line\r\n".utf8))
+                        #expect(try Data(contentsOf: clone.appendingPathComponent("a.lfs")) == NativeFixture.bytes)
+                        #expect(try repository.status().isClean)
+                    })
+                    // The enclosing scope is back once creation returns.
+                    #expect(try source.configGet("consumer.globalSource") == globalSource)
+                    let reopened = try Repository.open(at: clone)
+                    #expect(try reopened.configGet("consumer.operation") == "scoped")
+                    #expect(try reopened.configGet("core.autocrlf") == "true")
+                    #expect(try reopened.configGet("consumer.globalSource") == globalSource)
+                }
+            }
+            let local = try String(contentsOf: clone.appendingPathComponent(".git/config"), encoding: .utf8)
+            for key in ["autocrlf", "globalSource", "operation", "fromXDG", "filter"] {
+                #expect(!local.contains(key), "persisted \(key) in the clone's config:\n\(local)")
+            }
+        }
+    }
+}
