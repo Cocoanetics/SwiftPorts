@@ -152,6 +152,14 @@ public final class LFSTestServer: @unchecked Sendable {
         }
     }
 
+    /// Complete object requests after HTTP request end and response parking.
+    /// For one observer: buffers the latest receipt even if it arrives before
+    /// iteration starts, and finishes on shutdown. A receipt's held state and
+    /// timestamp describe that event, not when the observer resumes.
+    public func heldObjectRequests() -> AsyncStream<LFSHeldObjectRequest> {
+        core.heldObjectRequests
+    }
+
     /// Close the listening socket and stop the event-loop threads.
     public func shutdown() async {
         guard claimShutdown() else { return }

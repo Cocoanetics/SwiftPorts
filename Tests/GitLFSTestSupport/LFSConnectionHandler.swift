@@ -57,7 +57,7 @@ final class LFSConnectionHandler: ChannelInboundHandler {
             handler.write(response, context: context, version: version)
             serverCore.record(method: method, uri: uri, headers: headers, body: body, response: response)
         }
-        serverCore.parkObjectHold(promise)
+        serverCore.parkObjectHold(promise, method: method, uri: uri, body: body)
     }
 
     private func expectsContinue(_ request: HTTPRequestHead) -> Bool {
