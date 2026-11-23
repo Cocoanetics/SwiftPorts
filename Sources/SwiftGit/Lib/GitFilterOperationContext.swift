@@ -208,22 +208,6 @@ package final class GitFilterOperationContext: @unchecked Sendable {
         return OperationConfiguration(levels: levels, includePolicy: includePolicy)
     }
 
-    /// The levels ``operationConfiguration`` sets, each empty: what a new
-    /// repository reads before its preparation outside any scope, where the
-    /// sandboxing search paths leave those levels out. Nested in an enclosing
-    /// scope, it keeps that scope's levels from an init's own open, so a
-    /// refused include fails the preparation, which GitKit rolls back, rather
-    /// than `git_repository_init`, which it does not.
-    var creationConfiguration: OperationConfiguration {
-        let levels = operationConfiguration.levels.map { level -> OperationConfiguration.Level in
-            switch level {
-            case let .file(_, level), let .entries(_, level, _):
-                return .entries([], level, name: "operation creation")
-            }
-        }
-        return OperationConfiguration(levels: levels)
-    }
-
     /// `core.repositoryformatversion`, `core.bare`, `core.worktree` and
     /// `extensions.*`, which an operation level refuses.
     private static func isRepositoryOnly(_ name: String) -> Bool {
