@@ -395,7 +395,8 @@ extension GitClient {
 
     /// Gives the environment's config to `repository` through GitKit's typed
     /// config-level API: `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM` at their
-    /// levels and `GIT_CONFIG_COUNT` above all. Call inside
+    /// levels and `GIT_CONFIG_COUNT` above all, as ``commandLineLayers(_:)``.
+    /// Writes keep going to the repository's own file. Call inside
     /// ``Libgit2Sandboxing/runIsolated(_:environment:body:)``.
     static func installEnvironmentConfig(into repository: Repository) throws {
         let plan = Libgit2Sandboxing.shared.environment
@@ -407,25 +408,20 @@ extension GitClient {
             try repository.addConfigFile(at: URL(fileURLWithPath: file.resolved), level: .system)
         }
         guard !plan.commandLine.isEmpty else { return }
-        let segments = commandLineSegments(plan.commandLine)
-        if segments.count > 1 {
-            // GitKit's typed levels stop at app (Cocoanetics/GitKit#106); an
-            // include's file and the entries after it go above, as git reads
-            // them in place.
-            guard let pointer = handle(of: repository) else {
-                throw Libgit2Error(
-                    code: -1, klass: Int32(GIT_ERROR_CONFIG.rawValue),
-                    message: "cannot reach GitKit's repository handle to apply -c include.path to it")
+        try repository.addConfigLayers(commandLineLayers(plan.commandLine))
+    }
+
+    /// The command line's config as GitKit layers, one per
+    /// ``commandLineSegments(_:)`` segment and in its order: the entries up
+    /// to an include, the file it includes, the entries after it.
+    static func commandLineLayers(_ entries: [EnvironmentConfig.CommandLineEntry]) -> [ConfigLayer] {
+        commandLineSegments(entries).map { segment in
+            if let include = segment.include {
+                return .file(URL(fileURLWithPath: include))
             }
-            var config: OpaquePointer?
-            try check(git_repository_config(&config, pointer))
-            defer { git_config_free(config) }
-            try installCommandLineSegments(segments.dropFirst(), into: config, repo: pointer)
+            return .entries(segment.entries.map { ConfigEntry(name: $0.name, value: $0.value) },
+                            name: commandLineBackendType)
         }
-        // Last, as it restores the write order and refreshes what the
-        // repository derived from its config for every level added.
-        let entries = segments[0].entries.map { ConfigEntry(name: $0.name, value: $0.value) }
-        try repository.addConfigEntries(entries, level: .app, name: commandLineBackendType)
     }
 
     /// One level of the command line's config: the entries up to an include,
@@ -529,7 +525,7 @@ extension GitClient {
     }
 
     /// The `backend_type` of the command line's entries.
-    private static let commandLineBackendType = "command line"
+    static let commandLineBackendType = "command line"
 
     // MARK: - show-origin
 
