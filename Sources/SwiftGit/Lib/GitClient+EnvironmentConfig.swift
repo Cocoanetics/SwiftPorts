@@ -39,6 +39,10 @@ struct EnvironmentConfig: Equatable, Sendable {
     struct CommandLineEntry: Equatable, Sendable {
         let name: String
         let value: String?
+        /// For an `include.path` entry, the file it includes, read right
+        /// after it (``GitClient/resolveIncludes(_:)``); `nil` for one
+        /// that isn't there, which git passes over.
+        var include: String?
     }
 
     /// `GIT_CONFIG_COUNT`'s entries, then `GIT_CONFIG_PARAMETERS`', names
@@ -115,8 +119,74 @@ extension GitClient {
                 if readable { plan.systemFile = .init(typed: typed, resolved: resolved) }
             }
         }
-        plan.commandLine = try Self.commandLineConfig(Shell.current.environment.variables)
+        // git reads the entries in order, an include as it comes, and
+        // stops at the first it can't take: the includes before a bad
+        // entry are seen to before it is reported.
+        let read = Self.readCommandLineConfig(Shell.current.environment.variables)
+        plan.commandLine = try await resolveIncludes(read.entries)
+        if let failure = read.failure { throw failure }
         return plan
+    }
+
+    /// `include.path` entries as git's `handle_path_include` takes those
+    /// of the command line: a value is required, `~` is expanded, the
+    /// path must be absolute (there is no file to be relative to), and a
+    /// file that isn't there is passed over; one there must be allowed by
+    /// the sandbox, and readable. Files it includes in turn are gated by
+    /// ``isolatedGated`` / ``ConfigIncludeGate``.
+    func resolveIncludes(
+        _ entries: [EnvironmentConfig.CommandLineEntry]
+    ) async throws -> [EnvironmentConfig.CommandLineEntry] {
+        var resolved = entries
+        for index in resolved.indices where resolved[index].name == "include.path" {
+            guard let value = resolved[index].value else {
+                throw CommandLineConfigError(reason: "missing value for 'include.path'")
+            }
+            guard let expanded = Self.interpolatedPath(value) else {
+                throw CommandLineConfigError(reason: "could not expand include path '\(value)'")
+            }
+            guard Self.isAbsolutePath(expanded) else {
+                throw CommandLineConfigError(reason: "relative config includes must come from files")
+            }
+            let file = Shell.resolve(expanded)
+            try await Shell.authorize(file)
+            // access_or_die: a missing file is no include; any other
+            // reason it can't be read stops git.
+            if access(file.path, R_OK) == 0 {
+                resolved[index].include = file.path
+            } else if errno != ENOENT && errno != ENOTDIR {
+                let reason = String(cString: strerror(errno))
+                throw GitDiagnosticError(lines: ["fatal: unable to access '\(expanded)': \(reason)"], exitCode: 128)
+            }
+        }
+        return resolved
+    }
+
+    /// git's `interpolate_path` for `~` and `~/…` (the shell's `HOME`) and
+    /// `~user/…`; `nil` where it can't expand.
+    static func interpolatedPath(_ path: String) -> String? {
+        guard path.hasPrefix("~") else { return path }
+        let rest = path.dropFirst()
+        let user = rest.prefix { $0 != "/" }
+        let tail = rest.dropFirst(user.count)
+        if user.isEmpty {
+            guard let home = Shell.current.environment["HOME"] else { return nil }
+            return home + tail
+        }
+        #if os(Windows)
+        return nil
+        #else
+        guard let entry = getpwnam(String(user)), let directory = entry.pointee.pw_dir else { return nil }
+        return String(cString: directory) + tail
+        #endif
+    }
+
+    private static func isAbsolutePath(_ path: String) -> Bool {
+        #if os(Windows)
+        if path.hasPrefix("\\") { return true }
+        if let drive = path.first, drive.isLetter, path.dropFirst().first == ":" { return true }
+        #endif
+        return path.hasPrefix("/")
     }
 
     /// A file the environment names is the user's pick, not libgit2's
@@ -137,20 +207,35 @@ extension GitClient {
     static func commandLineConfig(
         _ variables: [String: String]
     ) throws -> [EnvironmentConfig.CommandLineEntry] {
-        var entries = try countedConfig(variables)
-        if let parameters = variables["GIT_CONFIG_PARAMETERS"] {
-            try GitConfigParameters.entries(parameters) { key, value in
-                entries.append(.init(name: try normalizedKey(key), value: value))
-            }
-        }
-        return entries
+        let read = readCommandLineConfig(variables)
+        if let failure = read.failure { throw failure }
+        return read.entries
     }
 
-    /// `GIT_CONFIG_COUNT` entries.
-    private static func countedConfig(
+    /// The entries read before the first one git can't take, and that
+    /// failure.
+    static func readCommandLineConfig(
         _ variables: [String: String]
-    ) throws -> [EnvironmentConfig.CommandLineEntry] {
-        guard let text = variables["GIT_CONFIG_COUNT"] else { return [] }
+    ) -> (entries: [EnvironmentConfig.CommandLineEntry], failure: Error?) {
+        var entries: [EnvironmentConfig.CommandLineEntry] = []
+        do {
+            try countedConfig(variables, into: &entries)
+            if let parameters = variables["GIT_CONFIG_PARAMETERS"] {
+                try GitConfigParameters.entries(parameters) { key, value in
+                    entries.append(.init(name: try normalizedKey(key), value: value))
+                }
+            }
+            return (entries, nil)
+        } catch {
+            return (entries, error)
+        }
+    }
+
+    /// `GIT_CONFIG_COUNT` entries, added to `entries` one by one.
+    private static func countedConfig(
+        _ variables: [String: String], into entries: inout [EnvironmentConfig.CommandLineEntry]
+    ) throws {
+        guard let text = variables["GIT_CONFIG_COUNT"] else { return }
         // git reads the count with `strtoul(…, 10)` and refuses what doesn't
         // end where the number does: an empty value is 0, leading white
         // space and a sign are taken, a negative or overflowing one is
@@ -167,7 +252,6 @@ extension GitClient {
             throw CommandLineConfigError(reason: "too many entries in GIT_CONFIG_COUNT")
         }
         let count = Int(parsed.value)
-        var entries: [EnvironmentConfig.CommandLineEntry] = []
         for index in 0..<count {
             guard let key = variables["GIT_CONFIG_KEY_\(index)"] else {
                 throw CommandLineConfigError(reason: "missing config key GIT_CONFIG_KEY_\(index)")
@@ -177,7 +261,6 @@ extension GitClient {
             }
             entries.append(.init(name: try normalizedKey(key), value: value))
         }
-        return entries
     }
 
     /// Config-file text for `git_config_backend_from_string`, matching
@@ -322,28 +405,60 @@ extension GitClient {
         if let file = plan.systemFile {
             try check(git_config_add_file_ondisk(config, file.resolved, GIT_CONFIG_LEVEL_SYSTEM, repo, 1))
         }
-        guard !plan.commandLine.isEmpty else { return }
-        let file = commandLineConfigFile(plan.commandLine)
+        // The entries up to each include, then the file it includes, each
+        // a level above the one before: in git, what an include reads takes
+        // its place among the entries, so those after it win over it, and
+        // it over those before. A listing sorts by level, so the order
+        // holds there too.
+        var level = GIT_CONFIG_LEVEL_APP.rawValue
+        var segment: [EnvironmentConfig.CommandLineEntry] = []
+        for entry in plan.commandLine {
+            segment.append(entry)
+            guard let include = entry.include else { continue }
+            try addCommandLineBackend(segment, to: config, level: level, repo: repo)
+            segment = []
+            level += 1
+            try check(git_config_add_file_ondisk(config, include, git_config_level_t(rawValue: level), repo, 1))
+            level += 1
+        }
+        if !segment.isEmpty {
+            try addCommandLineBackend(segment, to: config, level: level, repo: repo)
+        }
+    }
+
+    /// `entries` as an in-memory `command line` backend of `config`.
+    private static func addCommandLineBackend(
+        _ entries: [EnvironmentConfig.CommandLineEntry], to config: OpaquePointer?, level: Int32,
+        repo: OpaquePointer?
+    ) throws {
+        let file = commandLineConfigFile(entries)
         var backend: UnsafeMutablePointer<git_config_backend>?
         try file.withCString { text in
-            try "command line".withCString { type in
+            try commandLineBackendType.withCString { type in
                 var options = git_config_backend_memory_options()
                 options.version = UInt32(GIT_CONFIG_BACKEND_MEMORY_OPTIONS_VERSION)
                 options.backend_type = type
                 try check(git_config_backend_from_string(&backend, text, file.utf8.count, &options))
             }
         }
-        try check(git_config_add_backend(config, backend, GIT_CONFIG_LEVEL_APP, repo, 0))
+        try check(git_config_add_backend(config, backend, git_config_level_t(rawValue: level), repo, 0))
     }
+
+    /// The `backend_type` of the command line's entries.
+    private static let commandLineBackendType = "command line"
 
     // MARK: - show-origin
 
     /// What `--show-origin` prints before an entry: `file:<path>`, or
-    /// `command line:` for `GIT_CONFIG_COUNT`'s and `GIT_CONFIG_PARAMETERS`'. A file the environment
+    /// `command line:` for `GIT_CONFIG_COUNT`'s and `GIT_CONFIG_PARAMETERS`'
+    /// (a file one of them includes is a `file:`). A file the environment
     /// names is as typed; the repository's own is relative to the work
     /// tree's top (`base`), as git reads it from there.
     func originName(of entry: git_config_entry, base: String?) -> String {
-        if entry.level == GIT_CONFIG_LEVEL_APP { return "command line:" }
+        if entry.level.rawValue >= GIT_CONFIG_LEVEL_APP.rawValue,
+           entry.backend_type.map({ String(cString: $0) }) == Self.commandLineBackendType {
+            return "command line:"
+        }
         guard let origin = entry.origin_path.map({ String(cString: $0) }) else { return "file:" }
         let plan = Libgit2Sandboxing.shared.environment
         if entry.include_depth == 0 {

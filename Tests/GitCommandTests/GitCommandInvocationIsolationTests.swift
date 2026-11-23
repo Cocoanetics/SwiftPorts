@@ -127,6 +127,12 @@ struct GitCommandInvocationIsolationTests {
                     "\(arguments)")
             #expect(ambient(parent) == before)
         }
+        // A -c include of a refused file is refused the same way.
+        try "[a]\n\tb = secret\n".write(
+            to: secret.appendingPathComponent("leak.cfg"), atomically: false, encoding: .utf8)
+        let included = try await oracle.embedded(
+            ["-c", "include.path=\(secretPath)/leak.cfg", "-C", "repo", "config", "--list"], in: parent)
+        #expect(included == .init(stdout: "", stderr: "git: permission denied by sandbox\n", status: 1))
         let allowed = try await oracle.embedded(["-C", "repo", "log", "--format=%s"], in: parent)
         #expect(allowed == .init(stdout: "one\n", stderr: "", status: 0))
     }

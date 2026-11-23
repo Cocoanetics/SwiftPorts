@@ -212,6 +212,38 @@ struct GitCommandInvocationOracleTests {
         }
     }
 
+    @Test("-c include.path reads the file in its place, as git's command-line includes do")
+    func commandLineIncludes() async throws {
+        let oracle = try GitInvocationOracle(globalConfig: "[user]\n\tname = Global\n")
+        defer { oracle.cleanup() }
+        try await oracle.repository()
+        let root = oracle.root.path
+        try "[user]\n\tname = Included\n[include]\n\tpath = nested.cfg\n".write(
+            to: oracle.root.appendingPathComponent("identity.cfg"), atomically: false, encoding: .utf8)
+        try "[nest]\n\ted = yes\n".write(
+            to: oracle.root.appendingPathComponent("nested.cfg"), atomically: false, encoding: .utf8)
+        let identity = "include.path=\(root)/identity.cfg"
+        for arguments in [
+            ["-c", "user.name=Before", "-c", identity, "-c", "x.after=1",
+             "-C", "repo", "config", "--list", "--show-origin"],
+            ["-c", identity, "-C", "repo", "config", "--get", "user.name"],
+            ["-c", identity, "-c", "user.name=After", "-C", "repo", "config", "--get", "user.name"],
+            ["-c", "user.name=Before", "-c", identity, "-C", "repo", "config", "--get", "user.name"],
+            ["-c", identity, "-C", "repo", "config", "--get", "nest.ed"],
+            ["-c", "include.path=~/../identity.cfg", "-C", "repo", "config", "--get", "user.name"],
+            ["-c", "include.path=\(root)/missing.cfg", "-C", "repo", "config", "--get", "user.name"],
+            ["-c", "include.path=relative.cfg", "-C", "repo", "config", "--list"],
+            ["-c", "include.path", "-C", "repo", "config", "--list"],
+            ["-c", "include.path=", "-C", "repo", "config", "--list"],
+            ["-c", "include.path=relative.cfg", "-c", "bad", "-C", "repo", "config", "--list"],
+            ["-c", "bad", "-c", "include.path=relative.cfg", "-C", "repo", "config", "--list"]
+        ] {
+            try await oracle.compare(arguments, in: oracle.root)
+        }
+        // A command that reads no config never sees the bad include.
+        try await oracle.compare(["-c", "include.path=relative.cfg", "version"], in: oracle.root, stdout: false)
+    }
+
     @Test("keys are checked when the config is read, in git's order and words")
     func configurationErrors() async throws {
         let oracle = try GitInvocationOracle()
