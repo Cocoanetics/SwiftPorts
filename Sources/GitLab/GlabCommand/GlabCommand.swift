@@ -48,7 +48,13 @@ public struct GlabCommand: AsyncParsableCommand {
                 continue
             }
             if arg.hasPrefix("--") {
-                if let equals = arg.firstIndex(of: "="), longs.contains(String(arg[..<equals])) {
+                if let equals = arg.firstIndex(of: "="), bools.contains(String(arg[..<equals])),
+                   arg.index(after: equals) == arg.endIndex {
+                    // An empty bool (`--draft=`) must fail like pflag's
+                    // ParseBool(""); left attached, ArgumentParser would
+                    // drop the `=` and take the next word as the value.
+                    result += [String(arg[..<equals]), ""]
+                } else if let equals = arg.firstIndex(of: "="), longs.contains(String(arg[..<equals])) {
                     result += valued(String(arg[..<equals]), String(arg[arg.index(after: equals)...]))
                 } else if longs.contains(arg), index < args.count {
                     result += valued(arg, args[index])

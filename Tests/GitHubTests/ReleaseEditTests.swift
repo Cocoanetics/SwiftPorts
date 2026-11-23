@@ -76,6 +76,20 @@ extension HTTPMockedNetworkTests {
             // pflag bools never consume the next word: `false` is a 2nd tag.
             #expect(throws: (any Error).self) { try Self.parse(["v1", "--draft", "false"]) }
             #expect(throws: (any Error).self) { try Self.parse(["v1", "--latest=legacy"]) }
+            // An empty bool is ParseBool("") upstream: rejected, never
+            // filled in from the following word.
+            #expect(GhCommand.preprocess(["release", "edit", "v1", "--draft=", "false"])
+                    == ["release", "edit", "v1", "--draft", "", "false"])
+            #expect(throws: (any Error).self) { try Self.parse(["v1", "--draft=", "false"]) }
+            #expect(throws: (any Error).self) { try Self.parse(["v1", "--verify-tag="]) }
+        }
+
+        @Test func emptyBoolFailsBeforeAnyRequest() async throws {
+            let server = Self.published(id: 1, tag: "v1")
+            await #expect(throws: (any Error).self) {
+                _ = try await Self.run(["v1", "--draft=", "false"], server: server)
+            }
+            #expect(server.requests.isEmpty)
         }
 
         /// pflag string options take the next word whatever it looks like,

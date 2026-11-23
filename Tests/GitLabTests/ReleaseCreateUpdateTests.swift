@@ -58,6 +58,19 @@ extension HTTPMockedNetworkTests {
             #expect(try !Self.parse(["v1", "--no-update=false"]).noUpdate)
             #expect(try !Self.parse(["v1"]).noUpdate)
             #expect(throws: (any Error).self) { try Self.parse(["v1", "--no-update=maybe"]) }
+            // An empty bool is ParseBool("") upstream: rejected, never
+            // filled in from the following word.
+            #expect(GlabCommand.preprocess(["release", "create", "v1", "--no-update=", "false"])
+                    == ["release", "create", "v1", "--no-update", "", "false"])
+            #expect(throws: (any Error).self) { try Self.parse(["v1", "--no-update=", "false"]) }
+        }
+
+        @Test func emptyNoUpdateFailsBeforeAnyRequest() async throws {
+            let server = Self.server(existing: Self.release())
+            await #expect(throws: (any Error).self) {
+                _ = try await Self.run(["v1.0", "-r", "main", "-N", "changed", "--no-update=", "false"], server: server)
+            }
+            #expect(server.requests.isEmpty)
         }
 
         /// pflag string options: joined shorthands, values that look like
