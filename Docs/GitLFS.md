@@ -226,7 +226,7 @@ async scope on `BlockingBridge`. No repository needs to exist at entry.
   connection URLs through the enclosing shell's sandbox before native GitKit
   touches them.
 - `preparation` (`RepositoryPreparation`) — creation-time preparation for
-  GitKit 2.16.0+ APIs (`Repository.clone(..., preparation:)` and
+  GitKit 2.17.0+ APIs (`Repository.clone(..., preparation:)` and
   `Repository.worktreeAdd(..., preparation:)`). Installs the operation's
   `ConfigIncludePolicy`, `ShellSigner`, and effective configuration levels via
   GitKit's typed `Repository.addConfigFile(at:level:)` and
@@ -262,19 +262,21 @@ this public surface with only `GitKit`, `GitLFSKit`, `GitLFSTestSupport`, and
 `ShellKit` (no `@testable` or SPI imports).
 
 `withRepository`'s open and `body`, and `createRepository`'s `body`, run inside
-GitKit 2.16.0's `Repository.withOperationConfiguration`, so the same effective
+GitKit's `Repository.withOperationConfiguration`, so the same effective
 configuration levels and include policy also reach the submodule handles libgit2
 opens internally during `status()` / `diff` ([GitKit #98](https://github.com/Cocoanetics/GitKit/issues/98)),
 without writing anything to a repository's config. Creation itself relies on
-`RepositoryPreparation`. An include refused during the new repository's own
-`git_repository_init` open — from a search-path level (`$HOME`, XDG, system),
-or from the enclosing operation's levels when `createRepository` is nested in
-another operation body — still leaves what libgit2 created. That rollback
-belongs to GitKit ([GitKit #101](https://github.com/Cocoanetics/GitKit/issues/101),
-[GitKit #103](https://github.com/Cocoanetics/GitKit/issues/103)) and is not yet
-released; the public `nestedCreationIncludeDenial` and
-`nestedCreationConfiguration` tests are its acceptance cases and fail until it
-is adopted.
+`RepositoryPreparation` and inherits an enclosing body's configuration scope
+when nested. The required GitKit 2.17.0 release rolls back initialization when
+an include is refused during the new repository's own `git_repository_init`
+open, including search-path configuration (`$HOME`, XDG, system) and inherited
+operation levels ([GitKit #101](https://github.com/Cocoanetics/GitKit/issues/101),
+[GitKit #103](https://github.com/Cocoanetics/GitKit/issues/103)). GitKit owns the
+rollback: it removes the artifacts it created only while their identity and
+contents still match, preserving pre-existing files and concurrent changes.
+The public `nestedCreationIncludeDenial` acceptance test covers missing, empty
+and occupied destinations, artifact cleanup and retry; `nestedCreationConfiguration`
+checks first-checkout configuration and LFS content without persisting settings.
 Cancellation is never an optional (`filter.lfs.required=false`) fallback: clean
 and smudge rethrow it instead of passing content through. The public
 `recursiveSubmodules` regression forces an unchanged CRLF file to be rehashed

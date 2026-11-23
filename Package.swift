@@ -517,8 +517,10 @@ let package = Package(
         // repository preparation callbacks for clone/worktree bootstrap (#89, #90).
         // 2.16.0's `Repository.withOperationConfiguration` gives an operation's
         // config levels to the submodule handles libgit2 opens itself (#98).
+        // 2.17.0 rolls back clone/worktree initialization when an include is
+        // refused before repository preparation, preserving existing files (#101).
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.16.0",
+                 from: "2.17.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface

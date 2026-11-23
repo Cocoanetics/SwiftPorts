@@ -83,8 +83,8 @@ package struct GitRepositoryOperation {
 
     /// Gives the operation's configuration to the repositories libgit2 opens
     /// on this thread for `body`, including each submodule's during status
-    /// and diff. Creation stays outside: `RepositoryPreparation` covers it,
-    /// and a refused include must fail it before libgit2 creates anything.
+    /// and diff. Creation uses `RepositoryPreparation` and can inherit an
+    /// enclosing scope; GitKit rolls back initialization if an include is refused.
     private func scoped<T>(_ body: () throws -> T) throws -> T {
         try context.rethrowDenial {
             try Repository.withOperationConfiguration(context.operationConfiguration, body)

@@ -95,10 +95,9 @@ extension PublicOperationTests {
 }
 
 extension PublicOperationTests {
-    /// Acceptance case for GitKit's creation rollback (GitKit #101 / #103).
-    /// Until a released GitKit rolls back a failed `git_repository_init`
-    /// open, the missing/empty clone and missing worktree cases fail on the
-    /// artifacts libgit2 leaves behind.
+    /// Acceptance case for GitKit 2.17.0's creation rollback (GitKit #101 / #103).
+    /// A failed `git_repository_init` open must remove only its own artifacts
+    /// and leave the destination ready for retry.
     @Test("nested clone and worktree creation roll back a denied conditional include and retry cleanly",
           arguments: ["clone", "worktree"], ["missing", "empty", "occupied"])
     func nestedCreationIncludeDenial(kind: String, destinationState: String) async throws {
