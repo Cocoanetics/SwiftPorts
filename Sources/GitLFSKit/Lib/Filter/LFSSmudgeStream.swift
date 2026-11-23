@@ -80,6 +80,7 @@ final class LFSSmudgeStream: GitFilterStream {
             // Git's delayed checkout fails if filter-process exits, even for an optional driver.
             guard configuration.skipDownloadErrors || (!context.required && context.processCommand == nil)
             else { throw failure }
+            try context.rethrowCancellation(error)
             let fallback = configuration.skipDownloadErrors ? Data(pointer.encoded.utf8) : probe
             try fallback.withUnsafeBytes(output)
             return

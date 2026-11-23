@@ -2765,6 +2765,18 @@ struct GitCommandRemoteTests {
         let url = try await git(["clone", "file://\(remote.path)", "viaurl"], in: clone)
         #expect(url.stderr == "Cloning into 'viaurl'...\n")
     }
+
+    @Test("git clone checks out with the environment's config, without writing it")
+    func cloneEnvironmentConfigBeforeCheckout() async throws {
+        let (remote, clone) = try makeRemoteAndClone()
+        _ = try await git(["clone", "-q", remote.path, "crlf"], in: clone, environment: [
+            "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.autocrlf", "GIT_CONFIG_VALUE_0": "true"
+        ])
+        let checkout = clone.appendingPathComponent("crlf")
+        #expect(try Data(contentsOf: checkout.appendingPathComponent("file.txt")) == Data("one\r\n".utf8))
+        let local = try String(contentsOf: checkout.appendingPathComponent(".git/config"), encoding: .utf8)
+        #expect(!local.contains("autocrlf"))
+    }
 }
 #endif
 // swiftlint:enable file_length type_body_length

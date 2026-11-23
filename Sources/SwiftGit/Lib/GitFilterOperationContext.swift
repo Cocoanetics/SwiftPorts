@@ -16,6 +16,7 @@ package final class GitFilterOperationContext: @unchecked Sendable {
     private let environment: EnvironmentConfig
     private let gate: ConfigIncludeGate
     private let deferFilterFailures: Bool
+    private let cancellation: BlockingBridgeCancellation?
 
     enum Failure: Error, Equatable {
         case expired
@@ -24,12 +25,13 @@ package final class GitFilterOperationContext: @unchecked Sendable {
     }
 
     init(shell: Shell, credentials: CredentialProvider?, environment: EnvironmentConfig, gate: ConfigIncludeGate,
-         deferFilterFailures: Bool = false) {
+         deferFilterFailures: Bool = false, cancellation: BlockingBridgeCancellation? = nil) {
         self.shell = shell
         self.credentials = credentials
         self.environment = environment
         self.gate = gate
         self.deferFilterFailures = deferFilterFailures
+        self.cancellation = cancellation
     }
 
     /// Capture on the libgit2 callback thread, before starting async work.
@@ -51,13 +53,14 @@ package final class GitFilterOperationContext: @unchecked Sendable {
             }
             Thread.current.threadDictionary[Self.threadKey] = previous
         }
-        let result = Result { try body() }
+        let result = Result { try rethrowDenial(body) }
         // Checkout has finished writing its index. Do not leave empty failed
         // output cached against the original blob, even if another path threw.
         let paths = lock.withLock { failedPaths }
         let repair = Result { try gate.run { try GitFilterIndex.invalidate(paths) } }
         let value = try result.get()
         try repair.get()
+        try cancellation?.checkCancellation()
         if let failure = lock.withLock({ deferredFailure }) { throw failure }
         return value
     }
@@ -93,13 +96,141 @@ package final class GitFilterOperationContext: @unchecked Sendable {
         try lock.withLock {
             guard active else { throw Failure.expired }
         }
+        try cancellation?.checkCancellation()
+    }
+
+    /// Throws once the enclosing operation is cancelled, so a filter can tell
+    /// cancellation from a transform failure it may fall back from.
+    package func checkCancellation() throws {
+        try cancellation?.checkCancellation()
+    }
+
+    /// Synchronous facilities are usable only on the enclosing GitKit thread.
+    package func checkCurrent() throws {
+        try checkActive()
+        guard try Self.capture() === self else { throw Failure.unsupportedOperation }
+    }
+
+    package func runBlocking<T: Sendable>(
+        onDiscard: @Sendable (T) -> Void = { _ in },
+        _ body: @escaping @Sendable () async throws -> T
+    ) throws -> T {
+        try checkActive()
+        return try BlockingBridge.runBlocking(cancellation: cancellation, onDiscard: onDiscard) { [shell] in
+            try await shell.withCurrent(body)
+        }
+    }
+
+    /// Authorize an `[include]` path encountered during the outer synchronous
+    /// operation without replaying host mutations. Never bridges on the async
+    /// callback thread (`filterContext.isolated` uses its async retry loop).
+    func authorizeInclude(_ path: String) -> Bool {
+        let isActive = lock.withLock { active }
+        guard isActive else { return false }
+        do {
+            try cancellation?.checkCancellation()
+        } catch {
+            gate.recordDenial(error)
+            return false
+        }
+        if !gate.enforcing || gate.isAllowed(path) { return true }
+        guard Thread.current.threadDictionary[Self.threadKey] as? GitFilterOperationContext === self else {
+            gate.refuse(path)
+            return false
+        }
+        let url = URL(fileURLWithPath: ConfigIncludeGate.readablePath(path))
+        do {
+            try BlockingBridge.runBlocking(cancellation: cancellation) { [shell] in
+                try await shell.withCurrent { try await Shell.authorize(url) }
+            }
+            gate.allow(path)
+            return true
+        } catch {
+            gate.recordDenial(error)
+            return false
+        }
+    }
+
+    /// Per-repository include policy bound to this operation; refuses includes
+    /// once the enclosing operation ends so escaped handles fail closed.
+    var includePolicy: ConfigIncludePolicy {
+        ConfigIncludePolicy { [weak self] include in
+            guard let self else { return false }
+            return self.authorizeInclude(include.path)
+        }
+    }
+
+    /// Surface the exact sandbox denial or cancellation recorded by an include
+    /// callback instead of libgit2's generic refusal error.
+    package func rethrowDenial<T>(_ body: () throws -> T) throws -> T {
+        if let denial = gate.takeDenial() { throw denial }
+        let result = Result { try body() }
+        // libgit2 can suppress an internal submodule open error and return
+        // success. Preserve the include callback's denial in that case too.
+        if let denial = gate.takeDenial() { throw denial }
+        return try result.get()
+    }
+
+    /// Install this operation's include policy, signer, effective configuration
+    /// levels and syntax checks on `repository`.
+    package func prepareRepository(_ repository: Repository) throws {
+        try checkCurrent()
+        let directory = try repository.workdirURL
+            ?? repository.gitDir().map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? URL(fileURLWithPath: shell.environment.workingDirectory)
+        let client = GitClient(workingDirectory: directory, credentials: credentials)
+        try rethrowDenial {
+            try gate.run(authorizing: { [self] in authorizeInclude($0) }, {
+                try repository.setIncludePolicy(includePolicy)
+                try client.prepare(repository, cancellation: cancellation)
+            })
+        }
+    }
+
+    /// This operation's effective levels and include policy for every
+    /// repository libgit2 opens on this thread, including the submodule
+    /// handles it opens itself during status and diff. Settings git reads
+    /// from a repository's own config only are left to exposed handles.
+    var operationConfiguration: OperationConfiguration {
+        var levels: [OperationConfiguration.Level] = []
+        if let file = environment.globalFile {
+            levels.append(.file(URL(fileURLWithPath: file.resolved), .global))
+        }
+        if let file = environment.systemFile {
+            levels.append(.file(URL(fileURLWithPath: file.resolved), .system))
+        }
+        let entries = environment.commandLine
+            .filter { !Self.isRepositoryOnly($0.name) }
+            .map { ConfigEntry(name: $0.name, value: $0.value) }
+        if !entries.isEmpty {
+            levels.append(.entries(entries, .app, name: "command line"))
+        }
+        return OperationConfiguration(levels: levels, includePolicy: includePolicy)
+    }
+
+    /// `core.repositoryformatversion`, `core.bare`, `core.worktree` and
+    /// `extensions.*`, which an operation level refuses.
+    private static func isRepositoryOnly(_ name: String) -> Bool {
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        if parts.first == "extensions" { return true }
+        return parts.count == 2 && parts[0] == "core"
+            && ["repositoryformatversion", "bare", "worktree"].contains(parts[1])
+    }
+
+    package func authorize(_ url: URL) throws {
+        try checkCurrent()
+        try runBlocking { try await Shell.authorize(url) }
+    }
+
+    package func client(at directory: URL) -> GitClient {
+        GitClient(workingDirectory: directory, credentials: credentials)
     }
 
     /// The client a push lends its isolation to while it waits for
     /// `beforeSending` (`git push` with git-lfs's pre-push hook): unlike a
     /// filter's, every git operation it runs goes ahead in the push's
     /// isolation, one at a time. The push is blocked until `body` returns.
-    func withLentClient<T: Sendable>(
+    package func withLentClient<T: Sendable>(
         _ outer: GitClient, _ body: @Sendable (GitClient) async throws -> T
     ) async throws -> T {
         try await shell.withCurrent {

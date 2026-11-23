@@ -393,16 +393,23 @@ extension GitClient {
         Mirror(reflecting: repository).children.first { $0.label == "pointer" }?.value as? OpaquePointer
     }
 
-    /// Gives the environment's config to the repository `repository` holds
-    /// (see ``installEnvironmentConfig(intoRepository:)``).
+    /// Gives the environment's config to `repository` through GitKit's typed
+    /// config-level API: `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM` at their
+    /// levels and `GIT_CONFIG_COUNT` above all. Call inside
+    /// ``Libgit2Sandboxing/runIsolated(_:environment:body:)``.
     static func installEnvironmentConfig(into repository: Repository) throws {
-        guard Libgit2Sandboxing.shared.environment.needsInstall else { return }
-        guard let pointer = handle(of: repository) else {
-            throw Libgit2Error(
-                code: -1, klass: Int32(GIT_ERROR_CONFIG.rawValue),
-                message: "cannot reach GitKit's repository handle to apply GIT_CONFIG_* to it")
+        let plan = Libgit2Sandboxing.shared.environment
+        guard plan.needsInstall else { return }
+        if let file = plan.globalFile {
+            try repository.addConfigFile(at: URL(fileURLWithPath: file.resolved), level: .global)
         }
-        try installEnvironmentConfig(intoRepository: pointer)
+        if let file = plan.systemFile {
+            try repository.addConfigFile(at: URL(fileURLWithPath: file.resolved), level: .system)
+        }
+        if !plan.commandLine.isEmpty {
+            let entries = plan.commandLine.map { ConfigEntry(name: $0.name, value: $0.value) }
+            try repository.addConfigEntries(entries, level: .app, name: "command line")
+        }
     }
 
     /// Gives the environment's config to the live config of `repo`: the
