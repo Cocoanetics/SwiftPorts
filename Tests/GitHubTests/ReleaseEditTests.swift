@@ -13,9 +13,8 @@ import Testing
 /// (including ``GhCommand/preprocess(_:)``). Behavior follows
 /// cli/cli `pkg/cmd/release/edit` + `shared/fetch.go` at de06af2.
 ///
-/// swift-corelibs-foundation (Linux, Windows) doesn't hand upload
-/// bodies to a `URLProtocol`, so wire-payload checks run where the body
-/// arrives; ``payloadFromParsedArgv()`` covers the payload everywhere.
+/// Wire payloads are asserted on every platform: `MockURLProtocol`
+/// restores corelibs' upload bodies (see `URLRequest+UploadBody`).
 extension HTTPMockedNetworkTests {
     @Suite struct ReleaseEditTests {
         // MARK: SDK encoding
@@ -131,43 +130,39 @@ extension HTTPMockedNetworkTests {
                 "GET /repos/cli/cli/releases/tags/v1.0",
                 "PATCH /repos/cli/cli/releases/42"
             ])
-            if let body = try server.payload("PATCH /repos/cli/cli/releases/42") {
-                #expect(body.count == 5)
-                #expect(body["tag_name"] as? String == "v1.0")
-                #expect(body["name"] as? String == "")
-                #expect(body["body"] as? String == "")
-                #expect(body["draft"] as? Bool == false)
-                #expect(body["make_latest"] as? String == "false")
-            }
+            let body = try server.payload("PATCH /repos/cli/cli/releases/42")
+            #expect(body.count == 5)
+            #expect(body["tag_name"] as? String == "v1.0")
+            #expect(body["name"] as? String == "")
+            #expect(body["body"] as? String == "")
+            #expect(body["draft"] as? Bool == false)
+            #expect(body["make_latest"] as? String == "false")
         }
 
         @Test func dashPrefixedAndAttachedEmptyValuesReachTheWrite() async throws {
             let server = Self.published(id: 42, tag: "v1.0")
             _ = try await Self.run(["v1.0", "--notes", "- Fixed a bug", "--title="], server: server)
             #expect(server.rest.map(\.method) == ["GET", "PATCH"])
-            if let body = try server.payload("PATCH /repos/cli/cli/releases/42") {
-                #expect(body["body"] as? String == "- Fixed a bug")
-                #expect(body["name"] as? String == "")
-            }
+            let body = try server.payload("PATCH /repos/cli/cli/releases/42")
+            #expect(body["body"] as? String == "- Fixed a bug")
+            #expect(body["name"] as? String == "")
         }
 
         @Test func titleOnlyEditSendsNoDatesTargetOrStateDefaults() async throws {
             let server = Self.published(id: 42, tag: "v1.0")
             // Empty --tag / --target count as flags but never become keys.
             _ = try await Self.run(["v1.0", "-t", "New", "--tag", "", "--target", ""], server: server)
-            if let body = try server.payload("PATCH /repos/cli/cli/releases/42") {
-                #expect(body.keys.sorted() == ["name", "tag_name"])
-                #expect(body["tag_name"] as? String == "v1.0")
-            }
+            let body = try server.payload("PATCH /repos/cli/cli/releases/42")
+            #expect(body.keys.sorted() == ["name", "tag_name"])
+            #expect(body["tag_name"] as? String == "v1.0")
         }
 
         @Test func repoFlagAloneSatisfiesFlagCheckAndCarriesTag() async throws {
             let server = Self.published(id: 42, tag: "v1.0")
             _ = try await Self.run(["v1.0", "-R", "cli/cli"], server: server)
             #expect(server.rest.map(\.method) == ["GET", "PATCH"])
-            if let body = try server.payload("PATCH /repos/cli/cli/releases/42") {
-                #expect(body.keys.sorted() == ["tag_name"])
-            }
+            let body = try server.payload("PATCH /repos/cli/cli/releases/42")
+            #expect(body.keys.sorted() == ["tag_name"])
         }
 
         @Test func tagIsOneEscapedPathSegment() async throws {
@@ -180,10 +175,9 @@ extension HTTPMockedNetworkTests {
             }
             _ = try await Self.run(["release/1.0%#", "--prerelease"], server: server)
             #expect(server.rest.map(\.method) == ["GET", "PATCH"])
-            if let body = try server.payload("PATCH /repos/cli/cli/releases/5") {
-                #expect(body["tag_name"] as? String == "release/1.0%#")
-                #expect(body["prerelease"] as? Bool == true)
-            }
+            let body = try server.payload("PATCH /repos/cli/cli/releases/5")
+            #expect(body["tag_name"] as? String == "release/1.0%#")
+            #expect(body["prerelease"] as? Bool == true)
         }
 
         // MARK: Draft release
@@ -213,15 +207,13 @@ extension HTTPMockedNetworkTests {
             #expect(graphQL < byID && byID < patch)
             #expect(lines.filter { $0.hasPrefix("PATCH") }.count == 1)
 
-            if let query = try server.payload("POST /graphql") {
-                #expect((query["query"] as? String)?.contains("query RepositoryReleaseByTag(") == true)
-                let variables = try #require(query["variables"] as? [String: String])
-                #expect(variables == ["owner": "cli", "name": "cli", "tagName": "v2.0"])
-            }
-            if let body = try server.payload("PATCH /repos/cli/cli/releases/7") {
-                #expect(body.keys.sorted() == ["discussion_category_name", "draft", "tag_name"])
-                #expect(body["draft"] as? Bool == false)
-            }
+            let query = try server.payload("POST /graphql")
+            #expect((query["query"] as? String)?.contains("query RepositoryReleaseByTag(") == true)
+            let variables = try #require(query["variables"] as? [String: String])
+            #expect(variables == ["owner": "cli", "name": "cli", "tagName": "v2.0"])
+            let body = try server.payload("PATCH /repos/cli/cli/releases/7")
+            #expect(body.keys.sorted() == ["discussion_category_name", "draft", "tag_name"])
+            #expect(body["draft"] as? Bool == false)
         }
 
         @Test func failedDraftLookupDoesNotMaskPublishedNotFound() async throws {
@@ -270,9 +262,8 @@ extension HTTPMockedNetworkTests {
 
         // MARK: Verify tag
 
-        // GraphQL answers both the draft lookup and RepositoryFindRef with
-        // one payload, since the operation name is in the (not always
-        // delivered) body.
+        // GraphQL answers both the draft lookup and RepositoryFindRef
+        // with one payload; the requests are told apart by their bodies.
 
         @Test func verifyTagAbortsWhenReplacementTagIsMissing() async throws {
             let server = FakeGitHub()
@@ -282,11 +273,10 @@ extension HTTPMockedNetworkTests {
                 _ = try await Self.run(["v1", "--tag", "v2", "--verify-tag"], server: server)
             }
             #expect(!server.requests.contains { $0.method == "PATCH" })
-            if let findRef = try server.payloads("POST /graphql").first(where: {
+            let findRef = try #require(try server.payloads("POST /graphql").first {
                 ($0["query"] as? String)?.contains("RepositoryFindRef") == true
-            }) {
-                #expect((findRef["variables"] as? [String: String])?["tagName"] == "refs/tags/v2")
-            }
+            })
+            #expect((findRef["variables"] as? [String: String])?["tagName"] == "refs/tags/v2")
         }
 
         @Test func verifyTagPassesAndRenames() async throws {
@@ -298,10 +288,9 @@ extension HTTPMockedNetworkTests {
             server.route("PATCH", "/repos/cli/cli/releases/1") { (200, Self.release(id: 1, tag: "v2")) }
             _ = try await Self.run(["v1", "--tag", "v2", "--verify-tag", "--target", "main"], server: server)
             #expect(server.rest.map(\.method) == ["GET", "PATCH"])
-            if let body = try server.payload("PATCH /repos/cli/cli/releases/1") {
-                #expect(body.keys.sorted() == ["tag_name", "target_commitish"])
-                #expect(body["tag_name"] as? String == "v2")
-            }
+            let body = try server.payload("PATCH /repos/cli/cli/releases/1")
+            #expect(body.keys.sorted() == ["tag_name", "target_commitish"])
+            #expect(body["tag_name"] as? String == "v2")
         }
 
         @Test func verifyTagWithoutReplacementTagSkipsTheCheck() async throws {
@@ -345,23 +334,20 @@ extension HTTPMockedNetworkTests {
             let server = Self.published(id: 1, tag: "v1")
             _ = try await Self.run(["v1", "--notes", "inline", "-Fnotes.md"], server: server, root: root)
             #expect(server.rest.map(\.method) == ["GET", "PATCH"])
-            if let body = try server.payload("PATCH /repos/cli/cli/releases/1") {
-                #expect(body["body"] as? String == notes)
-            }
+            let body = try server.payload("PATCH /repos/cli/cli/releases/1")
+            #expect(body["body"] as? String == notes)
         }
 
         @Test func notesFileDashReadsStdinAndNotesDashIsLiteral() async throws {
             let server = Self.published(id: 1, tag: "v1")
             _ = try await Self.run(["v1", "--notes-file", "-"], server: server, stdin: "from stdin\n")
-            if let body = try server.payload("PATCH /repos/cli/cli/releases/1") {
-                #expect(body["body"] as? String == "from stdin\n")
-            }
+            let body = try server.payload("PATCH /repos/cli/cli/releases/1")
+            #expect(body["body"] as? String == "from stdin\n")
 
             let literal = Self.published(id: 1, tag: "v1")
             _ = try await Self.run(["v1", "--notes", "-"], server: literal, stdin: "unused")
-            if let body = try literal.payload("PATCH /repos/cli/cli/releases/1") {
-                #expect(body["body"] as? String == "-")
-            }
+            let literalBody = try literal.payload("PATCH /repos/cli/cli/releases/1")
+            #expect(literalBody["body"] as? String == "-")
         }
 
         @Test func notesFileOutsideSandboxIsDeniedBeforeAnyRequest() async throws {
@@ -481,17 +467,15 @@ extension HTTPMockedNetworkTests {
         /// published one, so whether it is logged depends on timing.
         var rest: [FakeGitHubRequest] { requests.filter { !$0.path.hasSuffix("/graphql") } }
 
-        /// JSON body of the first `line` request, which must exist; nil
-        /// where the platform doesn't deliver upload bodies.
-        func payload(_ line: String) throws -> [String: Any]? {
+        /// JSON body of the first `line` request; both must exist.
+        func payload(_ line: String) throws -> [String: Any] {
             let request = try #require(requests.first { $0.line == line })
-            return request.body.isEmpty ? nil : try ReleaseEditTests.json(request.body)
+            return try ReleaseEditTests.json(request.body)
         }
 
-        /// JSON bodies of every delivered `line` request.
+        /// JSON bodies of every `line` request.
         func payloads(_ line: String) throws -> [[String: Any]] {
-            try requests.filter { $0.line == line && !$0.body.isEmpty }
-                .map { try ReleaseEditTests.json($0.body) }
+            try requests.filter { $0.line == line }.map { try ReleaseEditTests.json($0.body) }
         }
 
         func route(_ method: String, _ path: String, _ response: @escaping () -> (Int, String)) {

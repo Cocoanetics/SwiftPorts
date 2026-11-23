@@ -13,9 +13,8 @@ import Testing
 /// driven through parsed argv. Behavior follows gitlab-org/cli
 /// `internal/commands/release/create/create.go` at 74ee3ce.
 ///
-/// swift-corelibs-foundation (Linux, Windows) doesn't hand upload
-/// bodies to a `URLProtocol`, so wire-payload checks run where the body
-/// arrives; the "Payloads" tests cover the bodies everywhere.
+/// Wire payloads are asserted on every platform: `MockURLProtocol`
+/// restores corelibs' upload bodies (see `URLRequest+UploadBody`).
 extension HTTPMockedNetworkTests {
     @Suite struct ReleaseCreateUpdateTests {
         static let project = "/api/v4/projects/group%2Fsub%2Frepo"
@@ -106,11 +105,10 @@ extension HTTPMockedNetworkTests {
             ])
             // Upstream resends name + description; ref never goes into an update,
             // and no date / milestones are injected.
-            if let body = try server.payload(1) {
-                #expect(body.count == 2)
-                #expect(body["name"] as? String == "New")
-                #expect(body["description"] as? String == "keep me")
-            }
+            let body = try server.payload(1)
+            #expect(body.count == 2)
+            #expect(body["name"] as? String == "New")
+            #expect(body["description"] as? String == "keep me")
             #expect(out.contains("• Creating or updating release repo=group/sub/repo tag=v1.0\n"))
             #expect(out.contains("✓ Release updated\turl=https://gitlab.com/group/sub/repo/-/releases/v1.0\n"))
             #expect(out.contains("✓ Release succeeded after "))
@@ -121,10 +119,9 @@ extension HTTPMockedNetworkTests {
             server.route("PUT", "\(Self.project)/releases/v1.0") { (200, Self.release()) }
             _ = try await Self.run(["v1.0", "-N", "", "-r", "main"], server: server)
             #expect(server.requests.map(\.method) == ["GET", "PUT"])
-            if let body = try server.payload(1) {
-                #expect(body["name"] as? String == "Old")
-                #expect(body["description"] as? String == "")
-            }
+            let body = try server.payload(1)
+            #expect(body["name"] as? String == "Old")
+            #expect(body["description"] as? String == "")
         }
 
         @Test func missingNameFallsBackToTag() async throws {
@@ -132,10 +129,9 @@ extension HTTPMockedNetworkTests {
             server.route("PUT", "\(Self.project)/releases/v1.0") { (200, Self.release()) }
             _ = try await Self.run(["v1.0", "-n", "", "-r", "main"], server: server)
             #expect(server.requests.map(\.method) == ["GET", "PUT"])
-            if let body = try server.payload(1) {
-                #expect(body["name"] as? String == "v1.0")
-                #expect(body["description"] as? String == "")
-            }
+            let body = try server.payload(1)
+            #expect(body["name"] as? String == "v1.0")
+            #expect(body["description"] as? String == "")
         }
 
         @Test func noUpdateRefusesExistingRelease() async throws {
@@ -178,12 +174,11 @@ extension HTTPMockedNetworkTests {
             let out = try await Self.run(["v1.0", "-r", "abc123"], server: server)
             #expect(server.requests.map(\.method) == ["GET", "POST"])
             // Empty notes are omitted; the name falls back to the tag.
-            if let body = try server.payload(1) {
-                #expect(body.count == 3)
-                #expect(body["tag_name"] as? String == "v1.0")
-                #expect(body["name"] as? String == "v1.0")
-                #expect(body["ref"] as? String == "abc123")
-            }
+            let body = try server.payload(1)
+            #expect(body.count == 3)
+            #expect(body["tag_name"] as? String == "v1.0")
+            #expect(body["name"] as? String == "v1.0")
+            #expect(body["ref"] as? String == "abc123")
             #expect(out.contains("✓ Release created:\turl="))
         }
 
@@ -214,10 +209,9 @@ extension HTTPMockedNetworkTests {
                 "GET \(Self.project)/releases/v1.0",
                 "POST \(Self.project)/releases"
             ])
-            if let body = try server.payload(3) {
-                #expect(body["ref"] as? String == "trunk")
-                #expect(body["description"] as? String == "notes")
-            }
+            let body = try server.payload(3)
+            #expect(body["ref"] as? String == "trunk")
+            #expect(body["description"] as? String == "notes")
             #expect(out.hasPrefix("• Validating tag v1.0\n• Tag does not exist.\n"))
             #expect(out.contains("• using default branch \"trunk\" as ref\n"))
         }
@@ -229,9 +223,8 @@ extension HTTPMockedNetworkTests {
             server.route("POST", "\(Self.project)/releases") { (201, Self.release()) }
             _ = try await Self.run(["v1.0"], server: server)
             #expect(server.requests.map(\.method) == ["GET", "GET", "POST"])
-            if let body = try server.payload(2) {
-                #expect(body["ref"] == nil)
-            }
+            let body = try server.payload(2)
+            #expect(body["ref"] == nil)
         }
 
         @Test func tagIsOneEscapedPathSegment() async throws {
@@ -252,9 +245,8 @@ extension HTTPMockedNetworkTests {
             let (_, err) = try await Self.runCapturing(
                 ["v1.0", "-N", "inline", "-F", "-", "-r", "main"], server: server, stdin: stdin)
             #expect(server.requests.map(\.method) == ["GET", "PUT"])
-            if let body = try server.payload(1) {
-                #expect(body["description"] as? String == "inline")
-            }
+            let body = try server.payload(1)
+            #expect(body["description"] as? String == "inline")
             #expect(err.contains("--notes and --notes-file were both given: using --notes and ignoring --notes-file."))
             #expect(String(decoding: await stdin.readAllData(), as: UTF8.self) == "untouched")
         }
@@ -268,17 +260,15 @@ extension HTTPMockedNetworkTests {
             server.route("PUT", "\(Self.project)/releases/v1.0") { (200, Self.release()) }
             _ = try await Self.run(["v1.0", "-F", "CHANGELOG.md", "-r", "main"], server: server, root: root)
             #expect(server.requests.map(\.method) == ["GET", "PUT"])
-            if let body = try server.payload(1) {
-                #expect(body["description"] as? String == notes)
-            }
+            let body = try server.payload(1)
+            #expect(body["description"] as? String == notes)
 
             let piped = Self.server(existing: Self.release())
             piped.route("PUT", "\(Self.project)/releases/v1.0") { (200, Self.release()) }
             _ = try await Self.run(["v1.0", "-F", "-", "-r", "main"], server: piped,
                                    stdin: .string("from stdin\n"))
-            if let body = try piped.payload(1) {
-                #expect(body["description"] as? String == "from stdin\n")
-            }
+            let pipedBody = try piped.payload(1)
+            #expect(pipedBody["description"] as? String == "from stdin\n")
         }
 
         @Test func notesFileOutsideSandboxIsDeniedBeforeAnyRequest() async throws {
@@ -375,12 +365,11 @@ extension HTTPMockedNetworkTests {
 
         var requests: [FakeGitLabRequest] { lock.withLock { log } }
 
-        /// JSON body of request `index`, which must exist; nil where the
-        /// platform doesn't deliver upload bodies.
-        func payload(_ index: Int) throws -> [String: Any]? {
+        /// JSON body of request `index`; both must exist.
+        func payload(_ index: Int) throws -> [String: Any] {
             let all = requests
             try #require(index < all.count)
-            return all[index].body.isEmpty ? nil : try ReleaseCreateUpdateTests.json(all[index].body)
+            return try ReleaseCreateUpdateTests.json(all[index].body)
         }
 
         func route(_ method: String, _ path: String, _ response: @escaping () -> (Int, String)) {

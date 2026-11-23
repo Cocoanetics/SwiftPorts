@@ -42,7 +42,7 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
             return
         }
         do {
-            let (response, data) = try handler(request)
+            let (response, data) = try handler(request.withUploadBody(from: task))
             client?.urlProtocol(self, didReceive: response,
                                 cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: data)
