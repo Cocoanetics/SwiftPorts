@@ -112,6 +112,9 @@ extension HTTPMockedNetworkTests {
             #expect(literal.notes == "---")
             #expect(literal.title == "--json")
             #expect(literal.target == "--")
+            // pflag strips a shorthand's `=` only when a value follows it.
+            #expect(try Self.parse(["v1", "-n="]).notes == "=")
+            #expect(try Self.parse(["v1", "-t=x"]).title == "x")
             let terminator = try Self.parse(["v1", "-n", "--", "--draft"])
             #expect(terminator.notes == "--")
             #expect(terminator.draft == ReleaseEditBool(true))
@@ -260,6 +263,20 @@ extension HTTPMockedNetworkTests {
             server.route("POST", "/graphql") { (200, #"{"data":{"repository":{"release":null}}}"#) }
             await #expect(throws: ReleaseEditError.releaseNotFound) {
                 _ = try await Self.run(["v9", "--draft"], server: server)
+            }
+            #expect(!server.requests.contains { $0.method == "PATCH" })
+        }
+
+        @Test func notFoundWinsWhenTheOtherLookupErrors() async throws {
+            // Upstream FetchRelease (de06af2): when both lookups fail it
+            // reports the second error if that is "not found", else the
+            // first — so a 404 plus any other error is "release not found"
+            // in either completion order.
+            let server = FakeGitHub()
+            server.route("GET", "/repos/cli/cli/releases/tags/v1") { (404, #"{"message":"Not Found"}"#) }
+            server.route("POST", "/graphql") { (502, #"{"message":"bad gateway"}"#) }
+            await #expect(throws: ReleaseEditError.releaseNotFound) {
+                _ = try await Self.run(["v1", "--draft"], server: server)
             }
             #expect(!server.requests.contains { $0.method == "PATCH" })
         }

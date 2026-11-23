@@ -89,6 +89,10 @@ extension HTTPMockedNetworkTests {
             #expect(dashed.notes == "- Fixed a bug")
             #expect(dashed.name == "---")
 
+            // pflag strips a shorthand's `=` only when a value follows it.
+            #expect(try Self.parse(["v1", "-N="]).notes == "=")
+            #expect(try Self.parse(["v1", "-N=x"]).notes == "x")
+
             let emptied = try Self.parse(["--notes=", "v1"])
             #expect(emptied.tagName == "v1")
             #expect(emptied.notes == "")

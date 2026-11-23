@@ -91,8 +91,10 @@ public struct GhCommand: AsyncParsableCommand {
             }
             if arg.count >= 2, arg.first == "-", let long = shorts[arg[arg.index(after: arg.startIndex)]] {
                 // pflag shorthand: `-n x`, `-nx`, or `-n=x`.
+                // pflag strips the `=` only when a value follows it, so
+                // `-n=` carries the literal value "=".
                 var joined = String(arg.dropFirst(2))
-                if joined.hasPrefix("=") { joined.removeFirst() }
+                if joined.hasPrefix("="), joined.count > 1 { joined.removeFirst() }
                 if arg.count > 2 {
                     result += valued(long, joined)
                 } else if index < args.count {
