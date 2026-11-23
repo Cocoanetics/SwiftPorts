@@ -265,8 +265,15 @@ this public surface with only `GitKit`, `GitLFSKit`, `GitLFSTestSupport`, and
 GitKit 2.16.0's `Repository.withOperationConfiguration`, so the same effective
 configuration levels and include policy also reach the submodule handles libgit2
 opens internally during `status()` / `diff` ([GitKit #98](https://github.com/Cocoanetics/GitKit/issues/98)),
-without writing anything to a repository's config. Creation itself stays outside
-that scope and relies on `RepositoryPreparation`. The public
+without writing anything to a repository's config. Creation itself, including a
+`createRepository` nested in another operation body, runs in a scope that
+empties those same levels and relies on `RepositoryPreparation`, so a refused
+include fails the preparation, which GitKit rolls back, not
+`git_repository_init`. An include refused from a search-path level (`$HOME`,
+XDG, system) during the new repository's own init/open still leaves what libgit2
+created; that rollback is [GitKit #101](https://github.com/Cocoanetics/GitKit/issues/101).
+Cancellation is never an optional (`filter.lfs.required=false`) fallback: clean
+and smudge rethrow it instead of passing content through. The public
 `recursiveSubmodules` regression forces an unchanged CRLF file to be rehashed
 with scoped `core.autocrlf=true`, not written to local config, and expects clean
 enclosing `status()` and workdir `diff`.
