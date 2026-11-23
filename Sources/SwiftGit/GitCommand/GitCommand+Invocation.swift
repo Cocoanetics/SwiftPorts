@@ -76,7 +76,15 @@ extension GitCommand {
     /// `fatal: cannot change to '<operand>'`. A sandbox sees both the path
     /// asked for and the one it leads to.
     private static func changeDirectory(to operand: String, in shell: Shell) async throws -> String {
-        let requested = shell.resolve(operand)
+        var requested = shell.resolve(operand)
+        #if !os(Windows)
+        if let mapping = shell.sandbox?.pathMapping {
+            // A mapping routes a path only after collapsing its `..` as
+            // text, which would undo a symlink before it: walk the
+            // operand on disk first.
+            requested = shell.resolve(try await physicalVirtualPath(of: operand, in: shell, mapping: mapping))
+        }
+        #endif
         try await shell.sandbox?.authorize(requested)
         let physical: String
         #if os(Windows)
@@ -106,6 +114,59 @@ extension GitCommand {
         }
         return shell.displayPath(for: physical)
     }
+
+    #if !os(Windows)
+    /// `operand`'s virtual path under `mapping` as `chdir` walks it: one
+    /// component at a time from the shell's working directory, a symlink
+    /// replaced by where it leads (authorized, and folded back into the
+    /// virtual namespace) before a later `..` takes its parent. A
+    /// component that can't be walked is git's `cannot change to`.
+    private static func physicalVirtualPath(
+        of operand: String, in shell: Shell, mapping: PathMapping
+    ) async throws -> String {
+        var virtual = operand.hasPrefix("/") ? "/" : shell.environment.workingDirectory
+        let components = operand.split(separator: "/").filter { $0 != "." }
+        for (index, component) in components.enumerated() {
+            // Something follows: what's walked so far must be a directory.
+            if index > 0 {
+                var status = stat()
+                if stat(shell.resolve(virtual).path, &status) == 0, status.st_mode & 0o170000 != 0o040000 {
+                    throw cannotChange(to: operand, reason: String(cString: strerror(ENOTDIR)))
+                }
+            }
+            if component == ".." {
+                // `virtual` holds no symlink, so its parent as text is
+                // the parent on disk.
+                virtual = (virtual as NSString).deletingLastPathComponent
+                if virtual.isEmpty { virtual = "/" }
+                continue
+            }
+            let next = virtual == "/" ? "/" + component : virtual + "/" + component
+            let host = shell.resolve(next).path
+            var status = stat()
+            guard lstat(host, &status) == 0 else {
+                throw cannotChange(to: operand, reason: String(cString: strerror(errno)))
+            }
+            // S_ISLNK, spelled out as `changeDirectory` spells S_ISDIR.
+            guard status.st_mode & 0o170000 == 0o120000 else {
+                virtual = next
+                continue
+            }
+            guard let resolved = realpath(host, nil) else {
+                throw cannotChange(to: operand, reason: String(cString: strerror(errno)))
+            }
+            let target = String(cString: resolved)
+            free(resolved)
+            try await shell.sandbox?.authorize(URL(fileURLWithPath: target, isDirectory: true))
+            // A target in no mount is nowhere in the shell's namespace.
+            guard let folded = mapping.virtualPath(forHost: target) else {
+                throw cannotChange(to: operand, reason: String(cString: strerror(ENOENT)))
+            }
+            virtual = folded
+        }
+        return virtual
+    }
+    #endif
 
     #if os(Windows)
     /// `mingw_chdir`: the directory opened (`FILE_FLAG_BACKUP_SEMANTICS`),

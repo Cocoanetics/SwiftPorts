@@ -131,6 +131,52 @@ struct GitCommandInvocationIsolationTests {
         #expect(allowed == .init(stdout: "one\n", stderr: "", status: 0))
     }
 
+    @Test("under a path mapping, -C walks a symlink before a later '..', as chdir does")
+    func mappedPhysicalTraversal() async throws {
+        let oracle = try GitInvocationOracle()
+        defer { oracle.cleanup() }
+        // The workspace is the shell's `/`: repositories `/A` and `/B`, and
+        // `/A/link` leading to `/B/nested`, so `link/..` is `/B` on disk
+        // (and `/A` read as text).
+        let workspace = oracle.root.appendingPathComponent("workspace")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        for name in ["A", "B"] {
+            let repo = try await oracle.repository("workspace/\(name)")
+            try await oracle.gitOK(["commit", "-q", "--allow-empty", "-m", "in \(name)"], in: repo)
+        }
+        let nested = workspace.appendingPathComponent("B/nested")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: workspace.appendingPathComponent("A/link"), withDestinationURL: nested)
+        try FileManager.default.createSymbolicLink(
+            at: workspace.appendingPathComponent("A/outside"), withDestinationURL: oracle.root)
+        let temporary = oracle.root.appendingPathComponent("tmp", isDirectory: true)
+        let shell = Shell(stdout: OutputSink(), stderr: OutputSink(),
+                          environment: Environment(variables: oracle.environment(), workingDirectory: "/A"))
+        shell.sandbox = Sandbox(
+            documentsDirectory: temporary, downloadsDirectory: temporary, libraryDirectory: temporary,
+            moviesDirectory: temporary, musicDirectory: temporary, picturesDirectory: temporary,
+            sharedPublicDirectory: temporary, temporaryDirectory: temporary, trashDirectory: temporary,
+            userDirectory: temporary, cachesDirectory: temporary, homeDirectory: oracle.home,
+            pathMapping: PathMapping(mounts: [.init(virtual: "/", host: workspace.path)]),
+            authorize: { _ in })
+        let subjects = ["log", "-1", "--format=%s"]
+        for arguments in [["-C", "link/.."], ["-C", "link", "-C", ".."], ["-C", "/A/link/../."]] {
+            let output = try await oracle.embedded(arguments + subjects, in: shell)
+            #expect(output == .init(stdout: "in B\n", stderr: "", status: 0), "\(arguments)")
+        }
+        let plain = try await oracle.embedded(["-C", "../A"] + subjects, in: shell)
+        #expect(plain == .init(stdout: "in A\n", stderr: "", status: 0))
+        // What git's chdir refuses on the way, and a link out of every mount.
+        for (operand, reason) in [("file.txt/..", "Not a directory"), ("missing/..", "No such file or directory"),
+                                  ("outside", "No such file or directory")] {
+            let refused = try await oracle.embedded(["-C", operand, "status"], in: shell)
+            #expect(refused == .init(stdout: "", stderr: "fatal: cannot change to '\(operand)': \(reason)\n",
+                                     status: 128), "\(operand)")
+        }
+        #expect(shell.environment.workingDirectory == "/A")
+    }
+
     @Test("the standalone executable's -C / -c don't reach its next run")
     func standaloneRuns() async throws {
         let oracle = try GitInvocationOracle()
