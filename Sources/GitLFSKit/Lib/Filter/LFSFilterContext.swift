@@ -61,6 +61,19 @@ struct LFSFilterContext: Sendable {
         return try BlockingBridge.runBlocking(onDiscard: onDiscard) { try await shell.withCurrent(body) }
     }
 
+    /// Throws `error` unless an optional driver may fall back from it.
+    func checkFallback(after error: any Error) throws {
+        try rethrowCancellation(error)
+        guard !required else { throw error }
+    }
+
+    /// Cancellation is never a failure a driver falls back from: that would
+    /// hand git unfiltered output as though the operation had gone on.
+    func rethrowCancellation(_ error: any Error) throws {
+        if error is CancellationError { throw error }
+        try operation?.checkCancellation()
+    }
+
     var configuration: LFSConfiguration { client.finder.configuration }
 
     /// git-lfs GitFilter.RemoteRef uses the push remote's default ref mapping.

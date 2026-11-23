@@ -50,7 +50,7 @@ final class LFSCleanStream: GitFilterStream {
                 handle = try FileHandle(forWritingTo: file)
                 try append(probe)
             } catch {
-                guard !context.required else { throw error }
+                try context.checkFallback(after: error)
                 passthrough = true
                 try probe.withUnsafeBytes(output)
                 probe.removeAll()
@@ -78,7 +78,7 @@ final class LFSCleanStream: GitFilterStream {
             let end = min(offset + 64 * 1024, chunk.count)
             do { try append(Data(chunk[offset..<end])) }
             catch {
-                guard !context.required else { throw error }
+                try context.checkFallback(after: error)
                 passthrough = true
                 try replay()
                 try output(UnsafeRawBufferPointer(rebasing: chunk[offset...]))
@@ -105,7 +105,7 @@ final class LFSCleanStream: GitFilterStream {
                 handle = try FileHandle(forWritingTo: temporary!)
                 try append(probe)
             } catch {
-                guard !context.required else { throw error }
+                try context.checkFallback(after: error)
                 try probe.withUnsafeBytes(output)
                 return
             }
@@ -122,7 +122,7 @@ final class LFSCleanStream: GitFilterStream {
             temporary = nil
             pointer = Pointer(oid: oid, size: count)
         } catch {
-            guard !context.required else { throw error }
+            try context.checkFallback(after: error)
             try replay()
             return
         }
