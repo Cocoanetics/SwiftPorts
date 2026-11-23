@@ -46,13 +46,18 @@ struct ReleaseCreate: AsyncParsableCommand {
                 """)
     var notesFile: String?
 
-    @Flag(name: .customLong("no-update"), help: "Prevent updating the existing release.")
-    var noUpdate: Bool = false
+    /// A pflag bool upstream: bare `--no-update` (rewritten to
+    /// `--no-update=true` by ``GlabCommand/preprocess(_:)``) or an
+    /// explicit `--no-update=false`.
+    @Option(name: .customLong("no-update"), help: "Prevent updating the existing release.")
+    var noUpdateValue: ReleaseCreateBool?
+
+    var noUpdate: Bool { noUpdateValue?.value ?? false }
 
     @Argument(help: "Tag name (e.g. `v1.0.0`).")
     var tagName: String
 
-    private struct CreateBody: Encodable {
+    struct CreateBody: Encodable {
         let tagName: String
         let name: String
         let description: String?
@@ -108,28 +113,41 @@ struct ReleaseCreate: AsyncParsableCommand {
             if noUpdate {
                 throw ReleaseCreateError.alreadyExists(tag: tagName)
             }
-            var name = existing.name ?? ""
-            if let provided = self.name { name = provided }
-            if name.isEmpty { name = tagName }
-            let request = ReleaseUpdateRequest(
-                name: name,
-                description: noteProvided ? resolvedNotes : (existing.description ?? ""))
+            let request = updateRequest(
+                existing: existing, notes: resolvedNotes, noteProvided: noteProvided)
             release = try await client.send(
                 method: .put, path: "\(project)/releases/\(tagPath)", body: request)
             Shell.print("✓ Release updated\turl=\(release._links?.selfLink?.absoluteString ?? "")")
         } else {
-            let name = self.name.flatMap { $0.isEmpty ? nil : $0 } ?? tagName
-            let body = CreateBody(
-                tagName: tagName,
-                name: name,
-                description: resolvedNotes.isEmpty ? nil : resolvedNotes,
-                ref: ref.isEmpty ? nil : ref)
+            let body = createBody(notes: resolvedNotes, ref: ref)
             release = try await client.send(
                 method: .post, path: "\(project)/releases", body: body)
             Shell.print("✓ Release created:\turl=\(release._links?.selfLink?.absoluteString ?? "")")
         }
         let elapsed = String(format: "%0.2f", Date().timeIntervalSince(start))
         Shell.print("✓ Release succeeded after \(elapsed) seconds.")
+    }
+
+    /// Upstream's update branch: resend the current name / description
+    /// unless overridden; an empty effective name falls back to the tag.
+    /// Release date, milestones and ref are never added.
+    func updateRequest(existing: Release, notes: String, noteProvided: Bool) -> ReleaseUpdateRequest {
+        var name = existing.name ?? ""
+        if let provided = self.name { name = provided }
+        if name.isEmpty { name = tagName }
+        return ReleaseUpdateRequest(
+            name: name,
+            description: noteProvided ? notes : (existing.description ?? ""))
+    }
+
+    /// Upstream's create branch: the name falls back to the tag, and an
+    /// empty description or ref is omitted.
+    func createBody(notes: String, ref: String) -> CreateBody {
+        CreateBody(
+            tagName: tagName,
+            name: self.name.flatMap { $0.isEmpty ? nil : $0 } ?? tagName,
+            description: notes.isEmpty ? nil : notes,
+            ref: ref.isEmpty ? nil : ref)
     }
 
     /// Upstream `resolveNotes`: `--notes` (even empty) wins; then a

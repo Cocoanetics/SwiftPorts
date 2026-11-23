@@ -17,7 +17,7 @@ struct ReleaseEdit: AsyncParsableCommand {
             """
     )
 
-    @Option(name: [.customShort("R"), .long],
+    @Option(name: [.customShort("R", allowingJoined: true), .long], parsing: .unconditional,
             help: "Repository as [HOST/]OWNER/REPO. Defaults to the current directory's git remote.")
     var repo: ReleaseEditRepo?
 
@@ -34,24 +34,29 @@ struct ReleaseEdit: AsyncParsableCommand {
     @Option(name: .customLong("latest"), help: "Explicitly mark the release as \"Latest\"")
     var latest: ReleaseEditBool?
 
-    @Option(name: [.short, .customLong("notes")], help: "Release notes")
+    // String options consume the next word whatever it looks like, as
+    // pflag does: `--notes '- Fixed a bug'` is notes, not a flag.
+    @Option(name: [.customShort("n", allowingJoined: true), .customLong("notes")],
+            parsing: .unconditional, help: "Release notes")
     var notes: String?
 
-    @Option(name: [.short, .customLong("title")], help: "Release title")
+    @Option(name: [.customShort("t", allowingJoined: true), .customLong("title")],
+            parsing: .unconditional, help: "Release title")
     var title: String?
 
-    @Option(name: .customLong("discussion-category"),
+    @Option(name: .customLong("discussion-category"), parsing: .unconditional,
             help: "Start a discussion in the specified category when publishing a draft")
     var discussionCategory: String?
 
-    @Option(name: .customLong("target"),
+    @Option(name: .customLong("target"), parsing: .unconditional,
             help: "Target branch or full commit SHA (default [main branch])")
     var target: String?
 
-    @Option(name: .customLong("tag"), help: "The name of the tag")
+    @Option(name: .customLong("tag"), parsing: .unconditional, help: "The name of the tag")
     var newTag: String?
 
-    @Option(name: [.customShort("F"), .customLong("notes-file")],
+    @Option(name: [.customShort("F", allowingJoined: true), .customLong("notes-file")],
+            parsing: .unconditional,
             help: "Read release notes from file (use \"-\" to read from standard input)")
     var notesFile: String?
 

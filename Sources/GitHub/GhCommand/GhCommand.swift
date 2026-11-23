@@ -27,7 +27,10 @@ public struct GhCommand: AsyncParsableCommand {
     /// means false. ArgumentParser can't express that on one flag, so
     /// the bare spelling becomes `--draft=true` for an
     /// ``ReleaseEditBool`` option. Values of value-taking options and
-    /// everything after `--` are left alone.
+    /// everything after `--` are left alone. A long option's attached
+    /// value (`--notes=…`) is split into its own element, because
+    /// ArgumentParser reads an empty `--notes=` as a bare `--notes`
+    /// while pflag reads it as the empty string.
     static func preprocessReleaseEdit(_ args: [String]) -> [String] {
         guard args.count >= 2, args[0] == "release", args[1] == "edit" else { return args }
         let bools: Set<String> = ["--draft", "--prerelease", "--latest", "--verify-tag"]
@@ -45,6 +48,9 @@ public struct GhCommand: AsyncParsableCommand {
             }
             if bools.contains(arg) {
                 result.append(arg + "=true")
+            } else if arg.hasPrefix("--"), let equals = arg.firstIndex(of: "="),
+                      valued.contains(String(arg[..<equals])) {
+                result.append(contentsOf: [String(arg[..<equals]), String(arg[arg.index(after: equals)...])])
             } else if valued.contains(arg), index + 1 < args.count {
                 result.append(contentsOf: [arg, args[index + 1]])
                 index += 1

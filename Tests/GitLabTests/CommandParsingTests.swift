@@ -323,13 +323,14 @@ import Testing
     }
 
     @Test func releaseCreateRequiresTagAndAcceptsFlags() throws {
-        let cmd = try ReleaseCreate.parse([
+        let cmd = try ReleaseCreate.parse(Array(GlabCommand.preprocess([
+            "release", "create",
             "v1.0.0",
             "-n", "First Stable",
             "-N", "Body of the release notes",
             "-r", "main",
             "--no-update"
-        ])
+        ]).dropFirst(2)))
         #expect(cmd.tagName == "v1.0.0")
         #expect(cmd.name == "First Stable")
         #expect(cmd.notes == "Body of the release notes")

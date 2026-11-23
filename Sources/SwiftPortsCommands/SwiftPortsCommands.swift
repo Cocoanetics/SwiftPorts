@@ -47,7 +47,10 @@ public enum SwiftPortsCommands {
             ArgvRewritingCommand(
                 base: Shell.parsableCommand(GhCommand.self),
                 rewrite: GhCommand.preprocess),
-            Shell.parsableCommand(GlabCommand.self),
+            // glab's `release create --no-update` bool rewrite, likewise.
+            ArgvRewritingCommand(
+                base: Shell.parsableCommand(GlabCommand.self),
+                rewrite: GlabCommand.preprocess),
             // git rides an argv preprocessor too: real-git shorthands
             // must hold on the embedded path, where the standalone entry
             // (`Entry.main`, which applies them) never runs.
