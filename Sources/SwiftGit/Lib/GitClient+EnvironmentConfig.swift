@@ -494,7 +494,8 @@ extension GitClient {
     }
 
     /// Gives the environment's config to `config`, which may belong to a
-    /// repository (`repo`) or to none.
+    /// repository (`repo`) or to none. GitKit's typed layers reach neither
+    /// a raw open nor a repository-less config (Cocoanetics/GitKit#112).
     static func installEnvironmentConfig(into config: OpaquePointer?, repo: OpaquePointer?) throws {
         let plan = Libgit2Sandboxing.shared.environment
         if let file = plan.globalFile {
