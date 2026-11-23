@@ -1,9 +1,10 @@
 // `git -C` / `git -c` reach the LFS side of an invocation (issue #260):
 // `git lfs env` and the clean filter `git add` runs read the directory and
-// the configuration the invocation chose, as git-lfs 3.7.1 under system git
-// does.
+// the configuration the invocation chose, and so does the first checkout of
+// a clone, as git-lfs 3.7.1 under system git does.
 #if os(macOS) || os(Linux)
 import Foundation
+import GitLFSTestSupport
 import Testing
 
 @Suite("git -C / -c reach git lfs (git-lfs 3.7.1)", .serialized,
@@ -94,6 +95,60 @@ struct GitCommandInvocationLFSOracleTests {
         try await oracle.compare(
             ["-C", "repo", "-c", "lfs.storage=\(store.path)", "add", "big.bin"],
             in: oracle.root, fixture: oracle.root, state: state, entries: [.standalone])
+    }
+
+    @Test("clone's first checkout smudges from the -c / GIT_CONFIG_COUNT lfs.url")
+    func cloneFirstCheckout() async throws {
+        // The filter configuration git-lfs's `install` writes, so the
+        // remote's only LFS endpoint is the one the invocation names.
+        let oracle = try GitInvocationOracle(globalConfig: """
+            [filter "lfs"]
+            \tclean = git-lfs clean -- %f
+            \tsmudge = git-lfs smudge -- %f
+            \tprocess = git-lfs filter-process
+            \trequired = true
+
+            """)
+        defer { oracle.cleanup() }
+        let server = try await LFSTestServer.start()
+        do {
+            let seed = try await oracle.repository("seed")
+            try await oracle.gitOK(["lfs", "install", "--local"], in: seed)
+            try await oracle.gitOK(["config", "lfs.url", server.endpoint.absoluteString], in: seed)
+            try await oracle.gitOK(["lfs", "track", "*.bin"], in: seed)
+            let media = Data("first checkout media\n".utf8)
+            try media.write(to: seed.appendingPathComponent("big.bin"))
+            try await oracle.gitOK(["add", ".gitattributes", "big.bin"], in: seed)
+            try await oracle.gitOK(["commit", "-q", "-m", "media"], in: seed)
+            let bare = oracle.root.appendingPathComponent("remote.git")
+            try await oracle.gitOK(["init", "-q", "--bare", "-b", "main", bare.path], in: oracle.root)
+            try await oracle.gitOK(["push", "-q", bare.path, "main"], in: seed)
+
+            let state = { () async throws -> String in
+                let clone = oracle.root.appendingPathComponent("dest")
+                let data = (try? Data(contentsOf: clone.appendingPathComponent("big.bin"))) ?? Data("<missing>".utf8)
+                let status = try await oracle.system(["status", "--porcelain"], in: clone)
+                return String(decoding: data, as: UTF8.self) + "status \(status.status): \(status.stdout)"
+            }
+            // Only the executable registers the `lfs` filter, process-wide,
+            // as a host opts in to it (see `cleanFilter`).
+            let url = server.endpoint.absoluteString
+            let expected = try await oracle.compare(
+                ["-c", "lfs.url=\(url)", "clone", "-q", bare.path, "dest"],
+                in: oracle.root, state: state, entries: [.standalone])
+            #expect(expected.status == 0, "\(expected)")
+            try await oracle.compare(
+                ["clone", "-q", bare.path, "dest"], in: oracle.root,
+                environment: ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "lfs.url", "GIT_CONFIG_VALUE_0": url],
+                state: state, entries: [.standalone])
+            // The comparison means something only if the media arrived.
+            _ = try await oracle.system(["-c", "lfs.url=\(url)", "clone", "-q", bare.path, "check"], in: oracle.root)
+            #expect(try Data(contentsOf: oracle.root.appendingPathComponent("check/big.bin")) == media)
+        } catch {
+            await server.shutdown()
+            throw error
+        }
+        await server.shutdown()
     }
 }
 #endif

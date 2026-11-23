@@ -348,5 +348,27 @@ struct GitCommandInvocationOracleTests {
                           "GIT_CONFIG_KEY_1": "user.email", "GIT_CONFIG_VALUE_1": "count@example.com"],
             fixture: repo, state: identity)
     }
+
+    @Test("a commit reads its identity from a -c include, in its place among the entries")
+    func commitIdentityFromInclude() async throws {
+        let oracle = try GitInvocationOracle(globalConfig: "[user]\n\tname = Global\n\temail = global@example.com\n")
+        defer { oracle.cleanup() }
+        let repo = try await oracle.repository()
+        let work = oracle.root.appendingPathComponent("work.cfg")
+        try "[user]\n\tname = Included\n\temail = included@example.com\n".write(
+            to: work, atomically: false, encoding: .utf8)
+        let include = "include.path=\(work.path)"
+        try Data("two\n".utf8).write(to: repo.appendingPathComponent("file.txt"))
+        let identity = { () async throws -> String in
+            try await oracle.gitOK(["log", "-1", "--format=%an|%ae|%cn|%ce|%s"], in: repo)
+        }
+        for arguments in [
+            ["-c", include, "-C", "repo", "commit", "-q", "-a", "-m", "included"],
+            ["-c", "user.name=Before", "-c", include, "-c", "user.email=after@example.com",
+             "-C", "repo", "commit", "-q", "-a", "-m", "ordered"]
+        ] {
+            try await oracle.compare(arguments, in: oracle.root, state: identity)
+        }
+    }
 }
 #endif

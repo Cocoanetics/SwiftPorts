@@ -191,6 +191,9 @@ package final class GitFilterOperationContext: @unchecked Sendable {
     /// repository libgit2 opens on this thread, including the submodule
     /// handles it opens itself during status and diff. Settings git reads
     /// from a repository's own config only are left to exposed handles.
+    /// A command-line `include.path` is an entry here, not followed: an
+    /// operation level can't yet stack the file it includes among the
+    /// entries (Cocoanetics/GitKit#106).
     var operationConfiguration: OperationConfiguration {
         var levels: [OperationConfiguration.Level] = []
         if let file = environment.globalFile {

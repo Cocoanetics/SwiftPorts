@@ -409,8 +409,9 @@ extension GitClient {
         guard !plan.commandLine.isEmpty else { return }
         let segments = commandLineSegments(plan.commandLine)
         if segments.count > 1 {
-            // GitKit's typed levels stop at app; an include's file and the
-            // entries after it go above, as git reads them in place.
+            // GitKit's typed levels stop at app (Cocoanetics/GitKit#106); an
+            // include's file and the entries after it go above, as git reads
+            // them in place.
             guard let pointer = handle(of: repository) else {
                 throw Libgit2Error(
                     code: -1, klass: Int32(GIT_ERROR_CONFIG.rawValue),
