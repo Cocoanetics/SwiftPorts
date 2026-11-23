@@ -93,3 +93,96 @@ extension PublicOperationTests {
         }
     }
 }
+
+extension PublicOperationTests {
+    @Test("nested clone and worktree creation roll back a denied conditional include and retry cleanly",
+          arguments: ["clone", "worktree"], ["missing", "empty", "occupied"])
+    func nestedCreationIncludeDenial(kind: String, destinationState: String) async throws {
+        try await NativeFixture.run { fixture, server in
+            let first = try await GitLFSKit.withOperation(shell: fixture.shell) { operation in
+                try fixture.seed(operation)
+            }
+            let extra = fixture.path("nested-extra.config")
+            try "[consumer]\n\tfromNestedInclude = yes\n".write(to: extra, atomically: true, encoding: .utf8)
+            // Matches only the new repository's git directory, so the enclosing
+            // body's own handle never reads it.
+            let pattern = kind == "clone" ? "gitdir:**/nested-clone/" : "gitdir:**/.git/worktrees/"
+            let globalConfig = fixture.path("effective.config")
+            let previous = try String(contentsOf: globalConfig, encoding: .utf8)
+            try (previous + "\n[includeIf \"\(pattern)\"]\n\tpath = \(extra.path)\n")
+                .write(to: globalConfig, atomically: true, encoding: .utf8)
+            server.store(NativeFixture.bytes, oid: NativeFixture.pointer.oid)
+
+            let destination = fixture.path("nested-\(kind)")
+            let marker = destination.appendingPathComponent("host-file.txt")
+            if destinationState != "missing" {
+                try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+            }
+            if destinationState == "occupied" {
+                try Data("host\n".utf8).write(to: marker)
+            }
+            // libgit2 refuses these before creating anything: a clone any non-empty
+            // directory, a worktree any existing one.
+            let refusedUpfront = destinationState == "occupied" || (kind == "worktree" && destinationState == "empty")
+            let branch = "nested-\(kind)-branch"
+            var attempts = 0
+            func create() async throws {
+                try await GitLFSKit.withOperation(shell: fixture.shell) { operation in
+                    try operation.authorize(fixture.path("source"))
+                    try operation.withRepository(at: fixture.path("source")) { source in
+                        try operation.createRepository(at: destination, using: { preparation in
+                            attempts += 1
+                            if kind == "clone" {
+                                return try Repository.clone(from: fixture.path("source"), to: destination,
+                                                            progress: { _ in }, preparation: preparation)
+                            }
+                            return try source.worktreeAdd(path: destination, branch: branch,
+                                                          startPoint: first, preparation: preparation)
+                        }, { repository throws in
+                            #expect(try repository.configGet("consumer.fromNestedInclude") == "yes")
+                            #expect(try Data(contentsOf: destination.appendingPathComponent("a.lfs"))
+                                    == NativeFixture.bytes)
+                        })
+                    }
+                }
+            }
+
+            fixture.shell.sandbox = fixture.sandbox { url in
+                if url.lastPathComponent == "nested-extra.config" {
+                    throw Sandbox.Denial(url: url, reason: "nested include denied")
+                }
+            }
+            do {
+                try await create()
+                Issue.record("nested creation succeeded despite the denied include")
+            } catch let error as Sandbox.Denial {
+                #expect(!refusedUpfront)
+                #expect(error.url.lastPathComponent == "nested-extra.config")
+            } catch {
+                #expect(refusedUpfront, "unexpected error: \(error)")
+            }
+            #expect(attempts == 1)
+            switch destinationState {
+            case "missing":
+                #expect(!FileManager.default.fileExists(atPath: destination.path))
+            case "empty":
+                #expect(try FileManager.default.contentsOfDirectory(atPath: destination.path).isEmpty)
+            default:
+                #expect(try FileManager.default.contentsOfDirectory(atPath: destination.path) == ["host-file.txt"])
+                #expect(try Data(contentsOf: marker) == Data("host\n".utf8))
+            }
+            if kind == "worktree" {
+                let sourceGit = fixture.path("source/.git")
+                #expect(!FileManager.default.fileExists(
+                    atPath: sourceGit.appendingPathComponent("worktrees/nested-worktree").path))
+                #expect(!FileManager.default.fileExists(
+                    atPath: sourceGit.appendingPathComponent("refs/heads/\(branch)").path))
+            }
+            guard !refusedUpfront else { return }
+
+            fixture.shell.sandbox = fixture.sandbox { _ in }
+            try await create()
+            #expect(attempts == 2)
+        }
+    }
+}

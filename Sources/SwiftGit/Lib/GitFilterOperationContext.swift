@@ -99,6 +99,12 @@ package final class GitFilterOperationContext: @unchecked Sendable {
         try cancellation?.checkCancellation()
     }
 
+    /// Throws once the enclosing operation is cancelled, so a filter can tell
+    /// cancellation from a transform failure it may fall back from.
+    package func checkCancellation() throws {
+        try cancellation?.checkCancellation()
+    }
+
     /// Synchronous facilities are usable only on the enclosing GitKit thread.
     package func checkCurrent() throws {
         try checkActive()
@@ -200,6 +206,22 @@ package final class GitFilterOperationContext: @unchecked Sendable {
             levels.append(.entries(entries, .app, name: "command line"))
         }
         return OperationConfiguration(levels: levels, includePolicy: includePolicy)
+    }
+
+    /// The levels ``operationConfiguration`` sets, each empty: what a new
+    /// repository reads before its preparation outside any scope, where the
+    /// sandboxing search paths leave those levels out. Nested in an enclosing
+    /// scope, it keeps that scope's levels from an init's own open, so a
+    /// refused include fails the preparation, which GitKit rolls back, rather
+    /// than `git_repository_init`, which it does not.
+    var creationConfiguration: OperationConfiguration {
+        let levels = operationConfiguration.levels.map { level -> OperationConfiguration.Level in
+            switch level {
+            case let .file(_, level), let .entries(_, level, _):
+                return .entries([], level, name: "operation creation")
+            }
+        }
+        return OperationConfiguration(levels: levels)
     }
 
     /// `core.repositoryformatversion`, `core.bare`, `core.worktree` and
