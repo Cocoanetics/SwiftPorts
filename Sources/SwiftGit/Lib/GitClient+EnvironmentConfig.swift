@@ -2,6 +2,15 @@ import Foundation
 import CGitKit
 import GitKit
 import ShellKit
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#elseif canImport(Android)
+import Android
+#endif
 
 /// What the shell's `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
 /// `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` and
@@ -152,14 +161,27 @@ extension GitClient {
             try await Shell.authorize(file)
             // access_or_die: a missing file is no include; any other
             // reason it can't be read stops git.
-            if access(file.path, R_OK) == 0 {
-                resolved[index].include = file.path
-            } else if errno != ENOENT && errno != ENOTDIR {
-                let reason = String(cString: strerror(errno))
+            if let reason = Self.unreadableReason(file.path) {
+                guard let reason else { continue }
                 throw GitDiagnosticError(lines: ["fatal: unable to access '\(expanded)': \(reason)"], exitCode: 128)
             }
+            resolved[index].include = file.path
         }
         return resolved
+    }
+
+    /// Why `path` can't be read: `nil` when it can, `.some(nil)` when it
+    /// isn't there (ENOENT / ENOTDIR), else `strerror`'s words.
+    private static func unreadableReason(_ path: String) -> String?? {
+        #if os(Windows)
+        guard FileManager.default.fileExists(atPath: path) else { return .some(nil) }
+        return FileManager.default.isReadableFile(atPath: path) ? nil : .some("Permission denied")
+        #else
+        guard access(path, R_OK) != 0 else { return nil }
+        let code = errno
+        if code == ENOENT || code == ENOTDIR { return .some(nil) }
+        return .some(String(cString: strerror(code)))
+        #endif
     }
 
     /// git's `interpolate_path` for `~` and `~/…` (the shell's `HOME`) and
