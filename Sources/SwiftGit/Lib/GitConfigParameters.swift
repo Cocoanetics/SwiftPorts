@@ -9,31 +9,46 @@ package enum GitConfigParameters {
     /// The variable `existing` becomes once `text` (one `-c` operand) is
     /// added: `'<name>'='<value>'`, split at the first `=`, or `'<name>'=`
     /// for an operand without one (a valueless, boolean-true entry).
+    ///
+    /// Like the codec's other punctuation, `=` is found among Unicode
+    /// scalars, as git's `strchr` finds its byte: as a `Character` it may
+    /// be joined to a combining mark after it.
     package static func push(_ text: String, onto existing: String?) -> String {
         var out = ""
         if let existing, !existing.isEmpty {
             out = existing + " "
         }
-        if let equals = text.firstIndex(of: "=") {
-            out += quote(String(text[..<equals])) + "=" + quote(String(text[text.index(after: equals)...]))
+        if let (key, value) = splitAtFirstEquals(text) {
+            out += quote(key) + "=" + quote(value)
         } else {
             out += quote(text) + "="
         }
         return out
     }
 
+    /// `text` before and after its first `=`, `nil` without one.
+    private static func splitAtFirstEquals(_ text: String) -> (String, String)? {
+        let scalars = text.unicodeScalars
+        guard let equals = scalars.firstIndex(of: "=") else { return nil }
+        return (String(scalars[..<equals]), String(scalars[scalars.index(after: equals)...]))
+    }
+
     /// `sq_quote_buf`: in single quotes, with `'` and `!` stepped out of them
     /// (`'\''`, `'\!'`).
     package static func quote(_ text: String) -> String {
-        var out = "'"
-        for character in text {
-            if character == "'" || character == "!" {
-                out += "'\\\(character)'"
+        var out = String.UnicodeScalarView()
+        out.append("'")
+        for scalar in text.unicodeScalars {
+            if scalar == "'" || scalar == "!" {
+                out.append(contentsOf: "'\\".unicodeScalars)
+                out.append(scalar)
+                out.append("'")
             } else {
-                out.append(character)
+                out.append(scalar)
             }
         }
-        return out + "'"
+        out.append("'")
+        return String(out)
     }
 
     /// The entries of `text`, in order: each key as written and its value,
@@ -77,9 +92,9 @@ package enum GitConfigParameters {
         _ text: String, _ each: (_ key: String, _ value: String?) throws -> Void
     ) throws {
         let key: String, value: String?
-        if let equals = text.firstIndex(of: "=") {
-            key = String(text[..<equals])
-            value = String(text[text.index(after: equals)...])
+        if let (before, after) = splitAtFirstEquals(text) {
+            key = before
+            value = after
         } else {
             key = text
             value = nil

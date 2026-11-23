@@ -42,6 +42,23 @@ struct GitConfigParametersTests {
         #expect(GitConfigParameters.quote("a\\b \"c\"\nü") == "'a\\b \"c\"\nü'")
     }
 
+    @Test("'=', '\\'' and '!' are found before a combining mark, as git's bytes are")
+    func combiningMarks() throws {
+        // U+0301 joins the character before it into one Swift `Character`.
+        #expect(push(["a.b=\u{301}x"]) == "'a.b'='\u{301}x'")
+        #expect(GitConfigParameters.quote("'\u{301}!\u{301}") == "''\\''\u{301}'\\!'\u{301}'")
+        #expect(try read("'a.b=\u{301}x' 'c.d'='\u{301}y'") == [
+            Entry(key: "a.b", value: "\u{301}x"), Entry(key: "c.d", value: "\u{301}y")
+        ])
+        #expect(try GitClient.normalizedKey("S.e\u{301}.K") == "s.e\u{301}.k")
+        #expect(throws: CommandLineConfigError(reason: "invalid key: a.\u{301}b")) {
+            try GitClient.normalizedKey("a.\u{301}b")
+        }
+        #expect(throws: CommandLineConfigError(reason: "invalid key (newline): a.x\r\ny.z")) {
+            try GitClient.normalizedKey("a.x\r\ny.z")
+        }
+    }
+
     @Test("what it writes reads back")
     func roundTrip() throws {
         let operands = ["a.b=1", "a.b", "a.c=", "x.y=1=2", "Sec.Sub Ü.Key=it's !ü \"q\" \\", "n.l=one\ntwo"]

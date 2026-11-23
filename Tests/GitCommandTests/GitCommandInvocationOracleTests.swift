@@ -166,7 +166,11 @@ struct GitCommandInvocationOracleTests {
             ["-c", "a.b=1", "-c", "a.b=2", "-C", "repo", "config", "--get", "a.b"],
             ["-c", "a.b", "-C", "repo", "config", "a.b"],
             ["-c", "url.https://example.com/?q=1.insteadOf=x", "-C", "repo", "config", "--list"],
-            ["-c", "Sec.Sub Ü.Key=it's !ü \"q\" \\", "-c", "x.y", "-C", "repo", "config", "--list", "--show-origin"]
+            ["-c", "Sec.Sub Ü.Key=it's !ü \"q\" \\", "-c", "x.y", "-C", "repo", "config", "--list", "--show-origin"],
+            // Combining marks right after '=', '\'' and '.'.
+            ["-c", "a.b=\u{301}x", "-c", "q.r='\u{301}!\u{301}", "-c", "s.e\u{301}.k=1",
+             "-C", "repo", "config", "--list", "--show-origin"],
+            ["-c", "a.\u{301}b=1", "-C", "repo", "config", "--list"]
         ] {
             try await oracle.compare(arguments, in: oracle.root)
         }

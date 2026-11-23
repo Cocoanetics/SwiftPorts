@@ -187,12 +187,14 @@ extension GitClient {
     static func commandLineConfigFile(_ entries: [EnvironmentConfig.CommandLineEntry]) -> String {
         var text = ""
         for entry in entries {
-            let name = entry.name
+            // The dots among Unicode scalars: as a `Character`, a dot can
+            // be joined to a combining mark after it.
+            let name = entry.name.unicodeScalars
             guard let first = name.firstIndex(of: "."), let last = name.lastIndex(of: ".") else {
                 continue
             }
-            let section = name[..<first]
-            let variable = name[name.index(after: last)...]
+            let section = String(name[..<first])
+            let variable = String(name[name.index(after: last)...])
             if first == last {
                 text += "[\(section)]\n"
             } else {
@@ -245,10 +247,13 @@ extension GitClient {
         guard !key.isEmpty else { throw CommandLineConfigError(reason: "empty config key") }
         // git_config_parse_key: the last dot must come after the first
         // character, and the variable name must be there.
-        guard let first = key.firstIndex(of: "."), let last = key.lastIndex(of: "."), last != key.startIndex else {
+        // Among Unicode scalars, as git's `strrchr` looks among bytes.
+        let scalars = key.unicodeScalars
+        guard let first = scalars.firstIndex(of: "."), let last = scalars.lastIndex(of: "."),
+              last != scalars.startIndex else {
             throw CommandLineConfigError(reason: "key does not contain a section: \(key)")
         }
-        guard last != key.index(before: key.endIndex) else {
+        guard last != scalars.index(before: scalars.endIndex) else {
             throw CommandLineConfigError(reason: "key does not contain variable name: \(key)")
         }
         // The section and the variable name take letters, digits and `-`,
@@ -258,14 +263,15 @@ extension GitClient {
             (byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x5A)
                 || (byte >= 0x61 && byte <= 0x7A) || byte == 0x2D
         }
-        let section = key[..<first], subsection = key[first..<last], variable = key[key.index(after: last)...]
+        let section = Substring(scalars[..<first]), subsection = Substring(scalars[first..<last])
+        let variable = Substring(scalars[scalars.index(after: last)...])
         for part in [section, variable] where !part.utf8.allSatisfy(keyCharacter) {
             throw CommandLineConfigError(reason: "invalid key: \(key)")
         }
         if let initial = variable.utf8.first, initial >= 0x30 && initial <= 0x39 || initial == 0x2D {
             throw CommandLineConfigError(reason: "invalid key: \(key)")
         }
-        guard !subsection.contains("\n") else {
+        guard !subsection.unicodeScalars.contains("\n") else {
             throw CommandLineConfigError(reason: "invalid key (newline): \(key)")
         }
         return section.lowercased() + subsection + "." + variable.lowercased()
