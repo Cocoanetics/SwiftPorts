@@ -7,7 +7,7 @@ let package = Package(
     dependencies: [
         // Explicit name also works when the checkout directory is SwiftPorts-agent.
         .package(name: "SwiftPorts", path: "../../.."),
-        .package(url: "https://github.com/Cocoanetics/GitKit", from: "2.14.0"),
+        .package(url: "https://github.com/Cocoanetics/GitKit", from: "2.16.0"),
         .package(url: "https://github.com/Cocoanetics/ShellKit", .upToNextMinor(from: "0.1.2"))
     ],
     targets: [

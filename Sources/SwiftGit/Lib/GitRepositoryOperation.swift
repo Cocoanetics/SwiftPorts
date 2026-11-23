@@ -44,13 +44,15 @@ package struct GitRepositoryOperation {
     package func withRepository<T>(at directory: URL, _ body: (Repository) throws -> T) throws -> T {
         try context.checkCurrent()
         try context.authorize(directory)
-        let repository = try context.rethrowDenial {
-            let repo = try Repository.open(at: directory, includePolicy: context.includePolicy)
-            try context.prepareRepository(repo)
-            return repo
+        let result = try scoped {
+            let repository = try context.rethrowDenial {
+                let repo = try Repository.open(at: directory, includePolicy: context.includePolicy)
+                try context.prepareRepository(repo)
+                return repo
+            }
+            // Never replay the host body across include authorization.
+            return try context.rethrowDenial { try body(repository) }
         }
-        // Never replay the host body across include authorization.
-        let result = try context.rethrowDenial { try body(repository) }
         try context.checkCurrent()
         return result
     }
@@ -74,8 +76,18 @@ package struct GitRepositoryOperation {
             }
             return created
         }
-        let result = try context.rethrowDenial { try body(repository) }
+        let result = try scoped { try context.rethrowDenial { try body(repository) } }
         try context.checkCurrent()
         return result
+    }
+
+    /// Gives the operation's configuration to the repositories libgit2 opens
+    /// on this thread for `body`, including each submodule's during status
+    /// and diff. Creation stays outside: `RepositoryPreparation` covers it,
+    /// and a refused include must fail it before libgit2 creates anything.
+    private func scoped<T>(_ body: () throws -> T) throws -> T {
+        try context.rethrowDenial {
+            try Repository.withOperationConfiguration(context.operationConfiguration, body)
+        }
     }
 }

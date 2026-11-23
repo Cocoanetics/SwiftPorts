@@ -226,7 +226,7 @@ async scope on `BlockingBridge`. No repository needs to exist at entry.
   connection URLs through the enclosing shell's sandbox before native GitKit
   touches them.
 - `preparation` (`RepositoryPreparation`) — creation-time preparation for
-  GitKit 2.14.0+ APIs (`Repository.clone(..., preparation:)` and
+  GitKit 2.16.0+ APIs (`Repository.clone(..., preparation:)` and
   `Repository.worktreeAdd(..., preparation:)`). Installs the operation's
   `ConfigIncludePolicy`, `ShellSigner`, and effective configuration levels via
   GitKit's typed `Repository.addConfigFile(at:level:)` and
@@ -261,13 +261,15 @@ and push URLs), completes the upload before returning, and throws any nonzero
 this public surface with only `GitKit`, `GitLFSKit`, `GitLFSTestSupport`, and
 `ShellKit` (no `@testable` or SPI imports).
 
-Known prerequisite: GitKit 2.14.0 cannot apply the operation's effective
-configuration to submodule handles opened internally by libgit2 during
-`status()` / `diff`. Those handles need a scoped preparation hook before their
-configuration is consumed ([GitKit #98](https://github.com/Cocoanetics/GitKit/issues/98)).
-The public `recursiveSubmodules` regression forces an unchanged CRLF file to be
-rehashed with scoped `core.autocrlf=true`, without writing it to local config;
-it remains a failing acceptance test until that native hook is available.
+`withRepository`'s open and `body`, and `createRepository`'s `body`, run inside
+GitKit 2.16.0's `Repository.withOperationConfiguration`, so the same effective
+configuration levels and include policy also reach the submodule handles libgit2
+opens internally during `status()` / `diff` ([GitKit #98](https://github.com/Cocoanetics/GitKit/issues/98)),
+without writing anything to a repository's config. Creation itself stays outside
+that scope and relies on `RepositoryPreparation`. The public
+`recursiveSubmodules` regression forces an unchanged CRLF file to be rehashed
+with scoped `core.autocrlf=true`, not written to local config, and expects clean
+enclosing `status()` and workdir `diff`.
 
 ## Commands (`git lfs`, #189)
 

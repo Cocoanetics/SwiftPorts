@@ -181,6 +181,36 @@ package final class GitFilterOperationContext: @unchecked Sendable {
         }
     }
 
+    /// This operation's effective levels and include policy for every
+    /// repository libgit2 opens on this thread, including the submodule
+    /// handles it opens itself during status and diff. Settings git reads
+    /// from a repository's own config only are left to exposed handles.
+    var operationConfiguration: OperationConfiguration {
+        var levels: [OperationConfiguration.Level] = []
+        if let file = environment.globalFile {
+            levels.append(.file(URL(fileURLWithPath: file.resolved), .global))
+        }
+        if let file = environment.systemFile {
+            levels.append(.file(URL(fileURLWithPath: file.resolved), .system))
+        }
+        let entries = environment.commandLine
+            .filter { !Self.isRepositoryOnly($0.name) }
+            .map { ConfigEntry(name: $0.name, value: $0.value) }
+        if !entries.isEmpty {
+            levels.append(.entries(entries, .app, name: "command line"))
+        }
+        return OperationConfiguration(levels: levels, includePolicy: includePolicy)
+    }
+
+    /// `core.repositoryformatversion`, `core.bare`, `core.worktree` and
+    /// `extensions.*`, which an operation level refuses.
+    private static func isRepositoryOnly(_ name: String) -> Bool {
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        if parts.first == "extensions" { return true }
+        return parts.count == 2 && parts[0] == "core"
+            && ["repositoryformatversion", "bare", "worktree"].contains(parts[1])
+    }
+
     package func authorize(_ url: URL) throws {
         try checkCurrent()
         try runBlocking { try await Shell.authorize(url) }

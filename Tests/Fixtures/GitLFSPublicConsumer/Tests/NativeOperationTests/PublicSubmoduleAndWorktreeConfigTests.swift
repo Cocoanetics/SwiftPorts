@@ -175,7 +175,7 @@ extension PublicOperationTests {
 
                 // Force libgit2's hidden submodule handle to rehash the unchanged
                 // CRLF file rather than accepting checkout's cached stat data.
-                // GitKit #98: this must work without persisting scoped config.
+                // This must work without persisting scoped config (GitKit #98).
                 try FileManager.default.setAttributes(
                     [.modificationDate: Date(timeIntervalSince1970: 1_000_000)],
                     ofItemAtPath: nestedDir.appendingPathComponent("plain.txt").path)
