@@ -3,9 +3,10 @@ import CGitKit
 import GitKit
 import ShellKit
 
-/// What the shell's `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and
-/// `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` ask of
-/// the config every git command reads.
+/// What the shell's `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+/// `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` and
+/// `GIT_CONFIG_PARAMETERS` (`git -c`) ask of the config every git command
+/// reads.
 ///
 /// libgit2 reads none of them itself (outside the `FROM_ENV` open flag, which
 /// also reads `GIT_DIR` and more, and which GitKit's `Repository.open` doesn't
@@ -31,13 +32,17 @@ struct EnvironmentConfig: Equatable, Sendable {
     /// The file `GIT_CONFIG_SYSTEM` names, `nil` for an empty value or one a
     /// sandbox won't read.
     var systemFile: File?
-    /// One `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` pair, name normalized.
+    /// One `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` pair, or one
+    /// `GIT_CONFIG_PARAMETERS` entry, name normalized. `value` is `nil` for
+    /// a valueless entry (`git -c name`), which reads as true; an empty one
+    /// (`git -c name=`) reads as false.
     struct CommandLineEntry: Equatable, Sendable {
         let name: String
-        let value: String
+        let value: String?
     }
 
-    /// `GIT_CONFIG_COUNT`'s entries, names normalized. Kept as pairs — not
+    /// `GIT_CONFIG_COUNT`'s entries, then `GIT_CONFIG_PARAMETERS`', names
+    /// normalized. Kept as pairs — not
     /// `name=value` strings — because libgit2's `git_config_backend_from_values`
     /// splits on the first `=`, and a subsection may contain `=` (e.g.
     /// `url.https://x/?a=b.insteadOf`).
@@ -51,8 +56,9 @@ struct EnvironmentConfig: Equatable, Sendable {
     }
 }
 
-/// git's "unable to parse command-line config": a `GIT_CONFIG_COUNT` it
-/// can't read. It stops every command, each with its own words.
+/// git's "unable to parse command-line config": a `GIT_CONFIG_COUNT` or
+/// `GIT_CONFIG_PARAMETERS` it can't read. It stops every command, each with
+/// its own words.
 public struct CommandLineConfigError: Error, LocalizedError, CommandFailure, Equatable {
     /// Why, as git words it after `error: `.
     public let reason: String
@@ -122,12 +128,26 @@ extension GitClient {
         try await Shell.authorize(URL(fileURLWithPath: resolved))
     }
 
-    // MARK: GIT_CONFIG_COUNT
+    // MARK: GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS
 
-    /// `GIT_CONFIG_COUNT` entries, git's way: a count, then a
-    /// `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` for each. What git
-    /// can't read stops the command.
+    /// The command-line entries, git's way (`git_config_from_parameters`):
+    /// `GIT_CONFIG_COUNT`'s, a count, then a `GIT_CONFIG_KEY_<n>` and
+    /// `GIT_CONFIG_VALUE_<n>` for each, followed by `GIT_CONFIG_PARAMETERS`'
+    /// (``GitConfigParameters``). What git can't read stops the command.
     static func commandLineConfig(
+        _ variables: [String: String]
+    ) throws -> [EnvironmentConfig.CommandLineEntry] {
+        var entries = try countedConfig(variables)
+        if let parameters = variables["GIT_CONFIG_PARAMETERS"] {
+            try GitConfigParameters.entries(parameters) { key, value in
+                entries.append(.init(name: try normalizedKey(key), value: value))
+            }
+        }
+        return entries
+    }
+
+    /// `GIT_CONFIG_COUNT` entries.
+    private static func countedConfig(
         _ variables: [String: String]
     ) throws -> [EnvironmentConfig.CommandLineEntry] {
         guard let text = variables["GIT_CONFIG_COUNT"] else { return [] }
@@ -179,7 +199,12 @@ extension GitClient {
                 let subsection = escapeConfigText(String(name[name.index(after: first)..<last]))
                 text += "[" + section + " \"" + subsection + "\"]\n"
             }
-            let escaped = escapeConfigText(entry.value)
+            guard let value = entry.value else {
+                // Valueless: true, as git reads `[section] variable`.
+                text += "\t\(variable)\n"
+                continue
+            }
+            let escaped = escapeConfigText(value)
             let quote = quotesForConfigValue(escaped)
             text += "\t\(variable) = \(quote)\(escaped)\(quote)\n"
         }
@@ -308,7 +333,7 @@ extension GitClient {
     // MARK: - show-origin
 
     /// What `--show-origin` prints before an entry: `file:<path>`, or
-    /// `command line:` for `GIT_CONFIG_COUNT`'s. A file the environment
+    /// `command line:` for `GIT_CONFIG_COUNT`'s and `GIT_CONFIG_PARAMETERS`'. A file the environment
     /// names is as typed; the repository's own is relative to the work
     /// tree's top (`base`), as git reads it from there.
     func originName(of entry: git_config_entry, base: String?) -> String {
