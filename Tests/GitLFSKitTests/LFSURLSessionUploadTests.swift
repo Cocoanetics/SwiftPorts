@@ -133,23 +133,31 @@ struct LFSURLSessionUploadTests {
                     try await Task.sleep(for: .seconds(8))
                     return .deadline
                 }
-                let first = try #require(try await group.next())
-                guard case .receipt(let receipt) = first else {
-                    Issue.record("upload completed or gate ended before a parked-response receipt: \(first)")
+                // Task-group delivery order need not match event order; collect
+                // both and compare the timestamps taken where each happened.
+                var receipt: LFSHeldObjectRequest?
+                var completion: (result: Result<Void, any Error>, at: ContinuousClock.Instant)?
+                events: while receipt == nil || completion == nil, let event = try await group.next() {
+                    switch event {
+                    case .receipt(let value): receipt = value
+                    case .completed(let result, let at): completion = (result, at)
+                    case .missingReceipt, .deadline: break events
+                    }
+                }
+                guard let receipt, let completion else {
+                    Issue.record("""
+                        gate ended without both a parked-response receipt and upload completion: \
+                        receipt \(receipt != nil), completion \(completion != nil)
+                        """)
                     return
                 }
                 #expect(receipt.method == "PUT")
                 #expect(receipt.path == "/objects/test")
                 #expect(receipt.requestBody == bytes)
                 try #require(receipt.responseIsHeld)
-                let next = try #require(try await group.next())
-                guard case .completed(let result, let completedAt) = next else {
-                    Issue.record("upload did not complete before the held-response deadline")
-                    return
-                }
-                #expect(receipt.receivedAt < completedAt)
+                #expect(receipt.receivedAt < completion.at)
                 #expect {
-                    try result.get()
+                    try completion.result.get()
                 } throws: { error in
                     (error as? URLError)?.code == .timedOut
                 }
