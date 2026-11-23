@@ -244,6 +244,52 @@ struct GitCommandInvocationOracleTests {
         try await oracle.compare(["-c", "include.path=relative.cfg", "version"], in: oracle.root, stdout: false)
     }
 
+    @Test("what a command writes goes to the repository's config, never to a -c include")
+    func commandLineIncludeIsNotWritten() async throws {
+        let oracle = try GitInvocationOracle()
+        defer { oracle.cleanup() }
+        let repo = try await oracle.repository()
+        let work = oracle.root.appendingPathComponent("work.cfg")
+        try "[user]\n\tname = Included\n".write(to: work, atomically: false, encoding: .utf8)
+        let include = "include.path=\(work.path)"
+        let state = { () async throws -> String in
+            // Values, not text: libgit2 lays a file out its own way.
+            let local = try await oracle.system(
+                ["config", "--file", ".git/config", "--get-regexp", "^remote\\."], in: repo).stdout
+            let included = try String(contentsOf: work, encoding: .utf8)
+            return "local:\n\(local)included:\n\(included)"
+        }
+        try await oracle.gitOK(["remote", "add", "upstream", "https://example.com/u.git"], in: repo)
+        for arguments in [
+            ["-c", include, "-C", "repo", "remote", "add", "origin", "https://example.com/o.git"],
+            ["-c", include, "-c", "x.after=1", "-C", "repo", "remote", "set-url", "upstream", "https://example.com/v.git"],
+            ["-c", include, "-C", "repo", "remote", "rename", "upstream", "renamed"]
+        ] {
+            try await oracle.compare(arguments, in: oracle.root, state: state)
+        }
+    }
+
+    @Test("clone checks out with the invocation's config, -c or GIT_CONFIG_COUNT")
+    func cloneConfiguration() async throws {
+        let oracle = try GitInvocationOracle()
+        defer { oracle.cleanup() }
+        let source = try await oracle.repository("source")
+        let destination = oracle.root.appendingPathComponent("dest")
+        let state = { () async throws -> String in
+            let text = try Data(contentsOf: destination.appendingPathComponent("file.txt"))
+            // -c is not written into the clone's config.
+            let autocrlf = try await oracle.system(
+                ["config", "--file", ".git/config", "--get", "core.autocrlf"], in: destination)
+            return "file.txt: \(Array(text))\ncore.autocrlf: \(autocrlf.status) \(autocrlf.stdout)"
+        }
+        try await oracle.compare(
+            ["-c", "core.autocrlf=true", "clone", "-q", source.path, "dest"], in: oracle.root, state: state)
+        try await oracle.compare(
+            ["clone", "-q", source.path, "dest"], in: oracle.root,
+            environment: ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.autocrlf", "GIT_CONFIG_VALUE_0": "true"],
+            state: state)
+    }
+
     @Test("keys are checked when the config is read, in git's order and words")
     func configurationErrors() async throws {
         let oracle = try GitInvocationOracle()
