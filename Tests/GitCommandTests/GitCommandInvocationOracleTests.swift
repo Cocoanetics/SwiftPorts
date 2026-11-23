@@ -69,13 +69,18 @@ struct GitCommandInvocationOracleTests {
         try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
-        for arguments in [
+        var cases = [
             ["-C", "missing", "status"],
             ["-C", "repo/file.txt", "status"],
             ["-C", "repo/file.txt/below", "status"],
-            ["-C", "repo", "-C", "missing", "-c", "a.b=1", "status"],
-            ["-C", "locked", "status"]
-        ] {
+            ["-C", "repo", "-C", "missing", "-c", "a.b=1", "status"]
+        ]
+        // Root enters a directory without search permission (Linux CI's
+        // container runs as root), so only another user can't change to it.
+        if geteuid() != 0 {
+            cases.append(["-C", "locked", "status"])
+        }
+        for arguments in cases {
             // Snapshot only the repository: `locked` can't be copied.
             try await oracle.compare(arguments, in: oracle.root, fixture: repo)
         }
@@ -95,11 +100,14 @@ struct GitCommandInvocationOracleTests {
                 if referenceUsage {
                     #expect(actual.stderr == expected.stderr, "\(entry) \(arguments)")
                 } else {
-                    // The usage lines grow with git's global options; the
-                    // complaint before them does not.
+                    // The usage lines grow with git's global options, and
+                    // the complaint's wording moved too (`no directory given
+                    // for -C` before 2.54's `… for '-C' option`); its start
+                    // did not.
                     let actualLines = actual.stderr.split(separator: "\n")
                     let expectedLines = expected.stderr.split(separator: "\n")
-                    #expect(actualLines.first == expectedLines.first, "\(entry) \(arguments)")
+                    let start = { (line: Substring?) in line?.split(separator: " ").prefix(3) ?? [] }
+                    #expect(start(actualLines.first) == start(expectedLines.first), "\(entry) \(arguments)")
                     #expect(actualLines.dropFirst().first?.hasPrefix("usage: git ") == true)
                     #expect(expectedLines.dropFirst().first?.hasPrefix("usage: git ") == true)
                 }
