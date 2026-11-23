@@ -46,7 +46,7 @@ enum ReleaseLookup {
             variables: [
                 "owner": .string(target.owner),
                 "name": .string(target.name),
-                "tagName": .string("refs/tags/\(tag)"),
+                "tagName": .string("refs/tags/\(tag)")
             ],
             operationName: "RepositoryFindRef")
         return !(payload.repository.ref?.id ?? "").isEmpty
@@ -82,7 +82,7 @@ enum ReleaseLookup {
             variables: [
                 "owner": .string(target.owner),
                 "name": .string(target.name),
-                "tagName": .string(tag),
+                "tagName": .string(tag)
             ],
             operationName: "RepositoryReleaseByTag")
         guard let release = payload.repository.release, release.isDraft else {
@@ -102,21 +102,27 @@ enum ReleaseLookup {
     }
 
     private struct ReleaseByTagPayload: Decodable, Sendable {
-        struct Repository: Decodable, Sendable {
-            struct DraftRelease: Decodable, Sendable {
-                let databaseId: Int
-                let isDraft: Bool
-            }
-            let release: DraftRelease?
-        }
-        let repository: Repository
+        let repository: ReleaseByTagRepository
+    }
+
+    private struct ReleaseByTagRepository: Decodable, Sendable {
+        let release: DraftRelease?
+    }
+
+    private struct DraftRelease: Decodable, Sendable {
+        let databaseId: Int
+        let isDraft: Bool
     }
 
     private struct FindRefPayload: Decodable, Sendable {
-        struct Repository: Decodable, Sendable {
-            struct Ref: Decodable, Sendable { let id: String }
-            let ref: Ref?
-        }
-        let repository: Repository
+        let repository: FindRefRepository
+    }
+
+    private struct FindRefRepository: Decodable, Sendable {
+        let ref: RemoteRef?
+    }
+
+    private struct RemoteRef: Decodable, Sendable {
+        let id: String
     }
 }

@@ -90,7 +90,7 @@ extension HTTPMockedNetworkTests {
             #expect(out == "https://github.com/cli/cli/releases/tag/v1.0\n")
             #expect(server.requests.map(\.line) == [
                 "GET /repos/cli/cli/releases/tags/v1.0",
-                "PATCH /repos/cli/cli/releases/42",
+                "PATCH /repos/cli/cli/releases/42"
             ])
             let body = try Self.json(server.requests[1].body)
             #expect(body.count == 5)
@@ -163,7 +163,7 @@ extension HTTPMockedNetworkTests {
                 "GET /repos/cli/cli/releases/tags/v2.0",
                 "POST /graphql",
                 "GET /repos/cli/cli/releases/7",
-                "PATCH /repos/cli/cli/releases/7",
+                "PATCH /repos/cli/cli/releases/7"
             ])
             let query = try Self.json(server.requests[1].body)
             #expect((query["query"] as? String)?.contains("query RepositoryReleaseByTag(") == true)
@@ -219,7 +219,7 @@ extension HTTPMockedNetworkTests {
             #expect(server.requests.count == 2)
         }
 
-        // MARK: --verify-tag
+        // MARK: Verify tag
 
         @Test func verifyTagAbortsWhenReplacementTagIsMissing() async throws {
             let server = FakeGitHub()
@@ -369,19 +369,19 @@ extension HTTPMockedNetworkTests {
 
     /// Route table + request log for one test. `path` is the raw,
     /// still-percent-encoded path, so escaping is asserted exactly.
-    final class FakeGitHub: @unchecked Sendable {
-        struct Request {
-            let method: String
-            let path: String
-            let body: Data
-            var line: String { "\(method) \(path)" }
-        }
+    struct FakeGitHubRequest {
+        let method: String
+        let path: String
+        let body: Data
+        var line: String { "\(method) \(path)" }
+    }
 
+    final class FakeGitHub: @unchecked Sendable {
         private let lock = NSLock()
         private var routes: [String: () -> (Int, String)] = [:]
-        private var log: [Request] = []
+        private var log: [FakeGitHubRequest] = []
 
-        var requests: [Request] { lock.withLock { log } }
+        var requests: [FakeGitHubRequest] { lock.withLock { log } }
 
         func route(_ method: String, _ path: String, _ response: @escaping () -> (Int, String)) {
             lock.withLock { routes["\(method) \(path)"] = response }
@@ -393,7 +393,7 @@ extension HTTPMockedNetworkTests {
             let method = request.httpMethod ?? "GET"
             let body = try APIClientTests.requestBodyData(from: request)
             let route: (() -> (Int, String))? = lock.withLock {
-                log.append(Request(method: method, path: path, body: body))
+                log.append(FakeGitHubRequest(method: method, path: path, body: body))
                 return routes["\(method) \(path)"]
             }
             let (status, json) = route?() ?? (599, #"{"message":"unrouted"}"#)

@@ -52,7 +52,7 @@ extension HTTPMockedNetworkTests {
 
             #expect(server.requests.map(\.line) == [
                 "GET \(Self.project)/releases/v1.0",
-                "PUT \(Self.project)/releases/v1.0",
+                "PUT \(Self.project)/releases/v1.0"
             ])
             // Upstream resends name + description; ref never goes into an update,
             // and no date / milestones are injected.
@@ -131,7 +131,10 @@ extension HTTPMockedNetworkTests {
             let server = FakeGitLab()
             server.route("GET", "\(Self.project)/repository/tags/v1.0") { (404, #"{"message":"404 Tag Not Found"}"#) }
             server.route("GET", Self.project) {
-                (200, #"{"id":1,"name":"repo","path":"repo","path_with_namespace":"group/sub/repo","default_branch":"trunk","visibility":"private","web_url":"https://gitlab.com/group/sub/repo"}"#)
+                (200, #"""
+                    {"id":1,"name":"repo","path":"repo","path_with_namespace":"group/sub/repo",
+                     "default_branch":"trunk","visibility":"private","web_url":"https://gitlab.com/group/sub/repo"}
+                    """#)
             }
             server.route("GET", "\(Self.project)/releases/v1.0") { (404, #"{"message":"x"}"#) }
             server.route("POST", "\(Self.project)/releases") { (201, Self.release()) }
@@ -140,7 +143,7 @@ extension HTTPMockedNetworkTests {
                 "GET \(Self.project)/repository/tags/v1.0",
                 "GET \(Self.project)",
                 "GET \(Self.project)/releases/v1.0",
-                "POST \(Self.project)/releases",
+                "POST \(Self.project)/releases"
             ])
             let body = try Self.json(server.requests[3].body)
             #expect(body["ref"] as? String == "trunk")
@@ -272,19 +275,19 @@ extension HTTPMockedNetworkTests {
     }
 
     /// Route table + request log; paths stay percent-encoded.
-    final class FakeGitLab: @unchecked Sendable {
-        struct Request {
-            let method: String
-            let path: String
-            let body: Data
-            var line: String { "\(method) \(path)" }
-        }
+    struct FakeGitLabRequest {
+        let method: String
+        let path: String
+        let body: Data
+        var line: String { "\(method) \(path)" }
+    }
 
+    final class FakeGitLab: @unchecked Sendable {
         private let lock = NSLock()
         private var routes: [String: () -> (Int, String)] = [:]
-        private var log: [Request] = []
+        private var log: [FakeGitLabRequest] = []
 
-        var requests: [Request] { lock.withLock { log } }
+        var requests: [FakeGitLabRequest] { lock.withLock { log } }
 
         func route(_ method: String, _ path: String, _ response: @escaping () -> (Int, String)) {
             lock.withLock { routes["\(method) \(path)"] = response }
@@ -295,7 +298,7 @@ extension HTTPMockedNetworkTests {
             let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? url.path
             let method = request.httpMethod ?? "GET"
             let route: (() -> (Int, String))? = lock.withLock {
-                log.append(Request(method: method, path: path, body: requestBodyData(request)))
+                log.append(FakeGitLabRequest(method: method, path: path, body: requestBodyData(request)))
                 return routes["\(method) \(path)"]
             }
             let (status, json) = route?() ?? (599, #"{"message":"unrouted"}"#)

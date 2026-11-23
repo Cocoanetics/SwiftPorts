@@ -29,7 +29,10 @@ struct ReleaseCreate: AsyncParsableCommand {
     var name: String?
 
     @Option(name: [.customShort("r"), .customLong("ref")],
-            help: "If the specified tag doesn't exist, create a release from the ref and tag it with the specified tag name. Accepts a commit SHA, tag name, or branch name.")
+            help: """
+                If the specified tag doesn't exist, create a release from the ref and tag it \
+                with the specified tag name. Accepts a commit SHA, tag name, or branch name.
+                """)
     var ref: String?
 
     @Option(name: [.customShort("N"), .customLong("notes")],
@@ -37,7 +40,10 @@ struct ReleaseCreate: AsyncParsableCommand {
     var notes: String?
 
     @Option(name: [.customShort("F"), .customLong("notes-file")],
-            help: "Read release notes 'file'. To read from stdin, use '-'. If both --notes and --notes-file are set, --notes takes precedence.")
+            help: """
+                Read release notes 'file'. To read from stdin, use '-'. \
+                If both --notes and --notes-file are set, --notes takes precedence.
+                """)
     var notesFile: String?
 
     @Flag(name: .customLong("no-update"), help: "Prevent updating the existing release.")
@@ -132,8 +138,11 @@ struct ReleaseCreate: AsyncParsableCommand {
     private func resolveNotes() async throws -> String {
         if let notes {
             if notesFile != nil {
-                Shell.current.stderr.write(Data(
-                    "! --notes and --notes-file were both given: using --notes and ignoring --notes-file. Passing both will be an error in a future major release.\n".utf8))
+                Shell.current.stderr.write(Data("""
+                    ! --notes and --notes-file were both given: using --notes and ignoring --notes-file. \
+                    Passing both will be an error in a future major release.
+
+                    """.utf8))
             }
             return notes
         }

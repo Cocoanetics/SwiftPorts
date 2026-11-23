@@ -33,7 +33,7 @@ public struct GhCommand: AsyncParsableCommand {
         let bools: Set<String> = ["--draft", "--prerelease", "--latest", "--verify-tag"]
         let valued: Set<String> = [
             "-R", "--repo", "-t", "--title", "-n", "--notes", "-F", "--notes-file",
-            "--discussion-category", "--target", "--tag",
+            "--discussion-category", "--target", "--tag"
         ]
         var result = Array(args.prefix(2))
         var index = 2
