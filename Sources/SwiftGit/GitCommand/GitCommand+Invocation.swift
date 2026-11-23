@@ -21,7 +21,7 @@ extension GitCommand {
         "           [-p | --paginate | -P | --no-pager] [--no-replace-objects] [--no-lazy-fetch]",
         "           [--no-optional-locks] [--no-advice] [--bare] [--git-dir=<path>]",
         "           [--work-tree=<path>] [--namespace=<name>] [--config-env=<name>=<envvar>]",
-        "           <command> [<args>]",
+        "           <command> [<args>]"
     ]
 
     /// Runs one `git` invocation: `arguments` (argv without `argv[0]`) with

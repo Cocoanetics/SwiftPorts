@@ -49,7 +49,7 @@ struct GitConfigParametersTests {
         #expect(try read(text) == [
             Entry(key: "a.b", value: "1"), Entry(key: "a.b", value: nil), Entry(key: "a.c", value: ""),
             Entry(key: "x.y", value: "1=2"), Entry(key: "Sec.Sub Ü.Key", value: "it's !ü \"q\" \\"),
-            Entry(key: "n.l", value: "one\ntwo"),
+            Entry(key: "n.l", value: "one\ntwo")
         ])
     }
 
@@ -57,7 +57,7 @@ struct GitConfigParametersTests {
     func legacyForms() throws {
         #expect(try read("'a.b=legacy' 'c.d'\t'e.f'= \n 'g.h'='v'") == [
             Entry(key: "a.b", value: "legacy"), Entry(key: "c.d", value: nil),
-            Entry(key: "e.f", value: nil), Entry(key: "g.h", value: "v"),
+            Entry(key: "e.f", value: nil), Entry(key: "g.h", value: "v")
         ])
         #expect(try read("'a.b=x=y'") == [Entry(key: "a.b", value: "x=y")])
         #expect(try read("") == [])
@@ -73,7 +73,7 @@ struct GitConfigParametersTests {
         ("'a.b'='1''c.d'", "bogus format in GIT_CONFIG_PARAMETERS"),
         ("'a.b'='x", "bogus format in GIT_CONFIG_PARAMETERS"),
         ("'=x'", "bogus config parameter: =x"),
-        ("''", "bogus config parameter: "),
+        ("''", "bogus config parameter: ")
     ])
     func bogus(_ text: String, _ reason: String) {
         #expect(throws: CommandLineConfigError(reason: reason)) { try read(text) }
@@ -92,11 +92,11 @@ struct GitConfigParametersTests {
     func commandLineConfigOrder() throws {
         let entries = try GitClient.commandLineConfig([
             "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "A.B", "GIT_CONFIG_VALUE_0": "count",
-            "GIT_CONFIG_PARAMETERS": "'a.b'='param' 'c.d'= 'e.f'=''",
+            "GIT_CONFIG_PARAMETERS": "'a.b'='param' 'c.d'= 'e.f'=''"
         ])
         #expect(entries == [
             .init(name: "a.b", value: "count"), .init(name: "a.b", value: "param"),
-            .init(name: "c.d", value: nil), .init(name: "e.f", value: ""),
+            .init(name: "c.d", value: nil), .init(name: "e.f", value: "")
         ])
         #expect(throws: CommandLineConfigError(reason: "invalid key: a.1b")) {
             try GitClient.commandLineConfig(["GIT_CONFIG_PARAMETERS": "'a.1b'='x' 'bogus"])

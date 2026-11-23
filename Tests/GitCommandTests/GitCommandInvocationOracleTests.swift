@@ -42,7 +42,7 @@ struct GitCommandInvocationOracleTests {
             ["-C", "repo", "-C", "nested", "rev-parse", "--show-toplevel"],
             ["-C", "link", "-C", "..", "ls-files"],
             ["-C", "link", "rev-parse", "--show-toplevel"],
-            ["-C", "repo", "show", "HEAD:file.txt"],
+            ["-C", "repo", "show", "HEAD:file.txt"]
         ] {
             try await oracle.compare(arguments, in: root)
         }
@@ -74,7 +74,7 @@ struct GitCommandInvocationOracleTests {
             ["-C", "repo/file.txt", "status"],
             ["-C", "repo/file.txt/below", "status"],
             ["-C", "repo", "-C", "missing", "-c", "a.b=1", "status"],
-            ["-C", "locked", "status"],
+            ["-C", "locked", "status"]
         ] {
             // Snapshot only the repository: `locked` can't be copied.
             try await oracle.compare(arguments, in: oracle.root, fixture: repo)
@@ -137,7 +137,7 @@ struct GitCommandInvocationOracleTests {
             ["-c", "a.b=1", "-C", "repo", "diff", "-U1", "--", "file.txt"],
             ["-C", "repo", "-c", "a.b=1", "log", "-1", "--format=%s"],
             ["-C", "repo", "diff", "--", "--color"],
-            ["-C", "repo", "commit", "-q", "-a", "-m", "-S"],
+            ["-C", "repo", "commit", "-q", "-a", "-m", "-S"]
         ] {
             try await oracle.compare(arguments, in: oracle.root, fixture: repo) {
                 try await oracle.gitOK(["log", "--format=%s", "--name-status"], in: repo)
@@ -158,7 +158,7 @@ struct GitCommandInvocationOracleTests {
             ["-c", "a.b=1", "-c", "a.b=2", "-C", "repo", "config", "--get", "a.b"],
             ["-c", "a.b", "-C", "repo", "config", "a.b"],
             ["-c", "url.https://example.com/?q=1.insteadOf=x", "-C", "repo", "config", "--list"],
-            ["-c", "Sec.Sub Ü.Key=it's !ü \"q\" \\", "-c", "x.y", "-C", "repo", "config", "--list", "--show-origin"],
+            ["-c", "Sec.Sub Ü.Key=it's !ü \"q\" \\", "-c", "x.y", "-C", "repo", "config", "--list", "--show-origin"]
         ] {
             try await oracle.compare(arguments, in: oracle.root)
         }
@@ -188,13 +188,13 @@ struct GitCommandInvocationOracleTests {
         let inherited = [
             "GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "a.b", "GIT_CONFIG_VALUE_0": "count",
             "GIT_CONFIG_KEY_1": "c.d", "GIT_CONFIG_VALUE_1": "count",
-            "GIT_CONFIG_PARAMETERS": "'a.b'='parameter' 'e.f'= 'g.h=legacy' 'i.j' 'k.l'='it'\\''s'",
+            "GIT_CONFIG_PARAMETERS": "'a.b'='parameter' 'e.f'= 'g.h=legacy' 'i.j' 'k.l'='it'\\''s'"
         ]
         for arguments in [
             ["-C", "repo", "config", "--list", "--show-origin"],
             ["-C", "repo", "-c", "a.b=cli", "-c", "c.d", "config", "--list", "--show-origin"],
             ["-C", "repo", "-c", "a.b=cli", "config", "--get", "a.b"],
-            ["-C", "repo", "config", "--get", "a.b"],
+            ["-C", "repo", "config", "--get", "a.b"]
         ] {
             try await oracle.compare(arguments, in: oracle.root, environment: inherited)
         }
@@ -213,7 +213,7 @@ struct GitCommandInvocationOracleTests {
             ["-c", "", "-C", "repo", "config", "--list"],
             ["-c", "=v", "-C", "repo", "config", "--list"],
             ["-c", "a.x\ny.z=1", "-C", "repo", "config", "--list"],
-            ["-c", "a.b=1", "-c", "invalid", "-c", "c.d=1", "-C", "repo", "status"],
+            ["-c", "a.b=1", "-c", "invalid", "-c", "c.d=1", "-C", "repo", "status"]
         ] {
             try await oracle.compare(arguments, in: oracle.root)
         }
@@ -243,7 +243,9 @@ struct GitCommandInvocationOracleTests {
         defer { oracle.cleanup() }
         let repo = try await oracle.repository()
         try Data("two\n".utf8).write(to: repo.appendingPathComponent("file.txt"))
-        let identity = { () async throws -> String in try await oracle.gitOK(["log", "-1", "--format=%an|%ae|%cn|%ce|%s"], in: repo) }
+        let identity = { () async throws -> String in
+            try await oracle.gitOK(["log", "-1", "--format=%an|%ae|%cn|%ce|%s"], in: repo)
+        }
         try await oracle.compare(
             ["-C", "repo", "-c", "user.name=CLI Name", "-c", "user.email=cli@example.com",
              "commit", "-q", "-a", "-m", "cli"],

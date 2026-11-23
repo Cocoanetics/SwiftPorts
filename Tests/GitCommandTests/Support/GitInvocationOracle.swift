@@ -252,7 +252,8 @@ struct GitInvocationOracle {
         func timedOut() {
             update {
                 if pending > 0 {
-                    failure = Failure(description: "git run still going after \(GitInvocationOracle.processTimeLimit): \(label)")
+                    let limit = GitInvocationOracle.processTimeLimit
+                    failure = Failure(description: "git run still going after \(limit): \(label)")
                 }
             }
         }
@@ -288,13 +289,14 @@ struct GitInvocationOracle {
     /// System git, then each entry path of the port, from the same state of
     /// `fixture` (copied before and put back after every run): the outputs
     /// and `state` (read with system git after each run) must be the same.
-    /// `stdout: false` leaves stdout out (a version line). Returns system
+    /// `stdout: false` leaves stdout out (a version line); `entries` narrows
+    /// the entry paths compared. Returns system
     /// git's output.
     @discardableResult
     func compare(
         _ arguments: [String], in directory: URL, environment extra: [String: String] = [:],
         fixture: URL? = nil, stdout compareStdout: Bool = true,
-        state: (() async throws -> String)? = nil,
+        state: (() async throws -> String)? = nil, entries: [Entry] = Entry.allCases,
         sourceLocation: SourceLocation = #_sourceLocation
     ) async throws -> Output {
         let fixture = fixture ?? root
@@ -304,7 +306,7 @@ struct GitInvocationOracle {
         defer { try? FileManager.default.removeItem(at: backup) }
         let expected = try await system(arguments, in: directory, environment: extra)
         let expectedState = try await state?()
-        for entry in Entry.allCases {
+        for entry in entries {
             try replace(fixture, with: backup)
             let actual = try await port(entry, arguments, in: directory, environment: extra)
             let label = "\(entry) git \(arguments) in \(directory.lastPathComponent)"

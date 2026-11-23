@@ -4,7 +4,6 @@
 // does.
 #if os(macOS) || os(Linux)
 import Foundation
-import GitLFSKit
 import Testing
 
 @Suite("git -C / -c reach git lfs (git-lfs 3.7.1)", .serialized,
@@ -59,7 +58,7 @@ struct GitCommandInvocationLFSOracleTests {
             ["-C", "repo", "-c", "lfs.url=https://lfs.example.com/objects", "-c", "lfs.storage=../store",
              "-c", "lfs.concurrenttransfers=3", "-c", "lfs.fetchrecentrefsdays=9", "lfs", "env"],
             ["-c", "remote.origin.url=https://example.com/one.git", "-c", "remote.origin.lfsurl=https://lfs.example.com/two",
-             "-C", "repo", "lfs", "env"],
+             "-C", "repo", "lfs", "env"]
         ] {
             try await compareEnv(arguments, oracle)
         }
@@ -80,10 +79,11 @@ struct GitCommandInvocationLFSOracleTests {
         try await oracle.gitOK(["add", ".gitattributes"], in: repo)
         try await oracle.gitOK(["commit", "-q", "-m", "track"], in: repo)
         try Data("large object\n".utf8).write(to: repo.appendingPathComponent("big.bin"))
-        // The embedded command runs filters only once they are installed;
-        // the executable installs them at startup.
-        try GitLFSKit.installFilter()
-        defer { try? GitLFSKit.uninstallFilter() }
+        // Only the executable: it registers the process-global `lfs` filter
+        // at startup in its own process, where registering it here would
+        // race the other suites of this test process that do. It changes no
+        // process directory either, so its filter sees `-C` / `-c` through
+        // the same invocation Shell the embedded command gets.
         let store = oracle.root.appendingPathComponent("store")
         let state = { () async throws -> String in
             let staged = try await oracle.gitOK(["cat-file", "-p", ":big.bin"], in: repo)
@@ -93,7 +93,7 @@ struct GitCommandInvocationLFSOracleTests {
         }
         try await oracle.compare(
             ["-C", "repo", "-c", "lfs.storage=\(store.path)", "add", "big.bin"],
-            in: oracle.root, fixture: oracle.root, state: state)
+            in: oracle.root, fixture: oracle.root, state: state, entries: [.standalone])
     }
 }
 #endif

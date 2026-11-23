@@ -120,7 +120,8 @@ struct GitCommandInvocationIsolationTests {
             }
         }
         let before = ambient(parent)
-        for arguments in [["-C", "secret", "status"], ["-C", "door", "status"], ["-C", "repo", "-C", "../secret", "log"]] {
+        for arguments in [["-C", "secret", "status"], ["-C", "door", "status"],
+                          ["-C", "repo", "-C", "../secret", "log"]] {
             let denied = try await oracle.embedded(arguments, in: parent)
             #expect(denied == .init(stdout: "", stderr: "git: permission denied by sandbox\n", status: 1),
                     "\(arguments)")
