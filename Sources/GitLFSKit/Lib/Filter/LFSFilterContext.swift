@@ -12,6 +12,7 @@ struct LFSFilterContext: Sendable {
     let shell: Shell
     let remotes: LFSFilterRemotes
     var processCommand: String?
+    var operation: GitFilterOperationContext?
 
     static func command(_ git: SwiftGit.GitClient, direction: GitFilterDirection) async throws -> String? {
         // convert.c gives process presence precedence, including an empty value.
@@ -52,8 +53,25 @@ struct LFSFilterContext: Sendable {
         }
     }
 
-    func run<T: Sendable>(_ body: @escaping @Sendable () async throws -> T) throws -> T {
-        try BlockingBridge.runBlocking { try await shell.withCurrent(body) }
+    func run<T: Sendable>(
+        onDiscard: @Sendable (T) -> Void = { _ in },
+        _ body: @escaping @Sendable () async throws -> T
+    ) throws -> T {
+        if let operation { return try operation.runBlocking(onDiscard: onDiscard, body) }
+        return try BlockingBridge.runBlocking(onDiscard: onDiscard) { try await shell.withCurrent(body) }
+    }
+
+    /// Throws `error` unless an optional driver may fall back from it.
+    func checkFallback(after error: any Error) throws {
+        try rethrowCancellation(error)
+        guard !required else { throw error }
+    }
+
+    /// Cancellation is never a failure a driver falls back from: that would
+    /// hand git unfiltered output as though the operation had gone on.
+    func rethrowCancellation(_ error: any Error) throws {
+        if error is CancellationError { throw error }
+        try operation?.checkCancellation()
     }
 
     var configuration: LFSConfiguration { client.finder.configuration }

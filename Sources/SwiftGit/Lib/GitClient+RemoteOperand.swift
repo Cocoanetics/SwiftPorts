@@ -397,11 +397,14 @@ extension GitClient {
         }
         try await Shell.authorize(destination)
         let progress = shellProgressSink()
+        // As for a URL: the new repository gets the effective config
+        // before `origin` is created or anything is checked out.
         try await isolatedGated(deferFilterFailures: true) {
             _ = try Repository.clone(
                 fromRemote: source, to: destination,
                 depth: depth, singleBranch: singleBranch, branch: branch,
-                credentials: credentials, progress: progress)
+                credentials: credentials, progress: progress,
+                preparation: RepositoryPreparation { try self.prepare($0) })
         }
     }
 

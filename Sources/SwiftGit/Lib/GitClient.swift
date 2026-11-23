@@ -106,7 +106,8 @@ public struct GitClient: ForgeKit.GitClient {
                 depth: depth,
                 singleBranch: singleBranch,
                 branch: branch,
-                credentials: credentials, progress: progress)
+                credentials: credentials, progress: progress,
+                preparation: RepositoryPreparation { try self.prepare($0) })
         }
     }
 
@@ -317,13 +318,19 @@ public struct GitClient: ForgeKit.GitClient {
         // goes onto the repository's live config before anything reads it.
         return try await isolatedGated(deferFilterFailures: deferFilterFailures) {
             let repo = try Repository.open(at: workingDirectory)
-            // Whatever the operation signs, it signs through the shell.
-            repo.setSigner(ShellSigner(client: self, shell: Shell.current))
-            try Self.installEnvironmentConfig(into: repo)
-            // What git refuses of its config stops it before anything else.
-            try self.checkConfigSyntax(of: repo)
+            try prepare(repo)
             return try body(repo)
         }
+    }
+
+    func prepare(_ repo: Repository, cancellation: BlockingBridgeCancellation? = nil) throws {
+        let directory = try repo.workdirURL
+            ?? repo.gitDir().map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? workingDirectory
+        let repoClient = GitClient(workingDirectory: directory, credentials: credentials)
+        repo.setSigner(ShellSigner(client: repoClient, shell: Shell.current, cancellation: cancellation))
+        try Self.installEnvironmentConfig(into: repo)
+        try repoClient.checkConfigSyntax(of: repo)
     }
 
     /// GitKit's own signer launches programs with `Foundation.Process`,

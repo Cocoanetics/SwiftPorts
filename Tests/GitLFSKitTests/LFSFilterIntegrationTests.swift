@@ -120,6 +120,15 @@ extension LFSFilterTests {
                 let clone = SwiftGit.GitClient(workingDirectory: destination)
                 #expect(try Data(contentsOf: destination.appendingPathComponent("a.lfs")) == data)
                 #expect(try await clone.status().isClean)
+
+                // `git clone`'s route: the remote as typed, with the
+                // filter and storage configured only by the environment.
+                let remoteDestination = host.root.appendingPathComponent("remote-clone")
+                try await SwiftGit.GitClient(workingDirectory: host.root)
+                    .clone(remote: made.directory.path, directory: remoteDestination)
+                let remoteClone = SwiftGit.GitClient(workingDirectory: remoteDestination)
+                #expect(try Data(contentsOf: remoteDestination.appendingPathComponent("a.lfs")) == data)
+                #expect(try await remoteClone.status().isClean)
             }
         }
 

@@ -16,6 +16,7 @@ extension LocalStore {
         while true {
             let file = temporaryDirectory.appendingPathComponent(String(UInt32.random(in: .min ... .max)))
             try await Shell.authorize(file)
+            try Task.checkCancellation()
             do {
                 try Data().write(to: file, options: .withoutOverwriting)
                 return file

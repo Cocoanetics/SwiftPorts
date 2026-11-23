@@ -38,7 +38,9 @@ extension GitClient {
     public func worktreeAdd(path: URL, branch: String, force: Bool = false) async throws {
         try await Shell.authorize(path)
         try await withRepository {
-            try $0.worktreeAdd(path: path, branch: branch, force: force)
+            try $0.worktreeAdd(
+                path: path, branch: branch, force: force,
+                preparation: RepositoryPreparation { try self.prepare($0) })
         }
     }
 

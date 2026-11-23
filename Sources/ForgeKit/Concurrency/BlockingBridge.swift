@@ -27,13 +27,20 @@ import Foundation
 /// actor-isolated work off the pool, but a
 /// nonisolated async call can require a cooperative-pool thread.
 package enum BlockingBridge {
-    package static func runBlocking<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) throws -> T {
+    package static func runBlocking<T: Sendable>(
+        cancellation: BlockingBridgeCancellation? = nil,
+        onDiscard: @Sendable (T) -> Void = { _ in },
+        _ operation: @escaping @Sendable () async throws -> T
+    ) throws -> T {
+        try cancellation?.checkCancellation()
         let semaphore = DispatchSemaphore(value: 0)
         let box = ResultBox<T>()
 
+        let task: Task<Void, Never>
         if #available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, *) {
-            Task(executorPreference: blockingBridgeThread) {
+            task = Task(executorPreference: blockingBridgeThread) {
                 do {
+                    try Task.checkCancellation()
                     box.value = .success(try await operation())
                 } catch {
                     box.value = .failure(error)
@@ -41,8 +48,9 @@ package enum BlockingBridge {
                 semaphore.signal()
             }
         } else {
-            Task { @BlockingBridgeExecutor in
+            task = Task { @BlockingBridgeExecutor in
                 do {
+                    try Task.checkCancellation()
                     box.value = .success(try await operation())
                 } catch {
                     box.value = .failure(error)
@@ -51,7 +59,17 @@ package enum BlockingBridge {
             }
         }
 
+        let registration = cancellation?.register(task)
+        defer { if let registration { cancellation?.unregister(registration) } }
         semaphore.wait()
+        do {
+            try cancellation?.checkCancellation()
+        } catch {
+            // The task may have acquired a resource before cancellation won.
+            // Its caller never receives that value, so release it here.
+            if case .success(let value) = box.value { onDiscard(value) }
+            throw error
+        }
         return try box.value.get()
     }
 

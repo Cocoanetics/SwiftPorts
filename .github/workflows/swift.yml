@@ -270,14 +270,11 @@ jobs:
         # alias copy so the link resolves; bz2 / liblzma / libzstd
         # all happen to ship under the names lld-link expects.
         #
-        # We install only zlib here — bz2 / lzma / zstd are not
-        # needed by libarchive's CArchive (only GzipSupport trait
-        # is enabled in Package.swift) and the Bzip2Kit / XzKit /
-        # ZstdKit Swift modules are gated to non-Apple-mobile via
-        # `condition: .when(platforms: [.macOS, .linux, .windows])`.
-        # Their corresponding C shims still need the headers + libs
-        # though — install all four so Bzip2Kit / XzKit / ZstdKit
-        # link cleanly.
+        # SwiftPorts enables GitKit's Archive trait and swift-archive's
+        # gzip/bzip2/xz/zstd filters. The public-consumer package links
+        # those native libraries too, so each SwiftPM invocation needs
+        # this installation's include and library search paths. lz4
+        # additionally backs the standalone Lz4Kit target.
         shell: pwsh
         run: |
           & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install zlib bzip2 liblzma zstd lz4 --triplet x64-windows-static-md
@@ -324,7 +321,11 @@ jobs:
             -Xlinker "/LIBPATH:$env:VCPKG_BASE\lib"
       - name: Test public LFS server consumer (Windows)
         shell: pwsh
-        run: swift test --package-path Tests/Fixtures/GitLFSPublicConsumer --scratch-path "${{ runner.temp }}/GitLFSPublicConsumer" --build-system native
+        run: |
+          swift test --package-path Tests/Fixtures/GitLFSPublicConsumer `
+            --scratch-path "${{ runner.temp }}/GitLFSPublicConsumer" --build-system native `
+            -Xcc "-I$env:VCPKG_BASE\include" `
+            -Xlinker "/LIBPATH:$env:VCPKG_BASE\lib"
       - name: Test engine traits FTS5 + SQLiteVec (Windows)
         # One rebuild with both engine traits instead of recompiling sqlite3.c
         # twice (the slow part that overran the 30-min timeout on Windows). Runs
