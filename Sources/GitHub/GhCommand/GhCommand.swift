@@ -19,7 +19,41 @@ public struct GhCommand: AsyncParsableCommand {
                 args.insert("", at: next)
             }
         }
-        return args
+        return preprocessReleaseEdit(args)
+    }
+
+    /// `gh release edit`'s `--draft`, `--prerelease`, `--latest` and
+    /// `--verify-tag` are pflag bools: bare means true, `--draft=false`
+    /// means false. ArgumentParser can't express that on one flag, so
+    /// the bare spelling becomes `--draft=true` for an
+    /// ``ReleaseEditBool`` option. Values of value-taking options and
+    /// everything after `--` are left alone.
+    static func preprocessReleaseEdit(_ args: [String]) -> [String] {
+        guard args.count >= 2, args[0] == "release", args[1] == "edit" else { return args }
+        let bools: Set<String> = ["--draft", "--prerelease", "--latest", "--verify-tag"]
+        let valued: Set<String> = [
+            "-R", "--repo", "-t", "--title", "-n", "--notes", "-F", "--notes-file",
+            "--discussion-category", "--target", "--tag",
+        ]
+        var result = Array(args.prefix(2))
+        var index = 2
+        while index < args.count {
+            let arg = args[index]
+            if arg == "--" {
+                result.append(contentsOf: args[index...])
+                break
+            }
+            if bools.contains(arg) {
+                result.append(arg + "=true")
+            } else if valued.contains(arg), index + 1 < args.count {
+                result.append(contentsOf: [arg, args[index + 1]])
+                index += 1
+            } else {
+                result.append(arg)
+            }
+            index += 1
+        }
+        return result
     }
 
     /// Custom entry point so the standalone binary applies

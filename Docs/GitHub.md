@@ -55,7 +55,7 @@ gh pr         list / view / create / edit / merge / close / reopen /
               update-branch
 gh issue      list / view / create / edit / close / reopen / lock /
               pin / develop / comment
-gh release    list / view / create / download / delete
+gh release    list / view / create / edit / download / delete
 gh workflow   list / view / run / disable / enable
 gh run        list / view (--jobs / --job / --log / --exit-status) /
               watch / rerun / cancel / download
