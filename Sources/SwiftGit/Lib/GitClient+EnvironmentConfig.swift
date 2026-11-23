@@ -406,10 +406,81 @@ extension GitClient {
         if let file = plan.systemFile {
             try repository.addConfigFile(at: URL(fileURLWithPath: file.resolved), level: .system)
         }
-        if !plan.commandLine.isEmpty {
-            let entries = plan.commandLine.map { ConfigEntry(name: $0.name, value: $0.value) }
-            try repository.addConfigEntries(entries, level: .app, name: "command line")
+        guard !plan.commandLine.isEmpty else { return }
+        let segments = commandLineSegments(plan.commandLine)
+        if segments.count > 1 {
+            // GitKit's typed levels stop at app; an include's file and the
+            // entries after it go above, as git reads them in place.
+            guard let pointer = handle(of: repository) else {
+                throw Libgit2Error(
+                    code: -1, klass: Int32(GIT_ERROR_CONFIG.rawValue),
+                    message: "cannot reach GitKit's repository handle to apply -c include.path to it")
+            }
+            var config: OpaquePointer?
+            try check(git_repository_config(&config, pointer))
+            defer { git_config_free(config) }
+            try installCommandLineSegments(segments.dropFirst(), into: config, repo: pointer)
         }
+        // Last, as it restores the write order and refreshes what the
+        // repository derived from its config for every level added.
+        let entries = segments[0].entries.map { ConfigEntry(name: $0.name, value: $0.value) }
+        try repository.addConfigEntries(entries, level: .app, name: commandLineBackendType)
+    }
+
+    /// One level of the command line's config: the entries up to an include,
+    /// or the file an include reads.
+    struct CommandLineSegment {
+        let level: Int32
+        var entries: [EnvironmentConfig.CommandLineEntry] = []
+        var include: String?
+    }
+
+    /// The entries up to each include, then the file it includes, each a
+    /// level above the one before, from `GIT_CONFIG_LEVEL_APP` up: in git,
+    /// what an include reads takes its place among the entries, so those
+    /// after it win over it, and it over those before. A listing sorts by
+    /// level, so the order holds there too. The first segment is always
+    /// there, empty or not.
+    static func commandLineSegments(_ entries: [EnvironmentConfig.CommandLineEntry]) -> [CommandLineSegment] {
+        var level = GIT_CONFIG_LEVEL_APP.rawValue
+        var segments = [CommandLineSegment(level: level)]
+        for entry in entries {
+            segments[segments.count - 1].entries.append(entry)
+            guard let include = entry.include else { continue }
+            level += 1
+            segments.append(CommandLineSegment(level: level, include: include))
+            level += 1
+            segments.append(CommandLineSegment(level: level))
+        }
+        if segments.count > 1, segments[segments.count - 1].entries.isEmpty {
+            segments.removeLast()
+        }
+        return segments
+    }
+
+    /// Adds `segments` to `config`. An included file is an on-disk, writable
+    /// level, which libgit2 would make the write target: the write order is
+    /// put back so that writes (`remote add`, an upstream, a clone's
+    /// `remote.origin.*`) keep going where git puts them, not into the
+    /// included file.
+    private static func installCommandLineSegments(
+        _ segments: ArraySlice<CommandLineSegment>, into config: OpaquePointer?, repo: OpaquePointer?
+    ) throws {
+        for segment in segments {
+            if let include = segment.include {
+                try check(git_config_add_file_ondisk(config, include, git_config_level_t(rawValue: segment.level), repo, 1))
+            } else if !segment.entries.isEmpty {
+                try addCommandLineBackend(segment.entries, to: config, level: segment.level, repo: repo)
+            }
+        }
+        guard segments.contains(where: { $0.include != nil }) else { return }
+        // A repository's config writes only its own file (load_config);
+        // one without, the files in their default order.
+        var order: [git_config_level_t] = repo != nil
+            ? [GIT_CONFIG_LEVEL_LOCAL]
+            : [GIT_CONFIG_LEVEL_WORKTREE, GIT_CONFIG_LEVEL_LOCAL, GIT_CONFIG_LEVEL_GLOBAL,
+               GIT_CONFIG_LEVEL_XDG, GIT_CONFIG_LEVEL_SYSTEM, GIT_CONFIG_LEVEL_PROGRAMDATA]
+        try check(git_config_set_writeorder(config, &order, order.count))
     }
 
     /// Gives the environment's config to the live config of `repo`: the
@@ -434,25 +505,7 @@ extension GitClient {
         if let file = plan.systemFile {
             try check(git_config_add_file_ondisk(config, file.resolved, GIT_CONFIG_LEVEL_SYSTEM, repo, 1))
         }
-        // The entries up to each include, then the file it includes, each
-        // a level above the one before: in git, what an include reads takes
-        // its place among the entries, so those after it win over it, and
-        // it over those before. A listing sorts by level, so the order
-        // holds there too.
-        var level = GIT_CONFIG_LEVEL_APP.rawValue
-        var segment: [EnvironmentConfig.CommandLineEntry] = []
-        for entry in plan.commandLine {
-            segment.append(entry)
-            guard let include = entry.include else { continue }
-            try addCommandLineBackend(segment, to: config, level: level, repo: repo)
-            segment = []
-            level += 1
-            try check(git_config_add_file_ondisk(config, include, git_config_level_t(rawValue: level), repo, 1))
-            level += 1
-        }
-        if !segment.isEmpty {
-            try addCommandLineBackend(segment, to: config, level: level, repo: repo)
-        }
+        try installCommandLineSegments(commandLineSegments(plan.commandLine)[...], into: config, repo: repo)
     }
 
     /// `entries` as an in-memory `command line` backend of `config`.
