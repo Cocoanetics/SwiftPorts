@@ -18,8 +18,8 @@ struct ReleaseEdit: AsyncParsableCommand {
     )
 
     @Option(name: [.customShort("R"), .long],
-            help: "Repository as OWNER/REPO. Defaults to the current directory's git remote.")
-    var repo: RepositoryReference?
+            help: "Repository as [HOST/]OWNER/REPO. Defaults to the current directory's git remote.")
+    var repo: ReleaseEditRepo?
 
     @Argument(help: "Tag name of the release to edit.")
     var tag: String
@@ -61,9 +61,9 @@ struct ReleaseEdit: AsyncParsableCommand {
 
     func run() async throws {
         try requireFlags()
-        let target = try await RepositoryResolver.resolve(flag: repo)
-        let api = try await CommandContext.apiClient()
-        let gql = try await CommandContext.graphQLClient()
+        let target = try await RepositoryResolver.resolve(flag: repo?.reference)
+        let api = try await CommandContext.apiClient(host: repo?.host)
+        let gql = try await CommandContext.graphQLClient(host: repo?.host)
         try await run(target: target, api: api, gql: gql)
     }
 

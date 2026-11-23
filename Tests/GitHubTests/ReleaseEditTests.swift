@@ -88,11 +88,11 @@ extension HTTPMockedNetworkTests {
                 server: server)
 
             #expect(out == "https://github.com/cli/cli/releases/tag/v1.0\n")
-            #expect(server.requests.map(\.line) == [
+            #expect(server.rest.map(\.line) == [
                 "GET /repos/cli/cli/releases/tags/v1.0",
                 "PATCH /repos/cli/cli/releases/42"
             ])
-            let body = try Self.json(server.requests[1].body)
+            let body = try Self.json(server.body("PATCH /repos/cli/cli/releases/42"))
             #expect(body.count == 5)
             #expect(body["tag_name"] as? String == "v1.0")
             #expect(body["name"] as? String == "")
@@ -111,7 +111,7 @@ extension HTTPMockedNetworkTests {
             }
             // Empty --tag / --target count as flags but never become keys.
             _ = try await Self.run(["v1.0", "-t", "New", "--tag", "", "--target", ""], server: server)
-            let body = try Self.json(server.requests[1].body)
+            let body = try Self.json(server.body("PATCH /repos/cli/cli/releases/42"))
             #expect(body.keys.sorted() == ["name", "tag_name"])
             #expect(body["tag_name"] as? String == "v1.0")
         }
@@ -125,7 +125,7 @@ extension HTTPMockedNetworkTests {
                 (200, Self.release(id: 42, tag: "v1.0"))
             }
             _ = try await Self.run(["v1.0", "-R", "cli/cli"], server: server)
-            #expect(try Self.json(server.requests[1].body).keys.sorted() == ["tag_name"])
+            #expect(try Self.json(server.body("PATCH /repos/cli/cli/releases/42")).keys.sorted() == ["tag_name"])
         }
 
         @Test func tagIsOneEscapedPathSegment() async throws {
@@ -137,7 +137,7 @@ extension HTTPMockedNetworkTests {
                 (200, Self.release(id: 5, tag: "release/1.0%#"))
             }
             _ = try await Self.run(["release/1.0%#", "--prerelease"], server: server)
-            let body = try Self.json(server.requests[1].body)
+            let body = try Self.json(server.body("PATCH /repos/cli/cli/releases/5"))
             #expect(body["tag_name"] as? String == "release/1.0%#")
             #expect(body["prerelease"] as? Bool == true)
         }
@@ -147,7 +147,7 @@ extension HTTPMockedNetworkTests {
         @Test func resolvesDraftThroughGraphQLThenRESTById() async throws {
             let server = FakeGitHub()
             server.route("GET", "/repos/cli/cli/releases/tags/v2.0") { (404, #"{"message":"Not Found"}"#) }
-            server.route("POST", "/graphql") {
+            server.route("POST", "/graphql RepositoryReleaseByTag") {
                 (200, #"{"data":{"repository":{"release":{"databaseId":7,"isDraft":true}}}}"#)
             }
             server.route("GET", "/repos/cli/cli/releases/7") {
@@ -159,17 +159,22 @@ extension HTTPMockedNetworkTests {
             _ = try await Self.run(["v2.0", "--draft=false", "--discussion-category", "General"],
                                    server: server)
 
-            #expect(server.requests.map(\.line) == [
+            // The two lookups race, so only their set is fixed; the
+            // by-id fetch and the PATCH follow the GraphQL hit.
+            let lines = server.requests.map(\.line)
+            #expect(Set(lines.prefix(2)) == [
                 "GET /repos/cli/cli/releases/tags/v2.0",
-                "POST /graphql",
+                "POST /graphql RepositoryReleaseByTag"
+            ])
+            #expect(Array(lines.dropFirst(2)) == [
                 "GET /repos/cli/cli/releases/7",
                 "PATCH /repos/cli/cli/releases/7"
             ])
-            let query = try Self.json(server.requests[1].body)
+            let query = try Self.json(server.body("POST /graphql RepositoryReleaseByTag"))
             #expect((query["query"] as? String)?.contains("query RepositoryReleaseByTag(") == true)
             let variables = try #require(query["variables"] as? [String: String])
             #expect(variables == ["owner": "cli", "name": "cli", "tagName": "v2.0"])
-            let body = try Self.json(server.requests[3].body)
+            let body = try Self.json(server.body("PATCH /repos/cli/cli/releases/7"))
             #expect(body.keys.sorted() == ["discussion_category_name", "draft", "tag_name"])
             #expect(body["draft"] as? Bool == false)
         }
@@ -177,7 +182,9 @@ extension HTTPMockedNetworkTests {
         @Test func failedDraftLookupDoesNotMaskPublishedNotFound() async throws {
             let server = FakeGitHub()
             server.route("GET", "/repos/cli/cli/releases/tags/v9") { (404, #"{"message":"Not Found"}"#) }
-            server.route("POST", "/graphql") { (200, #"{"data":{"repository":{"release":null}}}"#) }
+            server.route("POST", "/graphql RepositoryReleaseByTag") {
+                (200, #"{"data":{"repository":{"release":null}}}"#)
+            }
             await #expect(throws: ReleaseEditError.releaseNotFound) {
                 _ = try await Self.run(["v9", "--draft"], server: server)
             }
@@ -189,7 +196,7 @@ extension HTTPMockedNetworkTests {
             // falls back to creating or writing anything.
             let server = FakeGitHub()
             server.route("GET", "/repos/cli/cli/releases/tags/v1") { (500, #"{"message":"boom"}"#) }
-            server.route("POST", "/graphql") { (502, #"{"message":"bad gateway"}"#) }
+            server.route("POST", "/graphql RepositoryReleaseByTag") { (502, #"{"message":"bad gateway"}"#) }
             await #expect(throws: APIError.self) {
                 _ = try await Self.run(["v1", "--draft"], server: server)
             }
@@ -206,7 +213,7 @@ extension HTTPMockedNetworkTests {
                 _ = try await Self.run(["v1", "-t", "x"], server: server)
             }
             #expect(server.requests.filter { $0.method == "PATCH" }.count == 1)
-            #expect(server.requests.count == 2)
+            #expect(server.rest.count == 2)
         }
 
         @Test func undecodableWriteResponseFailsWithoutSecondWrite() async throws {
@@ -216,7 +223,7 @@ extension HTTPMockedNetworkTests {
             await #expect(throws: APIError.self) {
                 _ = try await Self.run(["v1", "-t", "x"], server: server)
             }
-            #expect(server.requests.count == 2)
+            #expect(server.rest.count == 2)
         }
 
         // MARK: Verify tag
@@ -224,11 +231,11 @@ extension HTTPMockedNetworkTests {
         @Test func verifyTagAbortsWhenReplacementTagIsMissing() async throws {
             let server = FakeGitHub()
             server.route("GET", "/repos/cli/cli/releases/tags/v1") { (200, Self.release(id: 1, tag: "v1")) }
-            server.route("POST", "/graphql") { (200, #"{"data":{"repository":{"ref":null}}}"#) }
+            server.route("POST", "/graphql RepositoryFindRef") { (200, #"{"data":{"repository":{"ref":null}}}"#) }
             await #expect(throws: ReleaseEditError.tagNotFound(tag: "v2", repo: "cli/cli")) {
                 _ = try await Self.run(["v1", "--tag", "v2", "--verify-tag"], server: server)
             }
-            let query = try Self.json(server.requests[1].body)
+            let query = try Self.json(server.body("POST /graphql RepositoryFindRef"))
             #expect((query["variables"] as? [String: String])?["tagName"] == "refs/tags/v2")
             #expect(!server.requests.contains { $0.method == "PATCH" })
         }
@@ -236,10 +243,12 @@ extension HTTPMockedNetworkTests {
         @Test func verifyTagPassesAndRenames() async throws {
             let server = FakeGitHub()
             server.route("GET", "/repos/cli/cli/releases/tags/v1") { (200, Self.release(id: 1, tag: "v1")) }
-            server.route("POST", "/graphql") { (200, #"{"data":{"repository":{"ref":{"id":"REF_1"}}}}"#) }
+            server.route("POST", "/graphql RepositoryFindRef") {
+                (200, #"{"data":{"repository":{"ref":{"id":"REF_1"}}}}"#)
+            }
             server.route("PATCH", "/repos/cli/cli/releases/1") { (200, Self.release(id: 1, tag: "v2")) }
             _ = try await Self.run(["v1", "--tag", "v2", "--verify-tag", "--target", "main"], server: server)
-            let body = try Self.json(server.requests[2].body)
+            let body = try Self.json(server.body("PATCH /repos/cli/cli/releases/1"))
             #expect(body.keys.sorted() == ["tag_name", "target_commitish"])
             #expect(body["tag_name"] as? String == "v2")
         }
@@ -249,7 +258,30 @@ extension HTTPMockedNetworkTests {
             server.route("GET", "/repos/cli/cli/releases/tags/v1") { (200, Self.release(id: 1, tag: "v1")) }
             server.route("PATCH", "/repos/cli/cli/releases/1") { (200, Self.release(id: 1, tag: "v1")) }
             _ = try await Self.run(["v1", "--verify-tag"], server: server)
-            #expect(server.requests.map(\.method) == ["GET", "PATCH"])
+            #expect(server.rest.map(\.method) == ["GET", "PATCH"])
+            #expect(!server.requests.contains { $0.line == "POST /graphql RepositoryFindRef" })
+        }
+
+        // MARK: Enterprise host
+
+        @Test func repoFlagKeepsEnterpriseHost() throws {
+            let enterprise = try #require(try Self.parse(["v1", "-R", "ghe.example.com/o/r"]).repo)
+            #expect(enterprise.host == "ghe.example.com")
+            #expect(enterprise.reference.slug == "o/r")
+            let dotcom = try #require(try Self.parse(["v1", "-R", "o/r"]).repo)
+            #expect(dotcom.host == nil)
+            #expect(throws: (any Error).self) { try Self.parse(["v1", "-R", "o"]) }
+        }
+
+        @Test func lookupAndWriteUseTheEnterpriseAPIRoot() async throws {
+            let server = FakeGitHub()
+            server.route("GET", "/api/v3/repos/cli/cli/releases/tags/v1") { (200, Self.release(id: 1, tag: "v1")) }
+            server.route("PATCH", "/api/v3/repos/cli/cli/releases/1") { (200, Self.release(id: 1, tag: "v1")) }
+            _ = try await Self.run(["v1", "-t", "x"], server: server, host: "ghe.example.com")
+            #expect(server.rest.map(\.url) == [
+                "https://ghe.example.com/api/v3/repos/cli/cli/releases/tags/v1",
+                "https://ghe.example.com/api/v3/repos/cli/cli/releases/1"
+            ])
         }
 
         // MARK: Notes sources
@@ -264,7 +296,7 @@ extension HTTPMockedNetworkTests {
             server.route("PATCH", "/repos/cli/cli/releases/1") { (200, Self.release(id: 1, tag: "v1")) }
             _ = try await Self.run(["v1", "--notes", "inline", "-F", "notes.md"],
                                    server: server, root: root)
-            #expect(try Self.json(server.requests[1].body)["body"] as? String == notes)
+            #expect(try Self.json(server.body("PATCH /repos/cli/cli/releases/1"))["body"] as? String == notes)
         }
 
         @Test func notesFileDashReadsStdinAndNotesDashIsLiteral() async throws {
@@ -272,13 +304,13 @@ extension HTTPMockedNetworkTests {
             server.route("GET", "/repos/cli/cli/releases/tags/v1") { (200, Self.release(id: 1, tag: "v1")) }
             server.route("PATCH", "/repos/cli/cli/releases/1") { (200, Self.release(id: 1, tag: "v1")) }
             _ = try await Self.run(["v1", "--notes-file", "-"], server: server, stdin: "from stdin\n")
-            #expect(try Self.json(server.requests[1].body)["body"] as? String == "from stdin\n")
+            #expect(try Self.json(server.body("PATCH /repos/cli/cli/releases/1"))["body"] as? String == "from stdin\n")
 
             let literal = FakeGitHub()
             literal.route("GET", "/repos/cli/cli/releases/tags/v1") { (200, Self.release(id: 1, tag: "v1")) }
             literal.route("PATCH", "/repos/cli/cli/releases/1") { (200, Self.release(id: 1, tag: "v1")) }
             _ = try await Self.run(["v1", "--notes", "-"], server: literal, stdin: "unused")
-            #expect(try Self.json(literal.requests[1].body)["body"] as? String == "-")
+            #expect(try Self.json(literal.body("PATCH /repos/cli/cli/releases/1"))["body"] as? String == "-")
         }
 
         @Test func notesFileOutsideSandboxIsDeniedBeforeAnyRequest() async throws {
@@ -316,7 +348,8 @@ extension HTTPMockedNetworkTests {
             _ argv: [String],
             server: FakeGitHub,
             stdin: String = "",
-            root: URL? = nil
+            root: URL? = nil,
+            host: String = "github.com"
         ) async throws -> String {
             let command = try parse(argv)
             let out = OutputSink()
@@ -328,7 +361,7 @@ extension HTTPMockedNetworkTests {
                 sandbox: root.map { Sandbox.rooted(at: $0, allowedHosts: ["api.github.com"]) })
             MockURLProtocol.handler = server.handle
             let session = MockURLProtocol.session()
-            let config = Configuration()
+            let config = Configuration(host: host)
             try await shell.withCurrent {
                 try await command.run(
                     target: RepositoryReference(owner: "cli", name: "cli"),
@@ -372,8 +405,11 @@ extension HTTPMockedNetworkTests {
     struct FakeGitHubRequest {
         let method: String
         let path: String
+        let url: String
         let body: Data
-        var line: String { "\(method) \(path)" }
+        /// `METHOD path`, plus the operation name for GraphQL posts
+        /// (`POST /graphql RepositoryFindRef`).
+        let line: String
     }
 
     final class FakeGitHub: @unchecked Sendable {
@@ -382,6 +418,14 @@ extension HTTPMockedNetworkTests {
         private var log: [FakeGitHubRequest] = []
 
         var requests: [FakeGitHubRequest] { lock.withLock { log } }
+
+        /// REST traffic only — the draft GraphQL lookup races the
+        /// published one, so whether it is logged depends on timing.
+        var rest: [FakeGitHubRequest] { requests.filter { !$0.path.hasSuffix("/graphql") } }
+
+        func body(_ line: String) throws -> Data {
+            try #require(requests.first { $0.line == line }).body
+        }
 
         func route(_ method: String, _ path: String, _ response: @escaping () -> (Int, String)) {
             lock.withLock { routes["\(method) \(path)"] = response }
@@ -392,9 +436,17 @@ extension HTTPMockedNetworkTests {
             let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? url.path
             let method = request.httpMethod ?? "GET"
             let body = try APIClientTests.requestBodyData(from: request)
+            var line = "\(method) \(path)"
+            if path.hasSuffix("/graphql"),
+               let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+               let query = object["query"] as? String,
+               let name = query.split(separator: "(").first?.split(separator: " ").last {
+                line += " \(name)"
+            }
             let route: (() -> (Int, String))? = lock.withLock {
-                log.append(FakeGitHubRequest(method: method, path: path, body: body))
-                return routes["\(method) \(path)"]
+                log.append(FakeGitHubRequest(
+                    method: method, path: path, url: url.absoluteString, body: body, line: line))
+                return routes[line]
             }
             let (status, json) = route?() ?? (599, #"{"message":"unrouted"}"#)
             return (HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1",

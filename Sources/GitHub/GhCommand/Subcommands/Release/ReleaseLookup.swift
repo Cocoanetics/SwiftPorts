@@ -15,20 +15,40 @@ enum ReleaseLookup {
         api: APIClient,
         gql: GraphQLClient
     ) async throws -> Release {
-        let publishedError: Error
-        do {
-            return try await fetchReleasePath(
-                ["repos", target.owner, target.name, "releases", "tags", tag], api: api)
-        } catch {
-            publishedError = error
+        let outcome = await withTaskGroup(of: Result<Release, any Error>.self) { group in
+            group.addTask {
+                do {
+                    return .success(try await fetchReleasePath(
+                        ["repos", target.owner, target.name, "releases", "tags", tag], api: api))
+                } catch {
+                    return .failure(error)
+                }
+            }
+            group.addTask {
+                do {
+                    return .success(try await fetchDraftRelease(
+                        tag: tag, target: target, api: api, gql: gql))
+                } catch {
+                    return .failure(error)
+                }
+            }
+            // Errors in completion order, like upstream's `first` / `second`.
+            var errors: [any Error] = []
+            for await result in group {
+                switch result {
+                case .success(let release):
+                    group.cancelAll()
+                    return Result<Release, any Error>.success(release)
+                case .failure(let error):
+                    errors.append(error)
+                }
+            }
+            if let second = errors.last as? ReleaseEditError, second == .releaseNotFound {
+                return .failure(second)
+            }
+            return .failure(errors[0])
         }
-        do {
-            return try await fetchDraftRelease(tag: tag, target: target, api: api, gql: gql)
-        } catch let draftError as ReleaseEditError where draftError == .releaseNotFound {
-            throw draftError
-        } catch {
-            throw publishedError
-        }
+        return try outcome.get()
     }
 
     /// `RepositoryFindRef`: does `refs/tags/<tag>` exist on the remote?
