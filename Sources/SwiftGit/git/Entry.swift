@@ -28,21 +28,25 @@ struct Entry {
             }
             // `Shell.arguments` already strips argv[0] (see
             // `Shell.processDefault` in ShellKit), so we hand it to
-            // the preprocessor as-is. The earlier `dropFirst()` here
+            // the invocation as-is. The earlier `dropFirst()` here
             // was a leftover from when this read `CommandLine.arguments`
             // directly; double-dropping made `git <subcommand>` (with
             // no extra args) silently print the root help.
-            let argv = GitCommand.preprocess(Shell.arguments)
-            var cmd = try GitCommand.parseAsRoot(argv)
-            if var asyncCmd = cmd as? any AsyncParsableCommand {
-                try await asyncCmd.run()
-            } else {
-                try cmd.run()
+            // The leading `-C` / `-c` hold for the whole run, on a copy of
+            // the process' shell; the rest arrives preprocessed.
+            try await GitCommand.withInvocation(Shell.arguments) { argv in
+                var cmd = try GitCommand.parseAsRoot(argv)
+                if var asyncCmd = cmd as? any AsyncParsableCommand {
+                    try await asyncCmd.run()
+                } else {
+                    try cmd.run()
+                }
             }
         } catch let cli as CLIError {
             cli.emitAndExit()
         } catch let failure as CommandFailure {
-            // Says what it prints and how it exits (a bad GIT_CONFIG_COUNT).
+            // Says what it prints and how it exits (a bad GIT_CONFIG_COUNT
+            // or `git -c`).
             Shell.current.stderr.write(Data(failure.diagnostic.utf8))
             exit(failure.exitStatus.code)
         } catch {
