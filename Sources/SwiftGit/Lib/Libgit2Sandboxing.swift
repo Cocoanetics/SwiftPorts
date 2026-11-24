@@ -9,11 +9,19 @@ import CGitKit
 ///
 /// libgit2's options (search paths, homedir, SSL cert locations) are
 /// **process-global, not per-task**. Two tasks racing on the option
-/// setter would corrupt each other's view. This actor serialises the
-/// "set options + open repo" sequence so each repo sees a consistent
-/// snapshot. Once libgit2's per-repo config has loaded into the
-/// `git_repository*` handle, the actor releases — subsequent libgit2
-/// calls on that repo read its frozen config, not the option block.
+/// setter would corrupt each other's view. ``runIsolated(_:environment:body:)``
+/// serialises the "set options + run body" sequence under one lock so each
+/// run sees a consistent snapshot, and puts back the GLOBAL / XDG / SYSTEM
+/// search paths and the homedir it found on entry before it releases the
+/// lock. Between runs libgit2 therefore sees the process's own (or the
+/// embedder's) options again, whichever run came last.
+///
+/// **What restoring doesn't cover.** A libgit2 or GitKit call made outside
+/// a run while one is in progress, on another thread, sees that run's
+/// options (and may read them while they are being rewritten). With
+/// SwiftGit or GitLFSKit linked, an embedder routes every libgit2 / GitKit
+/// call through an operation (`GitClient`, `GitLFSKit`'s operation entry)
+/// so it takes the same lock.
 ///
 /// **Mappings applied.** `HOME` and `XDG_CONFIG_HOME` are *always*
 /// applied, sandbox or not — the shell's value takes precedence when
@@ -73,12 +81,21 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
     private let lock = NSLock()
     /// Where an opted-in sandbox looks for the system config; nil is
     /// libgit2's default. A seam for tests, which can't rely on the host's.
+    /// It applies only inside a run: the SYSTEM path is put back on exit.
     var hostSystemSearchPath: String?
     private var lastApplied: AppliedSnapshot?
     /// What `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM` / `GIT_CONFIG_COUNT`
     /// ask of the run in progress; read while ``runIsolated(_:environment:body:)``
-    /// holds the lock.
+    /// holds the lock. Back to `.none` once the run ends.
     private(set) var environment = EnvironmentConfig.none
+
+    /// libgit2's options a run changes, as they stood before it.
+    private struct HostOptions {
+        let global: String
+        let xdg: String
+        let system: String
+        let homedir: String
+    }
 
     /// The home directory libgit2 is pointed at for `sandbox`: the shell's
     /// `HOME`, else the sandbox's own home, as `apply` sets it. Without a
@@ -123,12 +140,14 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
     }
 
     /// The directory of the global `.gitconfig` libgit2 currently looks
-    /// in: the shell's home as last applied.
-    /// Read inside ``runIsolated(_:environment:body:)``.
+    /// in: the shell's home as the run in progress applied it.
+    /// Read inside ``runIsolated(_:environment:body:)``; outside one it is
+    /// the process's home.
     var globalHome: String { lastApplied?.home ?? NSHomeDirectory() }
 
     /// Apply the shell's env→option mapping and run `body` while
-    /// the lock is held. Releases the lock when `body` returns. The
+    /// the lock is held. When `body` returns or throws, libgit2's options
+    /// are put back as they were on entry, and then the lock is released. The
     /// caller's body should perform the libgit2 repo open inside it
     /// so the per-repo config is loaded against this sandbox's
     /// settings.
@@ -151,7 +170,23 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
                         body: () throws -> T) throws -> T {
         lock.lock()
         defer { lock.unlock() }
+        let entry = try captureHostOptions()
+        // Declared after the unlock, so it runs first, under the lock.
+        defer {
+            restore(entry)
+            self.environment = .none
+            lastApplied = nil
+        }
         try apply(sandbox, environment: environment)
+        return try body()
+    }
+
+    /// Runs `body` holding the lock ``runIsolated(_:environment:body:)``
+    /// takes, without applying anything: for tests that set or read
+    /// libgit2's options themselves.
+    func withOptionsLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
         return try body()
     }
 
@@ -216,6 +251,59 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
         lastApplied = snapshot
     }
 
+    private func captureHostOptions() throws -> HostOptions {
+        HostOptions(
+            global: try Self.option("GET_SEARCH_PATH(GLOBAL)") {
+                swiftports_libgit2_get_search_path(Int32(GIT_CONFIG_LEVEL_GLOBAL.rawValue), $0, $1)
+            },
+            xdg: try Self.option("GET_SEARCH_PATH(XDG)") {
+                swiftports_libgit2_get_search_path(Int32(GIT_CONFIG_LEVEL_XDG.rawValue), $0, $1)
+            },
+            system: try Self.option("GET_SEARCH_PATH(SYSTEM)") {
+                swiftports_libgit2_get_search_path(Int32(GIT_CONFIG_LEVEL_SYSTEM.rawValue), $0, $1)
+            },
+            homedir: try Self.option("GET_HOMEDIR") { swiftports_libgit2_get_homedir($0, $1) })
+    }
+
+    /// Puts `options` back. A level that can't be set falls back to
+    /// libgit2's default; an empty homedir is libgit2's default too, never
+    /// `""`.
+    private func restore(_ options: HostOptions) {
+        let levels = [(GIT_CONFIG_LEVEL_GLOBAL, options.global),
+                      (GIT_CONFIG_LEVEL_XDG, options.xdg),
+                      (GIT_CONFIG_LEVEL_SYSTEM, options.system)]
+        for (level, path) in levels {
+            let level = Int32(level.rawValue)
+            if (try? setSearchPath(level: level, path: path)) == nil {
+                assertionFailure("libgit2 refused to restore search path level \(level)")
+                _ = swiftports_libgit2_set_search_path(level, nil)
+            }
+        }
+        let result = options.homedir.isEmpty
+            ? swiftports_libgit2_set_homedir(nil)
+            : options.homedir.withCString { swiftports_libgit2_set_homedir($0) }
+        assert(result == 0, "libgit2 refused to restore the homedir")
+    }
+
+    /// Reads one string option through `get`, growing the buffer while
+    /// libgit2 reports it too short.
+    private static func option(
+        _ name: String, _ get: (UnsafeMutablePointer<CChar>, Int) -> Int32
+    ) throws -> String {
+        var size = 4_096
+        while true {
+            var buffer = [CChar](repeating: 0, count: size)
+            let result = buffer.withUnsafeMutableBufferPointer { get($0.baseAddress!, $0.count) }
+            if result == 0 {
+                return buffer.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+            }
+            guard result == GIT_EBUFS.rawValue, size < 1 << 20 else {
+                throw Libgit2SandboxingError.optionGetFailed(option: name, rc: result)
+            }
+            size *= 4
+        }
+    }
+
     // MARK: - Thin wrappers around CLibgit2Shim
 
     private func setSearchPath(level: Int32, path: String) throws {
@@ -244,9 +332,9 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
 
 }
 
-/// Errors thrown by the libgit2 sandboxing actor when an option SET
-/// returns non-zero. In practice these don't fire — libgit2's option
-/// setters succeed for any valid input.
+/// Errors thrown by the libgit2 sandboxing actor when an option SET (or
+/// the GET of the options a run puts back) returns non-zero. In practice
+/// these don't fire — libgit2's option setters succeed for any valid input.
 public struct Libgit2SandboxingError: Error, Sendable, CustomStringConvertible {
     public let option: String
     public let rc: Int32
@@ -260,7 +348,11 @@ public struct Libgit2SandboxingError: Error, Sendable, CustomStringConvertible {
         Self(option: option, rc: rc)
     }
 
+    public static func optionGetFailed(option: String, rc: Int32) -> Self {
+        Self(option: option, rc: rc)
+    }
+
     public var description: String {
-        "libgit2 option SET failed: \(option) returned \(rc)"
+        "libgit2 option failed: \(option) returned \(rc)"
     }
 }
