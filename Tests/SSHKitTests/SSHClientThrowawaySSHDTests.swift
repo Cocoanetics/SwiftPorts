@@ -1,6 +1,7 @@
 #if os(macOS) || os(Linux)
 import Foundation
 import NIOSSH
+import SSHTestSupport
 import Testing
 
 @testable import SSHKit

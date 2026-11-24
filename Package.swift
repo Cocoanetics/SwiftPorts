@@ -70,6 +70,10 @@ let androidDroppedTargets: Set<String> = [
     "GitLFSKitTests",
     "GitLFSTestSupport",
     "GitLFSTestSupportTests",
+    // SSHTestSupport is the throwaway `sshd` fixture (issue #292): a library
+    // product for test targets only, dropped with the SSH test targets that use it.
+    "SSHTestSupport",
+    "SSHTestSupportTests",
 ]
 
 func androidFiltered(products list: [Product]) -> [Product] {
@@ -412,6 +416,8 @@ let package = Package(
         .library(name: "GitLFSKit", targets: ["GitLFSKit"]),
         // In-process LFS server for downstream test targets (excluded on Android).
         .library(name: "GitLFSTestSupport", targets: ["GitLFSTestSupport"]),
+        // Throwaway `sshd` fixture for downstream test targets (excluded on Android).
+        .library(name: "SSHTestSupport", targets: ["SSHTestSupport"]),
     ]),
     // Package traits — opt-in, build-time toggles. Off by default (none are
     // listed in any `.default(enabledTraits:)`).
@@ -1285,6 +1291,7 @@ let package = Package(
             dependencies: [
                 "GitLFSKit",
                 "GitLFSTestSupport",
+                "SSHTestSupport",
                 "SwiftGit",
                 .product(name: "ShellKit", package: "ShellKit"),
             ]
@@ -1409,9 +1416,22 @@ let package = Package(
             ],
             path: "Sources/SSHKit/Lib"
         ),
+        // Throwaway, unprivileged OpenSSH `sshd` on an ephemeral loopback port, plus
+        // client-identity, `known_hosts` and `ssh_config` helpers (issue #292).
+        // Foundation-only and macOS/Linux-only (it spawns the system `sshd`).
+        // SSHKitTests, GitKitSSHTests and GitLFSKitTests share it; downstream
+        // packages link the product from their own test targets.
+        .target(
+            name: "SSHTestSupport",
+            path: "Tests/SSHTestSupport"
+        ),
+        .testTarget(
+            name: "SSHTestSupportTests",
+            dependencies: ["SSHTestSupport"]
+        ),
         .testTarget(
             name: "SSHKitTests",
-            dependencies: ["SSHKit"],
+            dependencies: ["SSHKit", "SSHTestSupport"],
             resources: [
                 .copy("Fixtures"),
             ]
@@ -1479,7 +1499,9 @@ let package = Package(
         // same as `SSHKitTests`/`GitHubTests` — dropped on Android there.
         .testTarget(
             name: "GitKitSSHTests",
-            dependencies: ["GitKitSSH", "SSHKit", "ForgeKit", .product(name: "GitKit", package: "GitKit")]
+            dependencies: [
+                "GitKitSSH", "SSHKit", "ForgeKit", "SSHTestSupport", .product(name: "GitKit", package: "GitKit"),
+            ]
         ),
 
         // MARK: SQLiteKit umbrella (issue #43)
