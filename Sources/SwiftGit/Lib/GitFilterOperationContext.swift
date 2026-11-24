@@ -202,10 +202,11 @@ package final class GitFilterOperationContext: @unchecked Sendable {
             levels.append(.file(URL(fileURLWithPath: file.resolved), .system))
         }
         let entries = environment.commandLine.filter { !Self.isRepositoryOnly($0.name) }
-        if !entries.isEmpty {
-            levels.append(.layers(GitClient.commandLineLayers(entries)))
-        }
-        return OperationConfiguration(levels: levels, includePolicy: includePolicy)
+        return OperationConfiguration(
+            levels: levels,
+            layers: entries.isEmpty ? nil : GitClient.commandLineLayers(entries),
+            includePolicy: includePolicy
+        )
     }
 
     /// `core.repositoryformatversion`, `core.bare`, `core.worktree` and
