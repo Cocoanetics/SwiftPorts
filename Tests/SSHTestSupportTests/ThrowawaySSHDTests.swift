@@ -24,7 +24,7 @@ struct ThrowawaySSHDTests {
     }
 
     @Test func startsPinsAndAliasesADaemon() async throws {
-        let directory = tmp("SSHTestSupportIdentity")
+        let directory = tmp("SSHTestSupport Identity")
         defer { try? FileManager.default.removeItem(at: directory) }
         let identity = try ThrowawaySSHIdentity.generate(in: directory)
         #expect(FileManager.default.fileExists(atPath: identity.privateKeyPath))
@@ -50,11 +50,12 @@ struct ThrowawaySSHDTests {
         #expect(lines.first == "Host throwaway")
         #expect(lines.contains("HostName 127.0.0.1"))
         #expect(lines.contains("Port \(sshd.port)"))
-        #expect(lines.contains("IdentityFile \(identity.privateKeyPath)"))
-        #expect(lines.contains("UserKnownHostsFile \(knownHostsPath)"))
+        #expect(lines.contains("IdentityFile \"\(identity.privateKeyPath)\""))
+        #expect(lines.contains("UserKnownHostsFile \"\(knownHostsPath)\""))
         #expect(lines.contains("StrictHostKeyChecking yes"))
 
-        // The system client reaches the daemon through the alias, pinned key and identity alone.
+        // The system client reaches the daemon through the alias, pinned key and identity alone,
+        // with every path under a directory whose name contains a space.
         #expect(try Self.systemSSH(configPath: configPath, alias: "throwaway", command: "echo ok") == "ok\n")
     }
 
