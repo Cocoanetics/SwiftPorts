@@ -298,6 +298,19 @@ it). `clone` and `init` open their repository inside GitKit, so they see
 `git config --show-origin` (with `--list` or a `--get`) prints
 `file:<path>` / `command line:` and a tab before each entry.
 
+### Process-global options and the embedder contract
+
+libgit2's search paths and homedir are process-global. `Libgit2Sandboxing`
+sets them for each run under one lock and, when the run ends (returning or
+throwing), puts back the GLOBAL / XDG / SYSTEM search paths and the homedir it
+found on entry (#288). Between runs libgit2 sees the process's own options, or
+whatever the embedder set, never the last run's `HOME` or `GIT_CONFIG_GLOBAL`.
+
+A libgit2 or GitKit call made outside a run while one is in progress, on
+another thread, still sees that run's options. So with SwiftGit or GitLFSKit
+linked, an embedder routes every libgit2 / GitKit call through an operation
+(`GitClient`, or `GitLFSKit.withOperation`), which takes the same lock.
+
 `--get <name> <value-pattern>` and `--unset <name> <value-pattern>` take
 git's value pattern: a POSIX extended regular expression (the platform's
 `regcomp`, as git's; `NSRegularExpression` on Windows), negated by a leading
