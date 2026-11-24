@@ -12,6 +12,7 @@ import Foundation
 import Testing
 import GitKit
 import GitKitSSH
+import ForgeKit
 import ShellKit
 
 @Suite("GitKitSSH (throwaway sshd)", .serialized)
@@ -231,6 +232,44 @@ struct GitKitSSHEndToEndTests {
 
         try Self.cloneWhileCooperativePoolIsSaturated(from: url, to: cloneDest)
         #expect(FileManager.default.fileExists(atPath: cloneDest.appendingPathComponent("file.txt").path))
+    }
+
+    /// Issue #290: an LFS pre-push runs on a `BlockingBridge` thread and connects to the remote
+    /// from there, so the provider's own `runBlocking` (connect, then every channel read and
+    /// write) nests inside a bridged call. It used to queue behind the thread it was blocking.
+    @Test("a push over SSH completes when driven from inside a bridged operation")
+    func pushFromBridgedOperation() async throws {
+        let identityPath = try makeIdentity(in: tmp("GitKitSSHIdentity"))
+        guard let sshd = try await ThrowawaySSHD.start(authorizingPublicKeyPath: identityPath + ".pub") else {
+            return
+        }
+        defer { sshd.stop() }
+
+        let knownHostsPath = tmp("GitKitSSHKnownHosts").path
+        try knownHostsLine(hostPublicKeyPath: sshd.hostPublicKeyPath, port: sshd.port)
+            .write(toFile: knownHostsPath, atomically: true, encoding: .utf8)
+        let (configPath, alias) = try writeSSHConfig(
+            directory: tmp("GitKitSSHConfig"), port: sshd.port,
+            identityPath: identityPath, knownHostsPath: knownHostsPath)
+
+        try GitSSHTransport.register(GitKitSSHTransportProvider(sshConfigPath: configPath))
+        defer { GitSSHTransport.unregister() }
+
+        let destBare = try makeBareDestination()
+        let work = try makeWorkRepo()
+        let url = URL(string: "ssh://\(alias)\(destBare.path)")!
+        try runOnDetachedThread(timeoutSeconds: 60) {
+            try BlockingBridge.runBlocking {
+                let repo = try Repository.open(at: work)
+                try repo.addRemote(name: "origin", url: url)
+                try repo.push(remote: "origin", refspec: "main", setUpstream: false)
+            }
+        }
+        let localSHA = try runGit(["rev-parse", "HEAD"], in: work)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let remoteSHA = try runGit(["rev-parse", "main"], in: destBare)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(localSHA == remoteSHA)
     }
 
     /// Synchronous because `poolSaturationLock` (an `NSLock`) can't be taken from an async
