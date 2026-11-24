@@ -22,7 +22,7 @@ import Foundation
 /// pool-independent end to end.
 ///
 /// `TaskExecutor` is unavailable before macOS 15 / iOS 18 / tvOS 18 /
-/// watchOS 11. On those older Apple runtimes a global actor backed by the
+/// watchOS 11. On those older Apple runtimes an actor backed by the
 /// same dedicated thread provides the fallback. It keeps the bridge task's
 /// actor-isolated work off the pool, but a
 /// nonisolated async call can require a cooperative-pool thread.
@@ -49,34 +49,19 @@ package enum BlockingBridge {
         let semaphore = DispatchSemaphore(value: 0)
         let box = ResultBox<T>()
 
+        let thread = blockingBridgeThreads.checkOut()
+        defer { blockingBridgeThreads.checkIn(thread) }
         let task: Task<Void, Never>
-        var executor: BlockingBridgeThreadExecutor?
         if #available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, *) {
-            let thread = blockingBridgeThreads.checkOut()
-            executor = thread
             task = Task(executorPreference: thread) {
-                do {
-                    try Task.checkCancellation()
-                    let value = try await $enclosingCancellations.withValue(cancellations) { try await operation() }
-                    box.value = .success(value)
-                } catch {
-                    box.value = .failure(error)
-                }
-                semaphore.signal()
+                await run(on: nil, operation, cancellations: cancellations, box: box, semaphore: semaphore)
             }
         } else {
-            task = Task { @BlockingBridgeExecutor in
-                do {
-                    try Task.checkCancellation()
-                    let value = try await $enclosingCancellations.withValue(cancellations) { try await operation() }
-                    box.value = .success(value)
-                } catch {
-                    box.value = .failure(error)
-                }
-                semaphore.signal()
+            let actor = BlockingBridgeExecutor(thread: thread)
+            task = Task {
+                await run(on: actor, operation, cancellations: cancellations, box: box, semaphore: semaphore)
             }
         }
-        defer { if let executor { blockingBridgeThreads.checkIn(executor) } }
 
         let registrations = cancellations.map { ($0, $0.register(task)) }
         defer { for (cancellation, registration) in registrations { cancellation.unregister(registration) } }
@@ -92,37 +77,60 @@ package enum BlockingBridge {
         return try box.value.get()
     }
 
+    /// The bridge task's body. `actor` is the older-runtime fallback's isolation; on SE-0417
+    /// runtimes it is `nil` and the task-executor preference keeps this on the bridge thread.
+    private static func run<T: Sendable>(
+        on actor: isolated (any Actor)?,
+        _ operation: @Sendable () async throws -> T,
+        cancellations: [BlockingBridgeCancellation],
+        box: ResultBox<T>,
+        semaphore: DispatchSemaphore
+    ) async {
+        do {
+            try Task.checkCancellation()
+            let value = try await $enclosingCancellations.withValue(cancellations) { try await operation() }
+            box.value = .success(value)
+        } catch {
+            box.value = .failure(error)
+        }
+        semaphore.signal()
+    }
+
     private final class ResultBox<T>: @unchecked Sendable {
         var value: Result<T, Error>!
     }
 }
 
-/// Older-Apple-runtime fallback for scheduling the bridge task's actor-isolated wrapper on the
-/// same dedicated thread. Nonisolated operations can still leave this actor under SE-0338, which
-/// is why supported runtimes use the task-executor preference above.
-@globalActor
-actor BlockingBridgeExecutor {
-    static let shared = BlockingBridgeExecutor()
+/// Older-Apple-runtime fallback for running the bridge task's actor-isolated wrapper on the
+/// call's checked-out dedicated thread — never one a caller is blocking, so nested calls cannot
+/// queue behind themselves. Nonisolated operations can still leave this actor under SE-0338,
+/// which is why supported runtimes use the task-executor preference above.
+private actor BlockingBridgeExecutor {
+    private let thread: BlockingBridgeThreadExecutor
+
+    init(thread: BlockingBridgeThreadExecutor) {
+        self.thread = thread
+    }
 
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        blockingBridgeThreads.primary.asUnownedSerialExecutor()
+        thread.asUnownedSerialExecutor()
     }
 }
 
 private let blockingBridgeThreads = BlockingBridgeThreadPool()
 
 /// Dedicated bridge threads, one per call currently blocking a caller. Grows only on nested or
-/// concurrent demand; an idle thread is reused, so sequential calls stay on `primary`.
+/// concurrent demand; an idle thread is reused, so sequential calls stay on one thread.
 private final class BlockingBridgeThreadPool: @unchecked Sendable {
     /// `"BlockingBridge"` is kept under 16 characters so it round-trips through Linux's
     /// `pthread_setname_np`, which truncates/rejects anything past `TASK_COMM_LEN` (16 bytes
     /// including the null terminator).
-    let primary = BlockingBridgeThreadExecutor(name: "BlockingBridge")
+    private static let name = "BlockingBridge"
     private let lock = NSLock()
-    private lazy var idle = [primary]
+    private var idle = [BlockingBridgeThreadExecutor(name: name)]
 
     func checkOut() -> BlockingBridgeThreadExecutor {
-        lock.withLock { idle.popLast() } ?? BlockingBridgeThreadExecutor(name: "BlockingBridge")
+        lock.withLock { idle.popLast() } ?? BlockingBridgeThreadExecutor(name: Self.name)
     }
 
     func checkIn(_ executor: BlockingBridgeThreadExecutor) {
