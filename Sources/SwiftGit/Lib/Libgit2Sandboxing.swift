@@ -268,21 +268,35 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
     /// Puts `options` back. A level that can't be set falls back to
     /// libgit2's default; an empty homedir is libgit2's default too, never
     /// `""`.
+    ///
+    /// libgit2's setter splices the current value in for a `$PATH` in the
+    /// new one, so a value holding a literal `$PATH` can't be set back as
+    /// it reads. Such a value is libgit2's default (guessed from a `HOME`
+    /// or `XDG_CONFIG_HOME` that contains it) and is restored by resetting
+    /// to the default; one that isn't stays at the default.
     private func restore(_ options: HostOptions) {
         let levels = [(GIT_CONFIG_LEVEL_GLOBAL, options.global),
                       (GIT_CONFIG_LEVEL_XDG, options.xdg),
                       (GIT_CONFIG_LEVEL_SYSTEM, options.system)]
         for (level, path) in levels {
             let level = Int32(level.rawValue)
-            if (try? setSearchPath(level: level, path: path)) == nil {
+            let result = Self.isLiteral(path)
+                ? path.withCString { swiftports_libgit2_set_search_path(level, $0) }
+                : swiftports_libgit2_set_search_path(level, nil)
+            if result != 0 {
                 assertionFailure("libgit2 refused to restore search path level \(level)")
                 _ = swiftports_libgit2_set_search_path(level, nil)
             }
         }
-        let result = options.homedir.isEmpty
-            ? swiftports_libgit2_set_homedir(nil)
-            : options.homedir.withCString { swiftports_libgit2_set_homedir($0) }
+        let result = !options.homedir.isEmpty && Self.isLiteral(options.homedir)
+            ? options.homedir.withCString { swiftports_libgit2_set_homedir($0) }
+            : swiftports_libgit2_set_homedir(nil)
         assert(result == 0, "libgit2 refused to restore the homedir")
+    }
+
+    /// Whether libgit2's setter stores `value` as it is: it expands `$PATH`.
+    private static func isLiteral(_ value: String) -> Bool {
+        !value.contains("$PATH")
     }
 
     /// Reads one string option through `get`, growing the buffer while

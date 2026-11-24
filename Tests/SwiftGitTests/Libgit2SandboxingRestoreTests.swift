@@ -139,6 +139,34 @@ struct Libgit2SandboxingRestoreTests {
         #expect(after.homedir == before.homedir)
     }
 
+    /// libgit2's setter expands `$PATH`, so a default guessed from an
+    /// `XDG_CONFIG_HOME` holding one literally comes back as the default.
+    @Test func defaultWithLiteralPathMarkerRestores() async throws {
+        let root = try Self.temporaryDirectory("RestorePathMarker")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let xdgHome = root.path + "/x$PATHy"
+        let xdg = Int32(GIT_CONFIG_LEVEL_XDG.rawValue)
+        let saved = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
+        let before: Options = Libgit2Sandboxing.shared.withOptionsLock {
+            setenv("XDG_CONFIG_HOME", xdgHome, 1)
+            #expect(swiftports_libgit2_set_search_path(xdg, nil) == 0)
+            return Self.current()
+        }
+        defer {
+            Libgit2Sandboxing.shared.withOptionsLock {
+                if let saved { setenv("XDG_CONFIG_HOME", saved, 1) } else { unsetenv("XDG_CONFIG_HOME") }
+                _ = swiftports_libgit2_set_search_path(xdg, nil)
+            }
+        }
+        #expect(before.xdg == xdgHome + "/git")
+        try await Self.shell(["HOME": root.path], in: root).withCurrent {
+            try Libgit2Sandboxing.shared.runIsolated(nil) {
+                #expect(Self.searchPath(GIT_CONFIG_LEVEL_XDG) == root.path + "/.config/git")
+            }
+        }
+        #expect(Self.locked() == before)
+    }
+
     /// The regression the issue reports: a plain libgit2 open after a run
     /// that pointed `HOME` elsewhere and named `GIT_CONFIG_GLOBAL` reads the
     /// host's global config again.
