@@ -51,6 +51,7 @@ struct ThrowawaySSHDTests {
         #expect(lines.contains("HostName 127.0.0.1"))
         #expect(lines.contains("Port \(sshd.port)"))
         #expect(lines.contains("IdentityFile \"\(identity.privateKeyPath)\""))
+        #expect(lines.contains("IdentitiesOnly yes"))
         #expect(lines.contains("UserKnownHostsFile \"\(knownHostsPath)\""))
         #expect(lines.contains("StrictHostKeyChecking yes"))
 

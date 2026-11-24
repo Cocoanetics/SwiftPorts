@@ -4,6 +4,8 @@ import Foundation
 extension ThrowawaySSHD {
     /// Writes an `ssh_config` to `path` with one `Host alias` block resolving to this daemon as
     /// the current user, so an `ssh://<alias>/<path>` URL or `<alias>:<path>` remote reaches it.
+    /// `IdentitiesOnly yes` keeps a system `ssh` from offering `ssh-agent` keys first and hitting
+    /// the daemon's `MaxAuthTries` before the throwaway identity.
     /// Paths are double-quoted, so they may contain whitespace but not `"` or a newline.
     public func writeSSHConfig(
         to path: String, alias: String, identityPath: String, knownHostsPath: String,
@@ -19,6 +21,7 @@ extension ThrowawaySSHD {
                 Port \(port)
                 User \(ProcessInfo.processInfo.environment["USER"] ?? NSUserName())
                 IdentityFile \(identityArgument)
+                IdentitiesOnly yes
                 UserKnownHostsFile \(knownHostsArgument)
                 StrictHostKeyChecking \(strictHostKeyChecking)
             """
