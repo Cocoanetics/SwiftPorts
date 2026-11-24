@@ -14,6 +14,7 @@ import GitKit
 import GitKitSSH
 import ForgeKit
 import ShellKit
+import SSHTestSupport
 
 @Suite("GitKitSSH (throwaway sshd)", .serialized)
 struct GitKitSSHEndToEndTests {
@@ -44,21 +45,6 @@ struct GitKitSSHEndToEndTests {
             throw Failure("git \(args.joined(separator: " ")) failed: \(errStr)")
         }
         return outStr
-    }
-
-    /// Generates a throwaway ed25519 key pair, returning the private key path.
-    private func makeIdentity(in directory: URL) throws -> String {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let path = directory.appendingPathComponent("id_ed25519").path
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", path, "-q"]
-        try process.run()
-        ThrowawaySSHD.waitForExit(process, timeout: 60)
-        guard process.terminationStatus == 0 else {
-            throw Failure("ssh-keygen failed")
-        }
-        return path
     }
 
     /// A bare repo with one commit, servable by `git-upload-pack`.
@@ -98,51 +84,31 @@ struct GitKitSSHEndToEndTests {
         return work
     }
 
-    private func knownHostsLine(hostPublicKeyPath: String, port: Int) throws -> String {
-        let keyLine = try String(contentsOfFile: hostPublicKeyPath, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let fields = keyLine.split(separator: " ", maxSplits: 2)
-        let hostField = port == 22 ? "127.0.0.1" : "[127.0.0.1]:\(port)"
-        return "\(hostField) \(fields[0]) \(fields[1])"
-    }
-
     /// Writes an `ssh_config` with one `Host` alias resolving to the throwaway sshd, and returns
     /// its path alongside the alias to put in a git `ssh://` URL.
     private func writeSSHConfig(
-        directory: URL, port: Int, identityPath: String, knownHostsPath: String,
-        strictHostKeyChecking: String = "yes"
+        _ sshd: ThrowawaySSHD, identityPath: String, knownHostsPath: String
     ) throws -> (configPath: String, alias: String) {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let alias = "gitkitssh-test-host"
-        let configPath = directory.appendingPathComponent("ssh_config").path
-        let config = """
-            Host \(alias)
-                HostName 127.0.0.1
-                Port \(port)
-                User \(ProcessInfo.processInfo.environment["USER"] ?? "root")
-                IdentityFile \(identityPath)
-                UserKnownHostsFile \(knownHostsPath)
-                StrictHostKeyChecking \(strictHostKeyChecking)
-            """
-        try config.write(toFile: configPath, atomically: true, encoding: .utf8)
+        let configPath = tmp("GitKitSSHConfig").appendingPathComponent("ssh_config").path
+        try sshd.writeSSHConfig(
+            to: configPath, alias: alias, identityPath: identityPath, knownHostsPath: knownHostsPath)
         return (configPath, alias)
     }
 
     @Test("clone, fetch and push carry real bytes over the registered SSHKit transport")
     func cloneFetchAndPush() async throws {
-        let identityPath = try makeIdentity(in: tmp("GitKitSSHIdentity"))
+        let identityPath = try ThrowawaySSHIdentity.generate(in: tmp("GitKitSSHIdentity")).privateKeyPath
         guard let sshd = try await ThrowawaySSHD.start(authorizingPublicKeyPath: identityPath + ".pub") else {
             return
         }
         defer { sshd.stop() }
 
         let knownHostsPath = tmp("GitKitSSHKnownHosts").path
-        try knownHostsLine(hostPublicKeyPath: sshd.hostPublicKeyPath, port: sshd.port)
+        try sshd.knownHostsLine()
             .write(toFile: knownHostsPath, atomically: true, encoding: .utf8)
 
-        let (configPath, alias) = try writeSSHConfig(
-            directory: tmp("GitKitSSHConfig"), port: sshd.port,
-            identityPath: identityPath, knownHostsPath: knownHostsPath)
+        let (configPath, alias) = try writeSSHConfig(sshd, identityPath: identityPath, knownHostsPath: knownHostsPath)
 
         try GitSSHTransport.register(GitKitSSHTransportProvider(sshConfigPath: configPath))
         defer { GitSSHTransport.unregister() }
@@ -210,18 +176,16 @@ struct GitKitSSHEndToEndTests {
     func cloneCompletesUnderSaturatedCooperativePool() async throws {
         guard #available(macOS 15.0, iOS 18.0, tvOS 18.0, watchOS 11.0, *) else { return }
 
-        let identityPath = try makeIdentity(in: tmp("GitKitSSHIdentity"))
+        let identityPath = try ThrowawaySSHIdentity.generate(in: tmp("GitKitSSHIdentity")).privateKeyPath
         guard let sshd = try await ThrowawaySSHD.start(authorizingPublicKeyPath: identityPath + ".pub") else {
             return
         }
         defer { sshd.stop() }
 
         let knownHostsPath = tmp("GitKitSSHKnownHosts").path
-        try knownHostsLine(hostPublicKeyPath: sshd.hostPublicKeyPath, port: sshd.port)
+        try sshd.knownHostsLine()
             .write(toFile: knownHostsPath, atomically: true, encoding: .utf8)
-        let (configPath, alias) = try writeSSHConfig(
-            directory: tmp("GitKitSSHConfig"), port: sshd.port,
-            identityPath: identityPath, knownHostsPath: knownHostsPath)
+        let (configPath, alias) = try writeSSHConfig(sshd, identityPath: identityPath, knownHostsPath: knownHostsPath)
 
         try GitSSHTransport.register(GitKitSSHTransportProvider(sshConfigPath: configPath))
         defer { GitSSHTransport.unregister() }
@@ -239,18 +203,16 @@ struct GitKitSSHEndToEndTests {
     /// write) nests inside a bridged call. It used to queue behind the thread it was blocking.
     @Test("a push over SSH completes when driven from inside a bridged operation")
     func pushFromBridgedOperation() async throws {
-        let identityPath = try makeIdentity(in: tmp("GitKitSSHIdentity"))
+        let identityPath = try ThrowawaySSHIdentity.generate(in: tmp("GitKitSSHIdentity")).privateKeyPath
         guard let sshd = try await ThrowawaySSHD.start(authorizingPublicKeyPath: identityPath + ".pub") else {
             return
         }
         defer { sshd.stop() }
 
         let knownHostsPath = tmp("GitKitSSHKnownHosts").path
-        try knownHostsLine(hostPublicKeyPath: sshd.hostPublicKeyPath, port: sshd.port)
+        try sshd.knownHostsLine()
             .write(toFile: knownHostsPath, atomically: true, encoding: .utf8)
-        let (configPath, alias) = try writeSSHConfig(
-            directory: tmp("GitKitSSHConfig"), port: sshd.port,
-            identityPath: identityPath, knownHostsPath: knownHostsPath)
+        let (configPath, alias) = try writeSSHConfig(sshd, identityPath: identityPath, knownHostsPath: knownHostsPath)
 
         try GitSSHTransport.register(GitKitSSHTransportProvider(sshConfigPath: configPath))
         defer { GitSSHTransport.unregister() }
@@ -290,22 +252,23 @@ struct GitKitSSHEndToEndTests {
 
     @Test("an identity not in authorized_keys surfaces OpenSSH's permission-denied wording")
     func authFailureSurfacesOpenSSHWording() async throws {
-        let authorizedIdentityPath = try makeIdentity(in: tmp("GitKitSSHAuthorizedIdentity"))
+        let authorizedIdentityPath = try ThrowawaySSHIdentity.generate(
+            in: tmp("GitKitSSHAuthorizedIdentity")).privateKeyPath
         guard let sshd = try await ThrowawaySSHD.start(authorizingPublicKeyPath: authorizedIdentityPath + ".pub") else {
             return
         }
         defer { sshd.stop() }
 
         // A second, unauthorized key pair — never written to `authorized_keys`.
-        let unauthorizedIdentityPath = try makeIdentity(in: tmp("GitKitSSHUnauthorizedIdentity"))
+        let unauthorizedIdentityPath = try ThrowawaySSHIdentity.generate(
+            in: tmp("GitKitSSHUnauthorizedIdentity")).privateKeyPath
 
         let knownHostsPath = tmp("GitKitSSHKnownHosts").path
-        try knownHostsLine(hostPublicKeyPath: sshd.hostPublicKeyPath, port: sshd.port)
+        try sshd.knownHostsLine()
             .write(toFile: knownHostsPath, atomically: true, encoding: .utf8)
 
         let (configPath, alias) = try writeSSHConfig(
-            directory: tmp("GitKitSSHConfig"), port: sshd.port,
-            identityPath: unauthorizedIdentityPath, knownHostsPath: knownHostsPath)
+            sshd, identityPath: unauthorizedIdentityPath, knownHostsPath: knownHostsPath)
 
         try GitSSHTransport.register(GitKitSSHTransportProvider(sshConfigPath: configPath))
         defer { GitSSHTransport.unregister() }
@@ -325,21 +288,19 @@ struct GitKitSSHEndToEndTests {
 
     @Test("a host key that doesn't match known_hosts surfaces OpenSSH's verification-failed wording")
     func hostKeyMismatchSurfacesOpenSSHWording() async throws {
-        let identityPath = try makeIdentity(in: tmp("GitKitSSHIdentity"))
+        let identityPath = try ThrowawaySSHIdentity.generate(in: tmp("GitKitSSHIdentity")).privateKeyPath
         guard let sshd = try await ThrowawaySSHD.start(authorizingPublicKeyPath: identityPath + ".pub") else {
             return
         }
         defer { sshd.stop() }
 
         // A known_hosts entry for an unrelated key — never the real sshd host key.
-        let wrongHostKeyIdentity = try makeIdentity(in: tmp("GitKitSSHWrongHostKey"))
+        let wrongHostKeyIdentity = try ThrowawaySSHIdentity.generate(in: tmp("GitKitSSHWrongHostKey")).privateKeyPath
         let knownHostsPath = tmp("GitKitSSHKnownHosts").path
-        try knownHostsLine(hostPublicKeyPath: wrongHostKeyIdentity + ".pub", port: sshd.port)
+        try ThrowawaySSHD.knownHostsLine(hostPublicKeyPath: wrongHostKeyIdentity + ".pub", port: sshd.port)
             .write(toFile: knownHostsPath, atomically: true, encoding: .utf8)
 
-        let (configPath, alias) = try writeSSHConfig(
-            directory: tmp("GitKitSSHConfig"), port: sshd.port,
-            identityPath: identityPath, knownHostsPath: knownHostsPath)
+        let (configPath, alias) = try writeSSHConfig(sshd, identityPath: identityPath, knownHostsPath: knownHostsPath)
 
         try GitSSHTransport.register(GitKitSSHTransportProvider(sshConfigPath: configPath))
         defer { GitSSHTransport.unregister() }
@@ -359,19 +320,17 @@ struct GitKitSSHEndToEndTests {
 
     @Test("a nonexistent remote repository path surfaces the remote's own stderr diagnostic")
     func nonexistentRemotePathSurfacesRemoteStderr() async throws {
-        let identityPath = try makeIdentity(in: tmp("GitKitSSHIdentity"))
+        let identityPath = try ThrowawaySSHIdentity.generate(in: tmp("GitKitSSHIdentity")).privateKeyPath
         guard let sshd = try await ThrowawaySSHD.start(authorizingPublicKeyPath: identityPath + ".pub") else {
             return
         }
         defer { sshd.stop() }
 
         let knownHostsPath = tmp("GitKitSSHKnownHosts").path
-        try knownHostsLine(hostPublicKeyPath: sshd.hostPublicKeyPath, port: sshd.port)
+        try sshd.knownHostsLine()
             .write(toFile: knownHostsPath, atomically: true, encoding: .utf8)
 
-        let (configPath, alias) = try writeSSHConfig(
-            directory: tmp("GitKitSSHConfig"), port: sshd.port,
-            identityPath: identityPath, knownHostsPath: knownHostsPath)
+        let (configPath, alias) = try writeSSHConfig(sshd, identityPath: identityPath, knownHostsPath: knownHostsPath)
 
         try GitSSHTransport.register(GitKitSSHTransportProvider(sshConfigPath: configPath))
         defer { GitSSHTransport.unregister() }

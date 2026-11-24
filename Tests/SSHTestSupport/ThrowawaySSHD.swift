@@ -8,14 +8,16 @@ import Glibc
 #endif
 
 /// Spawns a throwaway, unprivileged `sshd(8)` on an ephemeral port with a disposable host key and
-/// a single `authorized_keys` entry — the end-to-end oracle issue #113 names for `GitKitSSHTests`.
-/// `Process`-based, which is otherwise against this repo's conventions (AGENTS.md: "No `Process`
-/// shellouts anywhere except in clearly-marked Mac/Linux-only paths"); this is exactly that
-/// exception, and test-only. Mirrors `Tests/SSHKitTests/Support/ThrowawaySSHD.swift` — duplicated
-/// rather than shared, since the two test targets can't see each other's internal sources.
-final class ThrowawaySSHD {
-    let port: Int
-    let hostPublicKeyPath: String
+/// a single `authorized_keys` entry — the real OpenSSH oracle `SSHKitTests`, `GitKitSSHTests` and
+/// `GitLFSKitTests` connect to, published as the `SSHTestSupport` product for downstream test
+/// targets (issue #292). `Process`-based, which is otherwise against this repo's conventions
+/// (AGENTS.md: "No `Process` shellouts anywhere except in clearly-marked Mac/Linux-only paths");
+/// this is exactly that exception, and test-only.
+public final class ThrowawaySSHD {
+    /// The loopback port `sshd` listens on, on `127.0.0.1`.
+    public let port: Int
+    /// The daemon's ed25519 host public key, in OpenSSH `.pub` format.
+    public let hostPublicKeyPath: String
     private let process: Process
     private let directory: URL
 
@@ -27,8 +29,11 @@ final class ThrowawaySSHD {
     }
 
     /// `nil` if no system `sshd`/`ssh-keygen` is available, so tests can skip gracefully instead
-    /// of failing on a CI image that doesn't ship one.
-    static func start(authorizingPublicKeyPath: String) async throws -> ThrowawaySSHD? {
+    /// of failing on a CI image that doesn't ship one. `forcedCommand`, when set, becomes the
+    /// daemon's `ForceCommand`; the client's command is then in `$SSH_ORIGINAL_COMMAND`.
+    public static func start(
+        authorizingPublicKeyPath: String, forcedCommand: String? = nil
+    ) async throws -> ThrowawaySSHD? {
         guard
             let sshdPath = Self.findExecutable("sshd", extraPaths: ["/usr/sbin/sshd"]),
             let keygenPath = Self.findExecutable("ssh-keygen", extraPaths: ["/usr/bin/ssh-keygen"])
@@ -37,7 +42,7 @@ final class ThrowawaySSHD {
         }
 
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("gitkitssh-throwaway-sshd-\(UUID().uuidString)")
+            .appendingPathComponent("throwaway-sshd-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let hostKeyPath = directory.appendingPathComponent("host_key").path
@@ -52,7 +57,7 @@ final class ThrowawaySSHD {
         }
 
         let configPath = directory.appendingPathComponent("sshd_config").path
-        let config = """
+        var config = """
             Port \(port)
             ListenAddress 127.0.0.1
             HostKey \(hostKeyPath)
@@ -65,6 +70,9 @@ final class ThrowawaySSHD {
             StrictModes no
             LogLevel ERROR
             """
+        if let forcedCommand {
+            config += "\nForceCommand \(forcedCommand)"
+        }
         try config.write(toFile: configPath, atomically: true, encoding: .utf8)
 
         let process = Process()
@@ -89,7 +97,7 @@ final class ThrowawaySSHD {
         )
     }
 
-    func stop() {
+    public func stop() {
         if self.process.isRunning {
             self.process.terminate()
             Self.waitForExit(self.process)
@@ -100,9 +108,9 @@ final class ThrowawaySSHD {
     /// Waits for `process` to exit by polling `isRunning` rather than calling `waitUntilExit()`.
     /// Called from a Swift concurrency thread, `waitUntilExit()` can block forever after the
     /// child has already exited and been reaped (a lost run-loop wakeup, the same hang as
-    /// MissionControl #452); it wedged this suite in `stop()`. Escalates to SIGKILL after
-    /// `timeout` so a stuck `sshd` can't hang the run either.
-    static func waitForExit(_ process: Process, timeout: TimeInterval = 10) {
+    /// MissionControl #452); it wedged the GitKitSSH suite in `stop()`. Escalates to SIGKILL
+    /// after `timeout` so a stuck `sshd` can't hang the run either.
+    public static func waitForExit(_ process: Process, timeout: TimeInterval = 10) {
         let deadline = Date().addingTimeInterval(timeout)
         while process.isRunning && Date() < deadline {
             usleep(10_000)

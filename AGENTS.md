@@ -38,6 +38,13 @@ fingerprints (`-l`), and SSHSIG `-Y sign / verify / find-principals /
 check-novalidate`. Registered in `SwiftPortsCommands`. Agent signing,
 certificates, RSA and binary KRL revocations remain unsupported.
 
+`SSHTestSupport` (library product, `Tests/SSHTestSupport`, macOS/Linux,
+dropped on Android like `GitLFSTestSupport`) is the shared throwaway-`sshd`
+fixture: `ThrowawaySSHD.start(authorizingPublicKeyPath:)` / `stop()` (nil when
+there is no `sshd`), `ThrowawaySSHIdentity.generate(in:)`, a pinned
+`knownHostsLine()` and `writeSSHConfig(to:alias:…)`. `SSHKitTests`,
+`GitKitSSHTests` and `GitLFSKitTests` use it; link it only from test targets.
+
 ## Fidelity — the rule that overrides everything else
 
 Every port here is a **faithful reimplementation of one specific reference

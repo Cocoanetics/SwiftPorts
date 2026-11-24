@@ -5,6 +5,7 @@ import FoundationNetworking
 #endif
 import Testing
 import ShellKit
+import SSHTestSupport
 @testable import GitLFSKit
 
 // Extending this serialized suite keeps its URLProtocol recorder isolated
@@ -14,13 +15,7 @@ extension LFSCredentialTests {
           .enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/sbin/sshd")))
     func sshAuthentication() async throws {
         try await host.run {
-            let identity = host.root.appendingPathComponent("id_ed25519")
-            let keygen = Process()
-            keygen.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            keygen.arguments = ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", identity.path, "-q"]
-            try keygen.run()
-            LFSThrowawaySSHD.waitForExit(keygen)
-            #expect(keygen.terminationStatus == 0)
+            let identity = try ThrowawaySSHIdentity.generate(in: host.root)
 
             let script = host.root.appendingPathComponent("authenticate")
             let executable = host.root.appendingPathComponent("git-lfs-authenticate")
@@ -48,25 +43,17 @@ extension LFSCredentialTests {
                 """.write(to: executable, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-            let sshd = try #require(try await LFSThrowawaySSHD.start(
-                authorizingPublicKeyPath: identity.path + ".pub", forcedCommand: script.path))
+            let sshd = try #require(try await ThrowawaySSHD.start(
+                authorizingPublicKeyPath: identity.publicKeyPath, forcedCommand: script.path))
             defer { sshd.stop() }
 
             let sshDirectory = host.home.appendingPathComponent(".ssh")
             try FileManager.default.createDirectory(at: sshDirectory, withIntermediateDirectories: true)
-            let hostKey = try String(contentsOfFile: sshd.hostPublicKeyPath, encoding: .utf8).split(separator: " ")
             let knownHosts = sshDirectory.appendingPathComponent("known_hosts")
-            try "[127.0.0.1]:\(sshd.port) \(hostKey[0]) \(hostKey[1])\n"
-                .write(to: knownHosts, atomically: true, encoding: .utf8)
-            try """
-                Host lfs-test-alias
-                    HostName 127.0.0.1
-                    Port \(sshd.port)
-                    User \(ProcessInfo.processInfo.environment["USER"] ?? NSUserName())
-                    IdentityFile \(identity.path)
-                    UserKnownHostsFile \(knownHosts.path)
-                    StrictHostKeyChecking yes
-                """.write(to: sshDirectory.appendingPathComponent("config"), atomically: true, encoding: .utf8)
+            try (sshd.knownHostsLine() + "\n").write(to: knownHosts, atomically: true, encoding: .utf8)
+            try sshd.writeSSHConfig(
+                to: sshDirectory.appendingPathComponent("config").path, alias: "lfs-test-alias",
+                identityPath: identity.privateKeyPath, knownHostsPath: knownHosts.path)
 
             LFSMockURLProtocol.install { request in
                 if request.url?.host == "foreign.example" {

@@ -105,7 +105,9 @@ Sources/SSHKit/Lib/
 
 Tests/SSHKitTests/
   Fixtures/                 real ssh-keygen-generated keys, known_hosts, ssh_config
-  Support/                  InProcessSSHServer (portable), ThrowawaySSHD (macOS/Linux)
+  Support/                  InProcessSSHServer (portable)
+
+Tests/SSHTestSupport/      ThrowawaySSHD + helpers (macOS/Linux), the `SSHTestSupport` product
 
 Sources/SSHKit/SSHCommand/  hand-rolled ssh argv parser + non-interactive driver
 Sources/SSHKit/ssh/          standalone executable entry point
