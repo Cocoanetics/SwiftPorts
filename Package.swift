@@ -519,8 +519,12 @@ let package = Package(
         // config levels to the submodule handles libgit2 opens itself (#98).
         // 2.17.0 rolls back clone/worktree initialization when an include is
         // refused before repository preparation, preserving existing files (#101).
+        // 2.18.0's typed `ConfigLayer`s (`addConfigLayers`, `OperationConfiguration.layers`)
+        // keep command-line include files in their place without a raw write target (#108).
+        // 2.19.0 moves command-line layers to `OperationConfiguration(levels:layers:)`
+        // (#111).
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.17.0",
+                 from: "2.19.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface

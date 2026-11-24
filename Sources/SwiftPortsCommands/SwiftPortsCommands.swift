@@ -51,12 +51,10 @@ public enum SwiftPortsCommands {
             ArgvRewritingCommand(
                 base: Shell.parsableCommand(GlabCommand.self),
                 rewrite: GlabCommand.preprocess),
-            // git rides an argv preprocessor too: real-git shorthands
-            // must hold on the embedded path, where the standalone entry
-            // (`Entry.main`, which applies them) never runs.
-            ArgvRewritingCommand(
-                base: Shell.parsableCommand(GitCommand.self),
-                rewrite: GitCommand.preprocess),
+            // git takes its leading `-C` / `-c` and preprocesses the rest
+            // as its standalone entry (`Entry.main`) does, which embedded
+            // git never runs.
+            GitInvocationCommand(base: Shell.parsableCommand(GitCommand.self)),
             // search / find.
             Shell.parsableCommand(Rg.self),
             Shell.parsableCommand(FdCommand.self),
@@ -120,5 +118,33 @@ private struct ArgvRewritingCommand: Command {
         }
         return try await base.run(
             [commandName] + rewrite(Array(argv.dropFirst())))
+    }
+}
+
+/// The embedded `git`: each run is one ``GitCommand/withInvocation(_:_:)``,
+/// its leading `-C` / `-c` applied to a copy of the caller's shell for that
+/// run alone, around the ArgumentParser bridge. What goes wrong before the
+/// bridge runs is reported as the bridge reports it.
+private struct GitInvocationCommand: Command {
+    let base: Command
+
+    var name: String { base.name }
+
+    func run(_ argv: [String]) async throws -> ExitStatus {
+        guard let commandName = argv.first else {
+            return try await base.run(argv)
+        }
+        do {
+            return try await GitCommand.withInvocation(Array(argv.dropFirst())) { arguments in
+                try await base.run([commandName] + arguments)
+            }
+        } catch let failure as CommandFailure {
+            Shell.current.stderr(failure.diagnostic)
+            return failure.exitStatus
+        } catch let denial as Sandbox.Denial {
+            // Only the reason, as the bridge prints a denial.
+            Shell.current.stderr("\(name): \(denial.reason)\n")
+            return ExitStatus(1)
+        }
     }
 }

@@ -191,6 +191,8 @@ package final class GitFilterOperationContext: @unchecked Sendable {
     /// repository libgit2 opens on this thread, including the submodule
     /// handles it opens itself during status and diff. Settings git reads
     /// from a repository's own config only are left to exposed handles.
+    /// A command-line `include.path` reads its file in place, as on an
+    /// exposed handle (``GitClient/commandLineLayers(_:)``).
     var operationConfiguration: OperationConfiguration {
         var levels: [OperationConfiguration.Level] = []
         if let file = environment.globalFile {
@@ -199,13 +201,12 @@ package final class GitFilterOperationContext: @unchecked Sendable {
         if let file = environment.systemFile {
             levels.append(.file(URL(fileURLWithPath: file.resolved), .system))
         }
-        let entries = environment.commandLine
-            .filter { !Self.isRepositoryOnly($0.name) }
-            .map { ConfigEntry(name: $0.name, value: $0.value) }
-        if !entries.isEmpty {
-            levels.append(.entries(entries, .app, name: "command line"))
-        }
-        return OperationConfiguration(levels: levels, includePolicy: includePolicy)
+        let entries = environment.commandLine.filter { !Self.isRepositoryOnly($0.name) }
+        return OperationConfiguration(
+            levels: levels,
+            layers: entries.isEmpty ? nil : GitClient.commandLineLayers(entries),
+            includePolicy: includePolicy
+        )
     }
 
     /// `core.repositoryformatversion`, `core.bare`, `core.worktree` and

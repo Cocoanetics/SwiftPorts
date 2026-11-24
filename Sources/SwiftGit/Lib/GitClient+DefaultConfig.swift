@@ -198,7 +198,7 @@ extension GitClient {
             // A sandbox reads the host's system file (the default one, or the
             // one GIT_CONFIG_SYSTEM names) only when the embedder allows it;
             // changing it is always the sandbox's business.
-            let system = Self.configFilePath(.system)
+            let system = try await isolatedSystemConfigPath()
             let reading = Shell.current.sandbox != nil && !GitSandboxPolicy.allowsHostSystemConfig
             if writing || reading, !system.isEmpty, writing || location(of: system) != "/dev/null" {
                 try await Shell.authorize(URL(fileURLWithPath: location(of: system)))
@@ -216,6 +216,17 @@ extension GitClient {
             let home = Libgit2Sandboxing.shared.home(for: Shell.current.sandbox)
             try await Shell.authorize(URL(fileURLWithPath: home).appendingPathComponent(".gitconfig"))
             try await Shell.authorize(URL(fileURLWithPath: Self.globalConfigPath()))
+        }
+    }
+
+    /// The system file as the read that follows finds it: libgit2's search
+    /// path is the process', so it is taken under this shell's isolation,
+    /// not from whatever the last run on another shell left there. A lent
+    /// isolation already holds this shell's.
+    private func isolatedSystemConfigPath() async throws -> String {
+        if filterContext != nil { return Self.configFilePath(.system) }
+        return try await Libgit2Turnstile.shared.run {
+            try Libgit2Sandboxing.shared.runIsolated(Shell.current.sandbox) { Self.configFilePath(.system) }
         }
     }
 

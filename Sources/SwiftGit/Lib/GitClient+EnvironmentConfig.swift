@@ -2,10 +2,20 @@ import Foundation
 import CGitKit
 import GitKit
 import ShellKit
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#elseif canImport(Android)
+import Android
+#endif
 
-/// What the shell's `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and
-/// `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` ask of
-/// the config every git command reads.
+/// What the shell's `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+/// `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` and
+/// `GIT_CONFIG_PARAMETERS` (`git -c`) ask of the config every git command
+/// reads.
 ///
 /// libgit2 reads none of them itself (outside the `FROM_ENV` open flag, which
 /// also reads `GIT_DIR` and more, and which GitKit's `Repository.open` doesn't
@@ -31,13 +41,21 @@ struct EnvironmentConfig: Equatable, Sendable {
     /// The file `GIT_CONFIG_SYSTEM` names, `nil` for an empty value or one a
     /// sandbox won't read.
     var systemFile: File?
-    /// One `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` pair, name normalized.
+    /// One `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` pair, or one
+    /// `GIT_CONFIG_PARAMETERS` entry, name normalized. `value` is `nil` for
+    /// a valueless entry (`git -c name`), which reads as true; an empty one
+    /// (`git -c name=`) reads as false.
     struct CommandLineEntry: Equatable, Sendable {
         let name: String
-        let value: String
+        let value: String?
+        /// For an `include.path` entry, the file it includes, read right
+        /// after it (``GitClient/resolveIncludes(_:)``); `nil` for one
+        /// that isn't there, which git passes over.
+        var include: String?
     }
 
-    /// `GIT_CONFIG_COUNT`'s entries, names normalized. Kept as pairs — not
+    /// `GIT_CONFIG_COUNT`'s entries, then `GIT_CONFIG_PARAMETERS`', names
+    /// normalized. Kept as pairs — not
     /// `name=value` strings — because libgit2's `git_config_backend_from_values`
     /// splits on the first `=`, and a subsection may contain `=` (e.g.
     /// `url.https://x/?a=b.insteadOf`).
@@ -51,8 +69,9 @@ struct EnvironmentConfig: Equatable, Sendable {
     }
 }
 
-/// git's "unable to parse command-line config": a `GIT_CONFIG_COUNT` it
-/// can't read. It stops every command, each with its own words.
+/// git's "unable to parse command-line config": a `GIT_CONFIG_COUNT` or
+/// `GIT_CONFIG_PARAMETERS` it can't read. It stops every command, each with
+/// its own words.
 public struct CommandLineConfigError: Error, LocalizedError, CommandFailure, Equatable {
     /// Why, as git words it after `error: `.
     public let reason: String
@@ -109,8 +128,87 @@ extension GitClient {
                 if readable { plan.systemFile = .init(typed: typed, resolved: resolved) }
             }
         }
-        plan.commandLine = try Self.commandLineConfig(Shell.current.environment.variables)
+        // git reads the entries in order, an include as it comes, and
+        // stops at the first it can't take: the includes before a bad
+        // entry are seen to before it is reported.
+        let read = Self.readCommandLineConfig(Shell.current.environment.variables)
+        plan.commandLine = try await resolveIncludes(read.entries)
+        if let failure = read.failure { throw failure }
         return plan
+    }
+
+    /// `include.path` entries as git's `handle_path_include` takes those
+    /// of the command line: a value is required, `~` is expanded, the
+    /// path must be absolute (there is no file to be relative to), and a
+    /// file that isn't there is passed over; one there must be allowed by
+    /// the sandbox, and readable. Files it includes in turn are gated by
+    /// ``isolatedGated`` / ``ConfigIncludeGate``.
+    func resolveIncludes(
+        _ entries: [EnvironmentConfig.CommandLineEntry]
+    ) async throws -> [EnvironmentConfig.CommandLineEntry] {
+        var resolved = entries
+        for index in resolved.indices where resolved[index].name == "include.path" {
+            guard let value = resolved[index].value else {
+                throw CommandLineConfigError(reason: "missing value for 'include.path'")
+            }
+            guard let expanded = Self.interpolatedPath(value) else {
+                throw CommandLineConfigError(reason: "could not expand include path '\(value)'")
+            }
+            guard Self.isAbsolutePath(expanded) else {
+                throw CommandLineConfigError(reason: "relative config includes must come from files")
+            }
+            let file = Shell.resolve(expanded)
+            try await Shell.authorize(file)
+            // access_or_die: a missing file is no include; any other
+            // reason it can't be read stops git.
+            if let reason = Self.unreadableReason(file.path) {
+                guard let reason else { continue }
+                throw GitDiagnosticError(lines: ["fatal: unable to access '\(expanded)': \(reason)"], exitCode: 128)
+            }
+            resolved[index].include = file.path
+        }
+        return resolved
+    }
+
+    /// Why `path` can't be read: `nil` when it can, `.some(nil)` when it
+    /// isn't there (ENOENT / ENOTDIR), else `strerror`'s words.
+    private static func unreadableReason(_ path: String) -> String?? {
+        #if os(Windows)
+        guard FileManager.default.fileExists(atPath: path) else { return .some(nil) }
+        return FileManager.default.isReadableFile(atPath: path) ? nil : .some("Permission denied")
+        #else
+        guard access(path, R_OK) != 0 else { return nil }
+        let code = errno
+        if code == ENOENT || code == ENOTDIR { return .some(nil) }
+        return .some(String(cString: strerror(code)))
+        #endif
+    }
+
+    /// git's `interpolate_path` for `~` and `~/…` (the shell's `HOME`) and
+    /// `~user/…`; `nil` where it can't expand.
+    static func interpolatedPath(_ path: String) -> String? {
+        guard path.hasPrefix("~") else { return path }
+        let rest = path.dropFirst()
+        let user = rest.prefix { $0 != "/" }
+        let tail = rest.dropFirst(user.count)
+        if user.isEmpty {
+            guard let home = Shell.current.environment["HOME"] else { return nil }
+            return home + tail
+        }
+        #if os(Windows)
+        return nil
+        #else
+        guard let entry = getpwnam(String(user)), let directory = entry.pointee.pw_dir else { return nil }
+        return String(cString: directory) + tail
+        #endif
+    }
+
+    private static func isAbsolutePath(_ path: String) -> Bool {
+        #if os(Windows)
+        if path.hasPrefix("\\") { return true }
+        if let drive = path.first, drive.isLetter, path.dropFirst().first == ":" { return true }
+        #endif
+        return path.hasPrefix("/")
     }
 
     /// A file the environment names is the user's pick, not libgit2's
@@ -122,15 +220,44 @@ extension GitClient {
         try await Shell.authorize(URL(fileURLWithPath: resolved))
     }
 
-    // MARK: GIT_CONFIG_COUNT
+    // MARK: GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS
 
-    /// `GIT_CONFIG_COUNT` entries, git's way: a count, then a
-    /// `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` for each. What git
-    /// can't read stops the command.
+    /// The command-line entries, git's way (`git_config_from_parameters`):
+    /// `GIT_CONFIG_COUNT`'s, a count, then a `GIT_CONFIG_KEY_<n>` and
+    /// `GIT_CONFIG_VALUE_<n>` for each, followed by `GIT_CONFIG_PARAMETERS`'
+    /// (``GitConfigParameters``). What git can't read stops the command.
     static func commandLineConfig(
         _ variables: [String: String]
     ) throws -> [EnvironmentConfig.CommandLineEntry] {
-        guard let text = variables["GIT_CONFIG_COUNT"] else { return [] }
+        let read = readCommandLineConfig(variables)
+        if let failure = read.failure { throw failure }
+        return read.entries
+    }
+
+    /// The entries read before the first one git can't take, and that
+    /// failure.
+    static func readCommandLineConfig(
+        _ variables: [String: String]
+    ) -> (entries: [EnvironmentConfig.CommandLineEntry], failure: Error?) {
+        var entries: [EnvironmentConfig.CommandLineEntry] = []
+        do {
+            try countedConfig(variables, into: &entries)
+            if let parameters = variables["GIT_CONFIG_PARAMETERS"] {
+                try GitConfigParameters.entries(parameters) { key, value in
+                    entries.append(.init(name: try normalizedKey(key), value: value))
+                }
+            }
+            return (entries, nil)
+        } catch {
+            return (entries, error)
+        }
+    }
+
+    /// `GIT_CONFIG_COUNT` entries, added to `entries` one by one.
+    private static func countedConfig(
+        _ variables: [String: String], into entries: inout [EnvironmentConfig.CommandLineEntry]
+    ) throws {
+        guard let text = variables["GIT_CONFIG_COUNT"] else { return }
         // git reads the count with `strtoul(…, 10)` and refuses what doesn't
         // end where the number does: an empty value is 0, leading white
         // space and a sign are taken, a negative or overflowing one is
@@ -147,7 +274,6 @@ extension GitClient {
             throw CommandLineConfigError(reason: "too many entries in GIT_CONFIG_COUNT")
         }
         let count = Int(parsed.value)
-        var entries: [EnvironmentConfig.CommandLineEntry] = []
         for index in 0..<count {
             guard let key = variables["GIT_CONFIG_KEY_\(index)"] else {
                 throw CommandLineConfigError(reason: "missing config key GIT_CONFIG_KEY_\(index)")
@@ -157,7 +283,6 @@ extension GitClient {
             }
             entries.append(.init(name: try normalizedKey(key), value: value))
         }
-        return entries
     }
 
     /// Config-file text for `git_config_backend_from_string`, matching
@@ -167,19 +292,26 @@ extension GitClient {
     static func commandLineConfigFile(_ entries: [EnvironmentConfig.CommandLineEntry]) -> String {
         var text = ""
         for entry in entries {
-            let name = entry.name
+            // The dots among Unicode scalars: as a `Character`, a dot can
+            // be joined to a combining mark after it.
+            let name = entry.name.unicodeScalars
             guard let first = name.firstIndex(of: "."), let last = name.lastIndex(of: ".") else {
                 continue
             }
-            let section = name[..<first]
-            let variable = name[name.index(after: last)...]
+            let section = String(name[..<first])
+            let variable = String(name[name.index(after: last)...])
             if first == last {
                 text += "[\(section)]\n"
             } else {
                 let subsection = escapeConfigText(String(name[name.index(after: first)..<last]))
                 text += "[" + section + " \"" + subsection + "\"]\n"
             }
-            let escaped = escapeConfigText(entry.value)
+            guard let value = entry.value else {
+                // Valueless: true, as git reads `[section] variable`.
+                text += "\t\(variable)\n"
+                continue
+            }
+            let escaped = escapeConfigText(value)
             let quote = quotesForConfigValue(escaped)
             text += "\t\(variable) = \(quote)\(escaped)\(quote)\n"
         }
@@ -220,10 +352,13 @@ extension GitClient {
         guard !key.isEmpty else { throw CommandLineConfigError(reason: "empty config key") }
         // git_config_parse_key: the last dot must come after the first
         // character, and the variable name must be there.
-        guard let first = key.firstIndex(of: "."), let last = key.lastIndex(of: "."), last != key.startIndex else {
+        // Among Unicode scalars, as git's `strrchr` looks among bytes.
+        let scalars = key.unicodeScalars
+        guard let first = scalars.firstIndex(of: "."), let last = scalars.lastIndex(of: "."),
+              last != scalars.startIndex else {
             throw CommandLineConfigError(reason: "key does not contain a section: \(key)")
         }
-        guard last != key.index(before: key.endIndex) else {
+        guard last != scalars.index(before: scalars.endIndex) else {
             throw CommandLineConfigError(reason: "key does not contain variable name: \(key)")
         }
         // The section and the variable name take letters, digits and `-`,
@@ -233,14 +368,15 @@ extension GitClient {
             (byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x5A)
                 || (byte >= 0x61 && byte <= 0x7A) || byte == 0x2D
         }
-        let section = key[..<first], subsection = key[first..<last], variable = key[key.index(after: last)...]
+        let section = Substring(scalars[..<first]), subsection = Substring(scalars[first..<last])
+        let variable = Substring(scalars[scalars.index(after: last)...])
         for part in [section, variable] where !part.utf8.allSatisfy(keyCharacter) {
             throw CommandLineConfigError(reason: "invalid key: \(key)")
         }
         if let initial = variable.utf8.first, initial >= 0x30 && initial <= 0x39 || initial == 0x2D {
             throw CommandLineConfigError(reason: "invalid key: \(key)")
         }
-        guard !subsection.contains("\n") else {
+        guard !subsection.unicodeScalars.contains("\n") else {
             throw CommandLineConfigError(reason: "invalid key (newline): \(key)")
         }
         return section.lowercased() + subsection + "." + variable.lowercased()
@@ -259,7 +395,8 @@ extension GitClient {
 
     /// Gives the environment's config to `repository` through GitKit's typed
     /// config-level API: `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM` at their
-    /// levels and `GIT_CONFIG_COUNT` above all. Call inside
+    /// levels and `GIT_CONFIG_COUNT` above all, as ``commandLineLayers(_:)``.
+    /// Writes keep going to the repository's own file. Call inside
     /// ``Libgit2Sandboxing/runIsolated(_:environment:body:)``.
     static func installEnvironmentConfig(into repository: Repository) throws {
         let plan = Libgit2Sandboxing.shared.environment
@@ -270,10 +407,78 @@ extension GitClient {
         if let file = plan.systemFile {
             try repository.addConfigFile(at: URL(fileURLWithPath: file.resolved), level: .system)
         }
-        if !plan.commandLine.isEmpty {
-            let entries = plan.commandLine.map { ConfigEntry(name: $0.name, value: $0.value) }
-            try repository.addConfigEntries(entries, level: .app, name: "command line")
+        guard !plan.commandLine.isEmpty else { return }
+        try repository.addConfigLayers(commandLineLayers(plan.commandLine))
+    }
+
+    /// The command line's config as GitKit layers, one per
+    /// ``commandLineSegments(_:)`` segment and in its order: the entries up
+    /// to an include, the file it includes, the entries after it.
+    static func commandLineLayers(_ entries: [EnvironmentConfig.CommandLineEntry]) -> [ConfigLayer] {
+        commandLineSegments(entries).map { segment in
+            if let include = segment.include {
+                return .file(URL(fileURLWithPath: include))
+            }
+            return .entries(segment.entries.map { ConfigEntry(name: $0.name, value: $0.value) },
+                            name: commandLineBackendType)
         }
+    }
+
+    /// One level of the command line's config: the entries up to an include,
+    /// or the file an include reads.
+    struct CommandLineSegment {
+        let level: Int32
+        var entries: [EnvironmentConfig.CommandLineEntry] = []
+        var include: String?
+    }
+
+    /// The entries up to each include, then the file it includes, each a
+    /// level above the one before, from `GIT_CONFIG_LEVEL_APP` up: in git,
+    /// what an include reads takes its place among the entries, so those
+    /// after it win over it, and it over those before. A listing sorts by
+    /// level, so the order holds there too. The first segment is always
+    /// there, empty or not.
+    static func commandLineSegments(_ entries: [EnvironmentConfig.CommandLineEntry]) -> [CommandLineSegment] {
+        var level = GIT_CONFIG_LEVEL_APP.rawValue
+        var segments = [CommandLineSegment(level: level)]
+        for entry in entries {
+            segments[segments.count - 1].entries.append(entry)
+            guard let include = entry.include else { continue }
+            level += 1
+            segments.append(CommandLineSegment(level: level, include: include))
+            level += 1
+            segments.append(CommandLineSegment(level: level))
+        }
+        if segments.count > 1, segments[segments.count - 1].entries.isEmpty {
+            segments.removeLast()
+        }
+        return segments
+    }
+
+    /// Adds `segments` to `config`. An included file is an on-disk, writable
+    /// level, which libgit2 would make the write target: the write order is
+    /// put back so that writes (`remote add`, an upstream, a clone's
+    /// `remote.origin.*`) keep going where git puts them, not into the
+    /// included file.
+    private static func installCommandLineSegments(
+        _ segments: ArraySlice<CommandLineSegment>, into config: OpaquePointer?, repo: OpaquePointer?
+    ) throws {
+        for segment in segments {
+            if let include = segment.include {
+                let level = git_config_level_t(rawValue: segment.level)
+                try check(git_config_add_file_ondisk(config, include, level, repo, 1))
+            } else if !segment.entries.isEmpty {
+                try addCommandLineBackend(segment.entries, to: config, level: segment.level, repo: repo)
+            }
+        }
+        guard segments.contains(where: { $0.include != nil }) else { return }
+        // A repository's config writes only its own file (load_config);
+        // one without, the files in their default order.
+        var order: [git_config_level_t] = repo != nil
+            ? [GIT_CONFIG_LEVEL_LOCAL]
+            : [GIT_CONFIG_LEVEL_WORKTREE, GIT_CONFIG_LEVEL_LOCAL, GIT_CONFIG_LEVEL_GLOBAL,
+               GIT_CONFIG_LEVEL_XDG, GIT_CONFIG_LEVEL_SYSTEM, GIT_CONFIG_LEVEL_PROGRAMDATA]
+        try check(git_config_set_writeorder(config, &order, order.count))
     }
 
     /// Gives the environment's config to the live config of `repo`: the
@@ -289,7 +494,8 @@ extension GitClient {
     }
 
     /// Gives the environment's config to `config`, which may belong to a
-    /// repository (`repo`) or to none.
+    /// repository (`repo`) or to none. GitKit's typed layers reach neither
+    /// a raw open nor a repository-less config (Cocoanetics/GitKit#112).
     static func installEnvironmentConfig(into config: OpaquePointer?, repo: OpaquePointer?) throws {
         let plan = Libgit2Sandboxing.shared.environment
         if let file = plan.globalFile {
@@ -298,28 +504,42 @@ extension GitClient {
         if let file = plan.systemFile {
             try check(git_config_add_file_ondisk(config, file.resolved, GIT_CONFIG_LEVEL_SYSTEM, repo, 1))
         }
-        guard !plan.commandLine.isEmpty else { return }
-        let file = commandLineConfigFile(plan.commandLine)
+        try installCommandLineSegments(commandLineSegments(plan.commandLine)[...], into: config, repo: repo)
+    }
+
+    /// `entries` as an in-memory `command line` backend of `config`.
+    private static func addCommandLineBackend(
+        _ entries: [EnvironmentConfig.CommandLineEntry], to config: OpaquePointer?, level: Int32,
+        repo: OpaquePointer?
+    ) throws {
+        let file = commandLineConfigFile(entries)
         var backend: UnsafeMutablePointer<git_config_backend>?
         try file.withCString { text in
-            try "command line".withCString { type in
+            try commandLineBackendType.withCString { type in
                 var options = git_config_backend_memory_options()
                 options.version = UInt32(GIT_CONFIG_BACKEND_MEMORY_OPTIONS_VERSION)
                 options.backend_type = type
                 try check(git_config_backend_from_string(&backend, text, file.utf8.count, &options))
             }
         }
-        try check(git_config_add_backend(config, backend, GIT_CONFIG_LEVEL_APP, repo, 0))
+        try check(git_config_add_backend(config, backend, git_config_level_t(rawValue: level), repo, 0))
     }
+
+    /// The `backend_type` of the command line's entries.
+    static let commandLineBackendType = "command line"
 
     // MARK: - show-origin
 
     /// What `--show-origin` prints before an entry: `file:<path>`, or
-    /// `command line:` for `GIT_CONFIG_COUNT`'s. A file the environment
+    /// `command line:` for `GIT_CONFIG_COUNT`'s and `GIT_CONFIG_PARAMETERS`'
+    /// (a file one of them includes is a `file:`). A file the environment
     /// names is as typed; the repository's own is relative to the work
     /// tree's top (`base`), as git reads it from there.
     func originName(of entry: git_config_entry, base: String?) -> String {
-        if entry.level == GIT_CONFIG_LEVEL_APP { return "command line:" }
+        if entry.level.rawValue >= GIT_CONFIG_LEVEL_APP.rawValue,
+           entry.backend_type.map({ String(cString: $0) }) == Self.commandLineBackendType {
+            return "command line:"
+        }
         guard let origin = entry.origin_path.map({ String(cString: $0) }) else { return "file:" }
         let plan = Libgit2Sandboxing.shared.environment
         if entry.include_depth == 0 {

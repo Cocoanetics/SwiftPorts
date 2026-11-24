@@ -151,6 +151,41 @@ struct GitOperationScopeTests {
         #expect(try Data(contentsOf: clone.appendingPathComponent("plain.txt")) == Data("line\r\n".utf8))
     }
 
+    @Test("a handle libgit2 opens in the operation reads a -c include in place and writes its own config")
+    func internalHandleReadsCommandLineInclude() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SwiftGitOpInc-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("repo", isDirectory: true)
+        _ = try Repository.initialize(at: directory, initialBranch: "main")
+        let include = root.appendingPathComponent("included.cfg")
+        let included = "[t]\n\tfirst = file\n\tlast = file\n\tonly = file\n"
+        try Data(included.utf8).write(to: include)
+
+        // git -c t.first=before -c include.path=<file> -c t.last=after
+        let shell = Shell(environment: Environment(variables: [
+            "HOME": root.path, "XDG_CONFIG_HOME": root.appendingPathComponent("xdg").path,
+            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_COUNT": "3",
+            "GIT_CONFIG_KEY_0": "t.first", "GIT_CONFIG_VALUE_0": "before",
+            "GIT_CONFIG_KEY_1": "include.path", "GIT_CONFIG_VALUE_1": include.path,
+            "GIT_CONFIG_KEY_2": "t.last", "GIT_CONFIG_VALUE_2": "after"
+        ], workingDirectory: root.path))
+        let read = try await GitRepositoryOperation.run(credentials: nil, shell: shell) { operation in
+            try operation.withRepository(at: directory) { _ in
+                // Opened as libgit2 opens a submodule's: no preparation.
+                let opened = try Repository.open(at: directory)
+                let values = try ["t.first", "t.last", "t.only", "include.path"].map { try opened.configGet($0) }
+                try opened.configSet("t.written", "here")
+                return values
+            }
+        }
+        #expect(read == ["file", "after", "file", include.path])
+        let local = try String(contentsOf: directory.appendingPathComponent(".git/config"), encoding: .utf8)
+        #expect(local.contains("written = here"))
+        #expect(try String(contentsOf: include, encoding: .utf8) == included)
+    }
+
     /// A repository committing `plain.txt` with LF endings and no
     /// attributes, so `core.autocrlf` alone decides its checkout.
     private static func lfSource(in root: URL) async throws -> URL {
