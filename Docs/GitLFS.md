@@ -220,6 +220,16 @@ isolation turn asynchronously, installs the revocable filter context on the
 calling thread, and invokes the synchronous body once without blocking the whole
 async scope on `BlockingBridge`. No repository needs to exist at entry.
 
+libgit2's search paths and homedir are process-global: the operation applies
+its shell's `HOME` / `XDG_CONFIG_HOME` / `GIT_CONFIG_*` for the body and puts
+the previous values back when it ends (#288). A GitKit call made outside an
+operation can see another thread's operation in progress, so with GitLFSKit
+linked every GitKit call goes through one. git-lfs has no "no transfers, no
+credentials" setting and neither does GitLFSKit: an embedder that wants one
+passes a `CredentialProvider` that returns nothing, sets `GIT_LFS_SKIP_SMUDGE` /
+`GIT_LFS_SKIP_PUSH` in the operation's shell, and refuses the transfer
+commands itself.
+
 `GitLFSKit.Operation` provides:
 
 - `authorize(_:)` — authorizes additional filesystem destinations or resolved
