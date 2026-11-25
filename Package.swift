@@ -528,9 +528,11 @@ let package = Package(
         // 2.18.0's typed `ConfigLayer`s (`addConfigLayers`, `OperationConfiguration.layers`)
         // keep command-line include files in their place without a raw write target (#108).
         // 2.19.0 moves command-line layers to `OperationConfiguration(levels:layers:)`
-        // (#111).
+        // (#111). 2.20.0's `CommandLineConfig` evaluates `-c includeIf.*`
+        // per handle (gitdir, onbranch, hasconfig) and reports git's
+        // relative-condition diagnostic (#287).
         .package(url: "https://github.com/Cocoanetics/GitKit",
-                 from: "2.19.0",
+                 from: "2.20.0",
                  traits: [.defaults, "Archive"]),
 
         // ShellKit owns the virtualised shell-environment surface
