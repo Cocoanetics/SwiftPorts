@@ -287,6 +287,18 @@ The shell's `HOME`, `XDG_CONFIG_HOME`, `GIT_CONFIG_GLOBAL`,
 - `GIT_CONFIG_COUNT` entries are the highest level, shown by `--show-origin`
   as `command line:`. What git can't parse stops the command with git's
   `fatal: unable to parse command-line config`.
+- `include.path` and `includeIf.<condition>.path` among them (`-c` or
+  `GIT_CONFIG_*`) read their file in its place among the entries, through
+  GitKit 2.20's `CommandLineConfig`: `gitdir:`, `gitdir/i:` and `onbranch:`
+  are decided for each repository opened (false without one), and
+  `hasconfig:remote.*.url:` against every URL git would see. A file is asked
+  of the sandbox only when git would read it (a `hasconfig` target always is).
+  A relative `gitdir:./` condition prints git's
+  `error: relative config include conditionals must come from files`, once
+  per invocation (git repeats it for each time it reads the config). A
+  valueless or unexpandable target whose condition holds is not yet git's
+  error (Cocoanetics/GitKit#118), nor is the include-depth message
+  (Cocoanetics/GitKit#119). Writes never go to a file one of them reads.
 
 libgit2 reads none of these itself, so `Libgit2Sandboxing` switches off the
 levels they replace and `GitClient.installEnvironmentConfig` adds the file or

@@ -350,7 +350,8 @@ extension GitClient {
         }
         guard !plan.commandLine.isEmpty else { return }
         try withCommandLineFailures {
-            Libgit2Sandboxing.shared.record(try repository.setCommandLineConfig(commandLineConfiguration(plan.commandLine)))
+            let command = commandLineConfiguration(plan.commandLine)
+            Libgit2Sandboxing.shared.record(try repository.setCommandLineConfig(command))
         }
     }
 
@@ -424,7 +425,8 @@ extension GitClient {
         }
         guard !plan.commandLine.isEmpty, let config else { return }
         try withCommandLineFailures {
-            Libgit2Sandboxing.shared.record(try commandLineConfiguration(plan.commandLine).install(into: config, repository: repo))
+            let command = commandLineConfiguration(plan.commandLine)
+            Libgit2Sandboxing.shared.record(try command.install(into: config, repository: repo))
         }
     }
 
