@@ -122,10 +122,4 @@ struct GitConfigParametersTests {
             try GitClient.commandLineConfig(["GIT_CONFIG_PARAMETERS": "''='x'"])
         }
     }
-
-    @Test("a valueless entry is written without '=', an empty one with an empty value")
-    func configFileText() {
-        let text = GitClient.commandLineConfigFile([.init(name: "a.b", value: nil), .init(name: "a.c", value: "")])
-        #expect(text == "[a]\n\tb\n[a]\n\tc = \"\"\n")
-    }
 }

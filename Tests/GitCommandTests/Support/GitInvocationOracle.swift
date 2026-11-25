@@ -348,5 +348,17 @@ struct GitInvocationOracle {
         guard version.status == 0, words.count >= 3 else { return false }
         return words[2].split(separator: ".").prefix(2).compactMap { Int($0) } == [2, 54]
     }
+
+    /// Whether system git is at least `major.minor`: what a condition git
+    /// learned later (`hasconfig:` in 2.36) or a decision it changed reads as
+    /// on an older one (Linux CI's 2.34) is no parity to compare against.
+    func systemGitIsAtLeast(_ major: Int, _ minor: Int) async throws -> Bool {
+        let version = try await system(["--version"], in: root)
+        let words = version.stdout.split(separator: " ")
+        guard version.status == 0, words.count >= 3 else { return false }
+        let parts = words[2].split(separator: ".").prefix(2).compactMap { Int($0) }
+        guard parts.count == 2 else { return false }
+        return (parts[0], parts[1]) >= (major, minor)
+    }
 }
 #endif

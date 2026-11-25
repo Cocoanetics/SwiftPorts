@@ -137,6 +137,77 @@ struct GitCommandInvocationIsolationTests {
         #expect(allowed == .init(stdout: "one\n", stderr: "", status: 0))
     }
 
+    /// The paths a sandbox was asked about, physical.
+    private final class Requests: @unchecked Sendable {
+        private let lock = NSLock()
+        private var paths: [String] = []
+        func record(_ url: URL) {
+            let path = URL(fileURLWithPath: url.path).resolvingSymlinksInPath().path
+            lock.withLock { paths.append(path) }
+        }
+        func contains(_ path: String) -> Bool {
+            let path = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+            return lock.withLock { paths.contains(path) }
+        }
+        func reset() { lock.withLock { paths.removeAll() } }
+    }
+
+    @Test("an includeIf's file is asked of the sandbox only when git would read it")
+    func conditionalIncludeSandbox() async throws {
+        let oracle = try GitInvocationOracle()
+        defer { oracle.cleanup() }
+        try await oracle.repository()
+        let root = oracle.root.path
+        for (name, text) in [("allowed.cfg", "[user]\n\tname = Allowed\n"), ("denied.cfg", "[user]\n\tname = Denied\n"),
+                             ("unmatched.cfg", "[user]\n\tname = Unmatched\n")] {
+            try text.write(to: oracle.root.appendingPathComponent(name), atomically: false, encoding: .utf8)
+        }
+        let requests = Requests()
+        let parent = parentShell(oracle)
+        let denied = URL(fileURLWithPath: "\(root)/denied.cfg").resolvingSymlinksInPath().path
+        parent.sandbox = oracle.sandbox { url in
+            requests.record(url)
+            if URL(fileURLWithPath: url.path).resolvingSymlinksInPath().path == denied {
+                throw Sandbox.Denial(url: url, reason: "permission denied by sandbox")
+            }
+        }
+        let before = ambient(parent)
+        let getName = ["-C", "repo", "config", "--get", "user.name"]
+
+        let allowed = try await oracle.embedded(["-c", "includeIf.onbranch:main.path=\(root)/allowed.cfg"] + getName,
+                                                in: parent)
+        #expect(allowed == .init(stdout: "Allowed\n", stderr: "", status: 0))
+        #expect(requests.contains("\(root)/allowed.cfg"))
+
+        let refused = try await oracle.embedded(
+            ["-c", "includeIf.gitdir:\(root)/repo/.path=\(root)/denied.cfg"] + getName, in: parent)
+        #expect(refused == .init(stdout: "", stderr: "git: permission denied by sandbox\n", status: 1))
+        #expect(ambient(parent) == before)
+
+        // A condition that doesn't hold never offers its file.
+        requests.reset()
+        for condition in ["onbranch:other", "gitdir:\(root)/elsewhere/"] {
+            let unmatched = try await oracle.embedded(
+                ["-c", "includeIf.\(condition).path=\(root)/unmatched.cfg"] + getName, in: parent)
+            #expect(unmatched == .init(stdout: "Fixture\n", stderr: "", status: 0), "\(condition)")
+        }
+        #expect(!requests.contains("\(root)/unmatched.cfg"))
+
+        // hasconfig reads its target even when nothing matches: it is asked,
+        // and a refusal stops the command.
+        let nowhere = "includeIf.hasconfig:remote.*.url:https://nowhere.example/**.path"
+        let scanned = try await oracle.embedded(["-c", "\(nowhere)=\(root)/unmatched.cfg"] + getName, in: parent)
+        #expect(scanned == .init(stdout: "Fixture\n", stderr: "", status: 0))
+        #expect(requests.contains("\(root)/unmatched.cfg"))
+        let scanDenied = try await oracle.embedded(["-c", "\(nowhere)=\(root)/denied.cfg"] + getName, in: parent)
+        #expect(scanDenied == .init(stdout: "", stderr: "git: permission denied by sandbox\n", status: 1))
+
+        // Nothing of the refused runs is left for the next one.
+        let next = try await oracle.embedded(getName, in: parent)
+        #expect(next == .init(stdout: "Fixture\n", stderr: "", status: 0))
+        #expect(ambient(parent) == before)
+    }
+
     @Test("under a path mapping, -C walks a symlink before a later '..', as chdir does")
     func mappedPhysicalTraversal() async throws {
         let oracle = try GitInvocationOracle()
