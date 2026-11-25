@@ -37,6 +37,12 @@ struct GitCommandIncludeIfOracleTests {
 
     private let getName = ["-C", "repo", "config", "--get", "user.name"]
 
+    /// `hasconfig:` (git 2.36) and a command-line `gitdir:./` that holds
+    /// (git 2.54 includes its file) need the reference git to compare with.
+    private func referenceGit(_ oracle: GitInvocationOracle) async throws -> Bool {
+        try await oracle.systemGitIsAtLeast(2, 54)
+    }
+
     // MARK: Regression
 
     @Test("-c includeIf.onbranch:main.path reads the file on main")
@@ -109,6 +115,7 @@ struct GitCommandIncludeIfOracleTests {
     func hasconfig() async throws {
         let oracle = try GitInvocationOracle()
         defer { oracle.cleanup() }
+        guard try await referenceGit(oracle) else { return }
         let repo = try await oracle.repository()
         let identity = try write("[user]\n\tname = Included\n", "identity.cfg", in: oracle)
         let remote = try write("[remote \"x\"]\n\turl = https://example.com/x.git\n", "remote.cfg", in: oracle)
@@ -130,6 +137,7 @@ struct GitCommandIncludeIfOracleTests {
     func hasconfigTargets() async throws {
         let oracle = try GitInvocationOracle()
         defer { oracle.cleanup() }
+        guard try await referenceGit(oracle) else { return }
         let repo = try await oracle.repository()
         let identity = try write("[user]\n\tname = Included\n", "identity.cfg", in: oracle)
         let remote = try write("[remote \"x\"]\n\turl = https://example.com/x.git\n", "remote.cfg", in: oracle)
@@ -162,14 +170,17 @@ struct GitCommandIncludeIfOracleTests {
         try FileManager.default.createSymbolicLink(atPath: "\(root)/loop1", withDestinationPath: "loop2")
         try FileManager.default.createSymbolicLink(atPath: "\(root)/loop2", withDestinationPath: "loop1")
         let nowhere = "includeIf.hasconfig:remote.*.url:https://nowhere.example/**.path"
+        let keys = try await referenceGit(oracle)
+            ? ["includeIf.onbranch:main.path", nowhere, "include.path"]
+            : ["includeIf.onbranch:main.path", "include.path"]
         // Snapshot only the repository: the loop can't be copied.
-        for key in ["includeIf.onbranch:main.path", nowhere, "include.path"] {
+        for key in keys {
             try await compareBoth(oracle, [(key, "\(root)/loop1")], getName, fixture: repo)
         }
         try await compareBoth(oracle, [("include.path", directory.path)], getName, fixture: repo)
         // GitKit reports no path for a conditional directory target
         // (Cocoanetics/GitKit#123).
-        for key in ["includeIf.onbranch:main.path", nowhere] {
+        for key in keys where key != "include.path" {
             await withKnownIssue("Cocoanetics/GitKit#123") {
                 try await oracle.compare(["-c", "\(key)=\(directory.path)"] + getName, in: oracle.root, fixture: repo)
             }
@@ -185,7 +196,9 @@ struct GitCommandIncludeIfOracleTests {
         try await oracle.repository()
         let identity = try write("[user]\n\tname = Included\n", "identity.cfg", in: oracle)
         // Git's nonfatal diagnostic, and the include.
-        try await compareBoth(oracle, [("includeIf.gitdir:./x/.path", identity)], getName)
+        if try await referenceGit(oracle) {
+            try await compareBoth(oracle, [("includeIf.gitdir:./x/.path", identity)], getName)
+        }
         // No repository: the condition doesn't hold, and nothing is said.
         try await compareBoth(oracle, [("includeIf.gitdir:./x/.path", identity)], ["config", "--get", "user.name"])
         // A relative target is an error only once it is reached.
@@ -273,6 +286,7 @@ struct GitCommandIncludeIfOracleTests {
     func diagnosticCount() async throws {
         let oracle = try GitInvocationOracle()
         defer { oracle.cleanup() }
+        guard try await referenceGit(oracle) else { return }
         try await oracle.repository()
         let identity = try write("[user]\n\tname = Included\n", "identity.cfg", in: oracle)
         let relative = "includeIf.gitdir:./x/.path=\(identity)"
