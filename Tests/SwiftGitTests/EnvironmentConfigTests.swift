@@ -223,6 +223,17 @@ struct EnvironmentConfigTests {
         #expect(mapped(-1, remote) == "fatal: \(remote)\n128")
         #expect(mapped(GIT_ELOCKED.rawValue, "failed open - '/a/b.cfg' is locked: Permission denied")
                 == "fatal: unable to access '/a/b.cfg': Permission denied\n128")
+        func mappedOS(_ message: String) -> String {
+            let error = GitClient.commandLineConfigFailure(
+                Libgit2Error(code: -1, klass: Int32(GIT_ERROR_OS.rawValue), message: message))
+            return (error as? GitDiagnosticError).map { $0.diagnostic + "\($0.exitCode)" } ?? "unmapped"
+        }
+        #expect(mappedOS("could not stat '/a/it's.cfg': Too many levels of symbolic links")
+                == "fatal: unable to access '/a/it's.cfg': Too many levels of symbolic links\n128")
+        #expect(mappedOS("failed to stat config file '/a/b.cfg': Too many levels of symbolic links")
+                == "fatal: unable to access '/a/b.cfg': Too many levels of symbolic links\n128")
+        #expect(mappedOS("failed to read '/a/b.cfg': Is a directory") == "unmapped")
+        #expect(mapped(-1, "could not stat '/a/b.cfg': x") == "unmapped")
         #expect(mapped(-1, "maximum config include depth reached") == "unmapped")
         #expect(mapped(-1, "include refused") == "unmapped")
     }

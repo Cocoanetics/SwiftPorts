@@ -151,6 +151,31 @@ struct GitCommandIncludeIfOracleTests {
         }
     }
 
+    @Test("a target there but not readable as a file: a symlink loop or a directory")
+    func unreachableTargets() async throws {
+        let oracle = try GitInvocationOracle()
+        defer { oracle.cleanup() }
+        let repo = try await oracle.repository()
+        let root = oracle.root.path
+        let directory = oracle.root.appendingPathComponent("directory")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: "\(root)/loop1", withDestinationPath: "loop2")
+        try FileManager.default.createSymbolicLink(atPath: "\(root)/loop2", withDestinationPath: "loop1")
+        let nowhere = "includeIf.hasconfig:remote.*.url:https://nowhere.example/**.path"
+        // Snapshot only the repository: the loop can't be copied.
+        for key in ["includeIf.onbranch:main.path", nowhere, "include.path"] {
+            try await compareBoth(oracle, [(key, "\(root)/loop1")], getName, fixture: repo)
+        }
+        try await compareBoth(oracle, [("include.path", directory.path)], getName, fixture: repo)
+        // GitKit reports no path for a conditional directory target
+        // (Cocoanetics/GitKit#123).
+        for key in ["includeIf.onbranch:main.path", nowhere] {
+            await withKnownIssue("Cocoanetics/GitKit#123") {
+                try await oracle.compare(["-c", "\(key)=\(directory.path)"] + getName, in: oracle.root, fixture: repo)
+            }
+        }
+    }
+
     // MARK: Relative patterns and targets
 
     @Test("a relative condition or target from the command line")

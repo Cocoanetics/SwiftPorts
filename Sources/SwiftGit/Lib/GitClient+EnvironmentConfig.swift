@@ -163,6 +163,15 @@ extension GitClient {
                 guard let reason else { continue }
                 throw GitDiagnosticError(lines: ["fatal: unable to access '\(expanded)': \(reason)"], exitCode: 128)
             }
+            // A directory opens but can't be read: git warns, and the
+            // command line can't be parsed.
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                throw GitDiagnosticError(
+                    lines: ["warning: unable to access '\(expanded)': Is a directory",
+                            "fatal: unable to parse command-line config"],
+                    exitCode: 128)
+            }
             resolved[index].include = file.path
         }
         return resolved
@@ -454,12 +463,22 @@ extension GitClient {
         if message.hasPrefix("remote URLs cannot be configured in file directly or indirectly included by") {
             return GitDiagnosticError(lines: ["fatal: " + message], exitCode: 128)
         }
-        // An include there but unreadable (`access_or_die`): libgit2's
-        // `failed open - '<path>' is locked: Permission denied`.
+        // An include there that can't be opened or looked at
+        // (`access_or_die`): libgit2's `failed open - '<path>' is locked:
+        // Permission denied`, or a stat's `could not stat '<path>': <reason>`
+        // and `failed to stat config file '<path>': <reason>` (a symlink loop).
         if failure.code == GIT_ELOCKED.rawValue, message.hasSuffix(": Permission denied"),
            let open = message.firstIndex(of: "'"), let close = message.lastIndex(of: "'"), open < close {
             let path = message[message.index(after: open)..<close]
             return GitDiagnosticError(lines: ["fatal: unable to access '\(path)': Permission denied"], exitCode: 128)
+        }
+        if failure.klass == Int32(GIT_ERROR_OS.rawValue),
+           message.hasPrefix("could not stat '") || message.hasPrefix("failed to stat config file '"),
+           let open = message.firstIndex(of: "'"), let close = message.range(of: "': ", options: .backwards),
+           open < close.lowerBound {
+            let path = message[message.index(after: open)..<close.lowerBound]
+            let reason = message[close.upperBound...]
+            return GitDiagnosticError(lines: ["fatal: unable to access '\(path)': \(reason)"], exitCode: 128)
         }
         return error
     }
