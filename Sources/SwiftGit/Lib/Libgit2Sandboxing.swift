@@ -2,6 +2,7 @@ import Foundation
 import ShellKit
 import CLibgit2Shim
 import CGitKit
+import GitKit
 
 /// Bridges `Shell.current.environment.variables()` to libgit2's process-global option
 /// block. Keeps libgit2's own `getenv` calls inside its C internals
@@ -9,7 +10,7 @@ import CGitKit
 ///
 /// libgit2's options (search paths, homedir, SSL cert locations) are
 /// **process-global, not per-task**. Two tasks racing on the option
-/// setter would corrupt each other's view. ``runIsolated(_:environment:body:)``
+/// setter would corrupt each other's view. ``runIsolated(_:environment:diagnostics:body:)``
 /// serialises the "set options + run body" sequence under one lock so each
 /// run sees a consistent snapshot, and puts back the GLOBAL / XDG / SYSTEM
 /// search paths and the homedir it found on entry before it releases the
@@ -85,7 +86,7 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
     var hostSystemSearchPath: String?
     private var lastApplied: AppliedSnapshot?
     /// What `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM` / `GIT_CONFIG_COUNT`
-    /// ask of the run in progress; read while ``runIsolated(_:environment:body:)``
+    /// ask of the run in progress; read while ``runIsolated(_:environment:diagnostics:body:)``
     /// holds the lock. Back to `.none` once the run ends.
     private(set) var environment = EnvironmentConfig.none
 
@@ -141,7 +142,7 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
 
     /// The directory of the global `.gitconfig` libgit2 currently looks
     /// in: the shell's home as the run in progress applied it.
-    /// Read inside ``runIsolated(_:environment:body:)``; outside one it is
+    /// Read inside ``runIsolated(_:environment:diagnostics:body:)``; outside one it is
     /// the process's home.
     var globalHome: String { lastApplied?.home ?? NSHomeDirectory() }
 
@@ -165,8 +166,12 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
     /// concurrent SwiftGit operations on different sandboxes
     /// serialise — which is the correct behavior given that
     /// libgit2's option block is process-global.
+    ///
+    /// The configs opened in `body` report their nonfatal diagnostics to
+    /// `diagnostics` (``record(_:)``); without a sink they are dropped.
     func runIsolated<T>(_ sandbox: Sandbox?,
                         environment: EnvironmentConfig = .none,
+                        diagnostics: ConfigDiagnosticSink? = nil,
                         body: () throws -> T) throws -> T {
         lock.lock()
         defer { lock.unlock() }
@@ -175,13 +180,25 @@ internal final class Libgit2Sandboxing: @unchecked Sendable {
         defer {
             restore(entry)
             self.environment = .none
+            diagnosticSink = nil
             lastApplied = nil
         }
         try apply(sandbox, environment: environment)
+        diagnosticSink = diagnostics
         return try body()
     }
 
-    /// Runs `body` holding the lock ``runIsolated(_:environment:body:)``
+    /// Where the run in progress collects its configs' diagnostics.
+    private var diagnosticSink: ConfigDiagnosticSink?
+
+    /// Keeps `diagnostics`, which a config opened in the run in progress
+    /// reported, for the run to print.
+    func record(_ diagnostics: [ConfigDiagnostic]) {
+        guard !diagnostics.isEmpty else { return }
+        diagnosticSink?.record(diagnostics)
+    }
+
+    /// Runs `body` holding the lock ``runIsolated(_:environment:diagnostics:body:)``
     /// takes, without applying anything: for tests that set or read
     /// libgit2's options themselves.
     func withOptionsLock<T>(_ body: () throws -> T) rethrows -> T {

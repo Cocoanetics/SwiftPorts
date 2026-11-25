@@ -41,31 +41,19 @@ struct EnvironmentConfigTests {
             .init(name: "remote.Origin.url", value: ""),
             .init(name: "a.b.c", value: "v")
         ])
-        // Subsections with `=` must round-trip through config-file text —
-        // `git_config_backend_from_values` would split on the first `=`.
+        // A subsection may hold `=` and stays in the name as typed.
         let withEquals = try GitClient.commandLineConfig([
             "GIT_CONFIG_COUNT": "1",
             "GIT_CONFIG_KEY_0": "url.https://x/?a=b.insteadOf",
             "GIT_CONFIG_VALUE_0": "y"
         ])
         #expect(withEquals == [.init(name: "url.https://x/?a=b.insteadof", value: "y")])
-        #expect(GitClient.commandLineConfigFile(withEquals)
-                == "[url \"https://x/?a=b\"]\n\tinsteadof = y\n")
-        #expect(GitClient.commandLineConfigFile(entries) ==
-                "[user]\n\tname = A=B\n[remote \"Origin\"]\n\turl = \"\"\n[a \"b\"]\n\tc = v\n")
-        // Multi-byte UTF-8 must survive the config-file serializer intact.
-        let accented = try GitClient.commandLineConfig([
-            "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": "user.name", "GIT_CONFIG_VALUE_0": "José"
-        ])
-        #expect(GitClient.commandLineConfigFile(accented) == "[user]\n\tname = José\n")
         let subsection = try GitClient.commandLineConfig([
             "GIT_CONFIG_COUNT": "1",
             "GIT_CONFIG_KEY_0": "url.https://café.example.insteadOf",
             "GIT_CONFIG_VALUE_0": "https://cafe.example"
         ])
-        #expect(GitClient.commandLineConfigFile(subsection)
-                == "[url \"https://café.example\"]\n\tinsteadof = https://cafe.example\n")
+        #expect(subsection == [.init(name: "url.https://café.example.insteadof", value: "https://cafe.example")])
     }
 
     @Test func refusesWhatGitRefuses() {

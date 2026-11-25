@@ -191,8 +191,10 @@ package final class GitFilterOperationContext: @unchecked Sendable {
     /// repository libgit2 opens on this thread, including the submodule
     /// handles it opens itself during status and diff. Settings git reads
     /// from a repository's own config only are left to exposed handles.
-    /// A command-line `include.path` reads its file in place, as on an
-    /// exposed handle (``GitClient/commandLineLayers(_:)``).
+    /// A command-line `include.path` reads its file in place, and an
+    /// `includeIf` is decided for each repository opened, as on an exposed
+    /// handle (``GitClient/commandLineConfiguration(_:)``); their diagnostics
+    /// go to the run's.
     var operationConfiguration: OperationConfiguration {
         var levels: [OperationConfiguration.Level] = []
         if let file = environment.globalFile {
@@ -204,8 +206,9 @@ package final class GitFilterOperationContext: @unchecked Sendable {
         let entries = environment.commandLine.filter { !Self.isRepositoryOnly($0.name) }
         return OperationConfiguration(
             levels: levels,
-            layers: entries.isEmpty ? nil : GitClient.commandLineLayers(entries),
-            includePolicy: includePolicy
+            commandLine: entries.isEmpty ? nil : GitClient.commandLineConfiguration(entries),
+            includePolicy: includePolicy,
+            onDiagnostic: { Libgit2Sandboxing.shared.record($0) }
         )
     }
 

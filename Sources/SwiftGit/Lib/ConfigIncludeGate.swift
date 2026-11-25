@@ -149,13 +149,16 @@ extension GitClient {
         let plan = try await environmentConfig()
         let gate = ConfigIncludeGate(enforcing: Shell.current.sandbox != nil)
         while true {
+            // Each attempt reads the config afresh: only the last one's
+            // diagnostics are printed, before what it returns or throws.
+            let diagnostics = ConfigDiagnosticSink()
             do {
                 // Waiting for the run suspends rather than blocks (see
                 // `Libgit2Turnstile`).
-                return try await Libgit2Turnstile.shared.run {
+                let value = try await Libgit2Turnstile.shared.run {
                     try Task.checkCancellation()
                     return try Libgit2Sandboxing.shared.runIsolated(
-                        Shell.current.sandbox, environment: plan) {
+                        Shell.current.sandbox, environment: plan, diagnostics: diagnostics) {
                             let context = GitFilterOperationContext(
                                 shell: Shell.current, credentials: credentials, environment: plan, gate: gate,
                                 deferFilterFailures: deferFilterFailures, cancellation: cancellation)
@@ -169,8 +172,20 @@ extension GitClient {
                             }
                         }
                 }
+                diagnostics.print()
+                return value
             } catch {
-                guard retryIncludes, try await gate.authorizeRefused() else { throw error }
+                let retry: Bool
+                do {
+                    retry = retryIncludes ? try await gate.authorizeRefused() : false
+                } catch let denial {
+                    diagnostics.print()
+                    throw denial
+                }
+                guard retry else {
+                    diagnostics.print()
+                    throw error
+                }
             }
         }
     }
